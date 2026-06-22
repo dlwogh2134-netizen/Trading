@@ -8,13 +8,13 @@ class CryptoHelper:
     def __init__(self, key_str: str):
         if not key_str:
             raise ValueError("Encryption key must not be empty.")
-        # Hash the key string using SHA-256 to ensure a 32-byte (256-bit) key
+        # SHA-256을 사용하여 키 문자열을 해싱함으로써 32바이트(256비트) 키를 유도함
         self.key = hashlib.sha256(key_str.encode('utf-8')).digest()
 
     def encrypt(self, plaintext: str) -> str:
         if not plaintext:
             return ""
-        # 12-byte IV for GCM mode
+        # GCM 모드를 위한 12바이트 IV(초기화 벡터) 생성
         iv = os.urandom(12)
         encryptor = Cipher(
             algorithms.AES(self.key),
@@ -23,7 +23,7 @@ class CryptoHelper:
         ).encryptor()
         
         ciphertext = encryptor.update(plaintext.encode('utf-8')) + encryptor.finalize()
-        # Concat IV, Tag (16 bytes), and Ciphertext, then encode in base64
+        # IV, 인증 태그(16바이트) 및 암호문을 연결한 후 base64로 인코딩
         encrypted_bytes = iv + encryptor.tag + ciphertext
         return base64.b64encode(encrypted_bytes).decode('utf-8')
 

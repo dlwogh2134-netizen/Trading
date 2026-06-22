@@ -24,8 +24,8 @@ class KISClient(ExchangeClient):
 
     def _get_cached_token(self) -> str:
         """
-        Get access token from local JSON cache.
-        If expired or doesn't exist, request a new one and update cache.
+        로컬 JSON 캐시에서 Access Token을 가져옵니다.
+        만료되었거나 캐시가 존재하지 않으면 새로 발급을 요청하고 캐시를 갱신합니다.
         """
         cache = {}
         if os.path.exists(TOKEN_CACHE_FILE):
