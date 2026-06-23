@@ -25,9 +25,9 @@ export default function Header({ isLoggedIn, userEmail, handleLogout }) {
         {/* 네비게이션 탭 (React Router Link 사용) */}
         <nav className="flex gap-2">
           <Link
-            to="/"
+            to="/dashboard"
             className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
-              currentPath === '/'
+              currentPath === '/dashboard'
                 ? 'bg-ai-cyan text-black border-ai-cyan'
                 : 'text-slate-300 border-slate-700 hover:border-slate-500'
             }`}

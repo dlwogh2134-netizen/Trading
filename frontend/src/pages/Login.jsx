@@ -16,7 +16,7 @@ export default function Login() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        navigate('/')
+        navigate('/dashboard')
       }
     })
   }, [navigate])
@@ -42,7 +42,7 @@ export default function Login() {
         password: loginInputs.password
       })
       if (error) throw error
-      navigate('/')
+      navigate('/dashboard')
     } catch (err) {
       alert(`로그인 실패: ${err.message}`)
     }
@@ -54,7 +54,7 @@ export default function Login() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'kakao',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo: `${window.location.origin}/dashboard`,
           queryParams: {
             scope: 'account_email' // 프로필 이미지를 배제하고 이메일 권한만 요청
           }
@@ -175,7 +175,7 @@ export default function Login() {
           </p>
           <div className="mt-6 text-center">
             <button 
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/dashboard')}
               className="text-xs text-slate-500 hover:text-slate-300 transition-colors underline cursor-pointer"
             >
               ← 대시보드로 돌아가기

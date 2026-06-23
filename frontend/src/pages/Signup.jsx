@@ -176,7 +176,7 @@ export default function Signup() {
           </p>
           <div className="mt-4 text-center">
             <button 
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/dashboard')}
               className="text-xs text-slate-500 hover:text-slate-300 transition-colors underline cursor-pointer"
             >
               ← 대시보드로 돌아가기
