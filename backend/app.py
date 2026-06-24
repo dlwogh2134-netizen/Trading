@@ -18,6 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.utils.crypto_helper import CryptoHelper
 from backend.services.kis_client import KISClient
+from backend.services.kis_market_universe import KISMarketUniverseService
 from backend.services.toss_client import TossClient
 from backend.services.coinone_client import CoinoneClient
 from backend.services.binance_client import BinanceClient
@@ -45,12 +46,15 @@ KIS_ENV = os.getenv("KIS_ENV", "MOCK")
 crypto = CryptoHelper(ENCRYPTION_KEY)
 news_repository = NewsRepository()
 news_ingest_service = NewsIngestService()
+kis_market_universe_service = KISMarketUniverseService()
 PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 NEWS_INGEST_ENABLED = os.getenv("NEWS_INGEST_ENABLED", "false").lower() == "true"
 NEWS_INGEST_INTERVAL_SECONDS = int(os.getenv("NEWS_INGEST_INTERVAL_SECONDS", "600"))
 _news_ingest_started = False
 COINONE_WATCHLIST = ["BTC", "ETH", "XRP", "SOL"]
+COINONE_HOME_LIMIT = int(os.getenv("COINONE_HOME_LIMIT", "50"))
+KIS_MARKET_MASTER_FILE_PATH = os.getenv("KIS_MARKET_MASTER_FILE_PATH", "")
 
 
 def _to_float(value, default=0.0):
@@ -62,10 +66,7 @@ def _to_float(value, default=0.0):
         return default
 
 
-def _normalize_coinone_ticker(symbol: str, payload: dict) -> dict:
-    tickers = payload.get("tickers") or []
-    ticker = tickers[0] if tickers else payload.get("ticker") or payload
-
+def _normalize_coinone_ticker(symbol: str, ticker: dict) -> dict:
     last = _to_float(
         ticker.get("last")
         or ticker.get("close")
@@ -86,12 +87,26 @@ def _normalize_coinone_ticker(symbol: str, payload: dict) -> dict:
         or ticker.get("change")
         or ticker.get("price_change_percent")
     )
+    trading_volume = _to_float(
+        ticker.get("volume")
+        or ticker.get("trading_volume")
+        or ticker.get("quote_volume")
+        or ticker.get("acc_volume")
+    )
+    trading_value = _to_float(
+        ticker.get("quote_volume")
+        or ticker.get("trading_value")
+        or ticker.get("acc_trading_value")
+    )
 
     if not change_rate and first:
         change_rate = ((last - first) / first) * 100 if first else 0.0
 
     if not first:
         first = last
+
+    if not trading_value and last and trading_volume:
+        trading_value = last * trading_volume
 
     return {
         "symbol": symbol,
@@ -101,23 +116,33 @@ def _normalize_coinone_ticker(symbol: str, payload: dict) -> dict:
         "high": high,
         "low": low,
         "change_rate": change_rate,
+        "trading_volume": trading_volume,
+        "trading_value": trading_value,
     }
 
 
-def _fetch_coinone_overview(symbols=None) -> list[dict]:
-    symbols = symbols or COINONE_WATCHLIST
+def _fetch_coinone_overview(limit=COINONE_HOME_LIMIT) -> list[dict]:
+    url = "https://api.coinone.co.kr/public/v2/ticker_new/KRW"
+    response = requests.get(url, params={"additional_data": "true"}, timeout=10)
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("result") not in (None, "success"):
+        raise Exception(payload.get("error_message") or payload.get("message") or "Coinone API error")
+
     rows = []
+    for ticker in payload.get("tickers", []):
+        symbol = str(
+            ticker.get("target_currency")
+            or ticker.get("currency")
+            or ticker.get("symbol")
+            or ""
+        ).upper().strip()
+        if not symbol:
+            continue
+        rows.append(_normalize_coinone_ticker(symbol, ticker))
 
-    for symbol in symbols:
-        url = f"https://api.coinone.co.kr/public/v2/ticker_new/KRW/{symbol}"
-        response = requests.get(url, params={"additional_data": "true"}, timeout=10)
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get("result") not in (None, "success"):
-            raise Exception(payload.get("error_message") or payload.get("message") or "Coinone API error")
-        rows.append(_normalize_coinone_ticker(symbol, payload))
-
-    return rows
+    rows.sort(key=lambda item: (item.get("trading_value", 0.0), abs(item.get("change_rate", 0.0))), reverse=True)
+    return rows[:limit]
 
 
 def _split_kis_holdings(holdings: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -280,6 +305,93 @@ def get_home_overview():
             "message": f"KIS 조회 실패: {str(kis_error)}",
             "data": result,
         }), 500
+
+@app.route("/api/market/kis/sync", methods=["POST"])
+def sync_kis_market_universe():
+    data = request.json or {}
+    file_paths = data.get("file_paths")
+    file_path = data.get("file_path") or KIS_MARKET_MASTER_FILE_PATH
+    refresh_quotes = bool(data.get("refresh_quotes", True))
+    max_workers = int(data.get("max_workers") or 4)
+    quote_limit_raw = data.get("quote_limit", 300)
+    quote_limit = None if quote_limit_raw in (None, "", "all", "ALL") else int(quote_limit_raw)
+
+    if isinstance(file_paths, str):
+        file_paths = [part.strip() for part in file_paths.split(",") if part.strip()]
+    elif isinstance(file_paths, list):
+        file_paths = [str(part).strip() for part in file_paths if str(part).strip()]
+    else:
+        file_paths = []
+
+    if file_path and not file_paths:
+        file_paths = [part.strip() for part in str(file_path).split(",") if part.strip()]
+
+    if not file_paths:
+        return jsonify({
+            "success": False,
+            "message": "KIS 종목 정보 파일 경로가 필요합니다. body.file_path, body.file_paths 또는 KIS_MARKET_MASTER_FILE_PATH를 설정해주세요.",
+        }), 400
+
+    if not kis_market_universe_service.repository.is_configured:
+        return jsonify({
+            "success": False,
+            "message": "SUPABASE_SERVICE_ROLE_KEY가 필요합니다. Supabase 관리 키를 .env에 넣어주세요.",
+        }), 500
+
+    try:
+        kis_client = KISClient(
+            appkey=KIS_APPKEY,
+            appsecret=KIS_APPSECRET,
+            cano=KIS_CANO,
+            acnt_prdt_cd=KIS_ACNT_PRDT_CD,
+            env=KIS_ENV,
+        )
+        result = kis_market_universe_service.sync_from_files(
+            file_paths=file_paths,
+            kis_client=kis_client,
+            refresh_quotes=refresh_quotes,
+            max_workers=max_workers,
+            quote_limit=quote_limit,
+        )
+        return jsonify({
+            "success": True,
+            "message": "KIS 종목 마스터와 거래대금 스냅샷 동기화가 완료되었습니다.",
+            "data": result,
+        })
+    except Exception as error:
+        return jsonify({
+            "success": False,
+            "message": f"KIS 종목 동기화 실패: {str(error)}",
+        }), 500
+
+
+@app.route("/api/market/rankings", methods=["GET"])
+def get_market_rankings():
+    market_segment = request.args.get("market_segment", "ALL")
+    limit = int(request.args.get("limit", 50))
+
+    try:
+        rankings = kis_market_universe_service.repository.list_turnover_rankings(
+            market_segment=market_segment,
+            limit=limit,
+        )
+        universe_count = kis_market_universe_service.repository.count_universe(market_segment=market_segment)
+        return jsonify({
+            "success": True,
+            "data": {
+                "items": rankings,
+                "totalCount": len(rankings),
+                "universeCount": universe_count,
+                "marketSegment": market_segment.upper(),
+                "limit": limit,
+            }
+        })
+    except Exception as error:
+        return jsonify({
+            "success": False,
+            "message": f"거래대금 순위 조회 실패: {str(error)}",
+        }), 500
+
 
 # Supabase 연동 헬퍼 함수 (RLS 위임)
 def get_user_id_from_header(auth_header):
