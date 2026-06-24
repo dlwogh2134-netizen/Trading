@@ -52,7 +52,7 @@ class BinanceClient:
         # 바이낸스 API 호출에 필요한 타임스탬프와 signature 생성
         params = {
             "timestamp": int(time.time() * 1000),
-            "recvWindow": 5000
+            "recvWindow": 60000
         }
         params["signature"] = self._sign(params)
 
