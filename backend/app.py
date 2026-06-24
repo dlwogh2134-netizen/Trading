@@ -1,3 +1,5 @@
+import csv
+import json
 import os
 import sys
 import re
@@ -21,6 +23,7 @@ from backend.services.coinone_client import CoinoneClient
 from backend.services.binance_client import BinanceClient
 from backend.services.news_repository import NewsRepository
 from backend.services.news_ingest import NewsIngestService
+from backend.services.symbol_metadata import enrich_symbol
 from backend.scripts.export_training_candles import fetch_binance_klines, fetch_toss_candles, write_rows
 
 load_dotenv()
@@ -42,6 +45,7 @@ KIS_ENV = os.getenv("KIS_ENV", "MOCK")
 crypto = CryptoHelper(ENCRYPTION_KEY)
 news_repository = NewsRepository()
 news_ingest_service = NewsIngestService()
+PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 NEWS_INGEST_ENABLED = os.getenv("NEWS_INGEST_ENABLED", "false").lower() == "true"
 NEWS_INGEST_INTERVAL_SECONDS = int(os.getenv("NEWS_INGEST_INTERVAL_SECONDS", "600"))
@@ -743,6 +747,10 @@ def export_ml_candles():
     symbols = data.get("symbols") or []
     interval = data.get("interval")
     count = int(data.get("count") or 200)
+    sleep_seconds = float(data.get("sleep_seconds") if data.get("sleep_seconds") is not None else 2.0)
+    retry = int(data.get("retry") if data.get("retry") is not None else 3)
+    retry_wait_seconds = float(data.get("retry_wait_seconds") if data.get("retry_wait_seconds") is not None else 60.0)
+    append = bool(data.get("append", True))
 
     if isinstance(symbols, str):
         symbols = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()]
@@ -759,15 +767,30 @@ def export_ml_candles():
         token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else auth_header
 
         if exchange == "TOSS" and asset_type == "STOCK":
-            rows = fetch_toss_candles(symbols, token, interval or "1d", count)
-            output = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "ml" / "data" / "raw" / "stock_candles.csv"
+            rows = fetch_toss_candles(
+                symbols,
+                token,
+                interval or "1d",
+                count,
+                sleep_seconds=sleep_seconds,
+                retry=retry,
+                retry_wait_seconds=retry_wait_seconds,
+            )
+            output = PROJECT_ROOT / "ml" / "data" / "raw" / "stock_candles.csv"
         elif exchange == "BINANCE" and asset_type == "CRYPTO":
-            rows = fetch_binance_klines(symbols, interval or "1h", count)
-            output = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "ml" / "data" / "raw" / "crypto_candles.csv"
+            rows = fetch_binance_klines(
+                symbols,
+                interval or "1h",
+                count,
+                sleep_seconds=sleep_seconds,
+                retry=retry,
+                retry_wait_seconds=retry_wait_seconds,
+            )
+            output = PROJECT_ROOT / "ml" / "data" / "raw" / "crypto_candles.csv"
         else:
             return jsonify({"success": False, "message": "지원하지 않는 asset_type/exchange 조합입니다."}), 400
 
-        write_rows(output, rows)
+        write_rows(output, rows, append=append)
 
         return jsonify({
             "success": True,
@@ -780,12 +803,96 @@ def export_ml_candles():
                 "exchange": exchange,
                 "interval": interval or ("1d" if exchange == "TOSS" else "1h"),
                 "count": count,
+                "sleep_seconds": sleep_seconds,
+                "retry": retry,
+                "retry_wait_seconds": retry_wait_seconds,
+                "append": append,
             }
         })
     except Exception as e:
         return jsonify({
             "success": False,
             "message": f"학습용 캔들 CSV 생성 실패: {str(e)}"
+        }), 500
+
+
+def _read_json_file(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_csv_rows(path: Path, limit: int = 20) -> list[dict]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as file:
+        return list(csv.DictReader(file))[:limit]
+
+
+def _read_model_artifact(path: Path) -> dict:
+    return {
+        "path": str(path),
+        "data": _read_json_file(path),
+        "updated": path.exists(),
+    }
+
+
+@app.route("/api/ml/model-results", methods=["GET"])
+def get_ml_model_results():
+    """
+    관리자 페이지에서 최신 모델 성능 지표와 예측 순위를 조회합니다.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        get_user_id_from_header(auth_header)
+
+        model_specs = {
+            "stock": {
+                "asset_type": "STOCK",
+                "up_metrics_path": PROJECT_ROOT / "ml" / "models" / "lgbm_stock_signal_v1.metrics.json",
+                "risk_metrics_path": PROJECT_ROOT / "ml" / "models" / "lgbm_stock_risk_v1.metrics.json",
+                "predictions_path": PROJECT_ROOT / "ml" / "data" / "processed" / "stock_predictions_lgbm_v1.csv",
+                "backtest_up_only_summary_path": PROJECT_ROOT / "ml" / "data" / "processed" / "stock_backtest_up_only_v1.json",
+                "backtest_composite_summary_path": PROJECT_ROOT / "ml" / "data" / "processed" / "stock_backtest_composite_v1.json",
+            },
+            "crypto": {
+                "asset_type": "CRYPTO",
+                "up_metrics_path": PROJECT_ROOT / "ml" / "models" / "lgbm_crypto_signal_v1.metrics.json",
+                "risk_metrics_path": PROJECT_ROOT / "ml" / "models" / "lgbm_crypto_risk_v1.metrics.json",
+                "predictions_path": PROJECT_ROOT / "ml" / "data" / "processed" / "crypto_predictions_lgbm_v1.csv",
+                "backtest_up_only_summary_path": PROJECT_ROOT / "ml" / "data" / "processed" / "crypto_backtest_up_only_v1.json",
+                "backtest_composite_summary_path": PROJECT_ROOT / "ml" / "data" / "processed" / "crypto_backtest_composite_v1.json",
+            },
+        }
+
+        results = {}
+        for key, spec in model_specs.items():
+            up_metrics = _read_json_file(spec["up_metrics_path"])
+            risk_metrics = _read_json_file(spec["risk_metrics_path"])
+            predictions = [enrich_symbol(row) for row in _read_csv_rows(spec["predictions_path"], limit=20)]
+            results[key] = {
+                "asset_type": spec["asset_type"],
+                "metrics": up_metrics,
+                "risk_metrics": risk_metrics,
+                "predictions": predictions,
+                "metrics_path": str(spec["up_metrics_path"]),
+                "risk_metrics_path": str(spec["risk_metrics_path"]),
+                "predictions_path": str(spec["predictions_path"]),
+                "backtests": {
+                    "up_only": _read_model_artifact(spec["backtest_up_only_summary_path"]),
+                    "composite": _read_model_artifact(spec["backtest_composite_summary_path"]),
+                },
+                "updated": bool(up_metrics or risk_metrics or predictions),
+            }
+
+        return jsonify({"success": True, "data": results})
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"모델 결과 조회 실패: {str(e)}"
         }), 500
 
 

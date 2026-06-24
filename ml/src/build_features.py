@@ -11,6 +11,12 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(file)
 
 
+def resolve_ml_path(config_path: str, target_path: str) -> Path:
+    base_dir = Path(config_path).resolve().parent.parent
+    path = Path(target_path)
+    return path if path.is_absolute() else base_dir / path
+
+
 def calculate_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     delta = close.diff()
     gain = delta.clip(lower=0)
@@ -86,7 +92,14 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         *feature_columns,
     ]
     output_columns = [column for column in output_columns if column in features.columns]
-    features = features[output_columns].dropna().reset_index(drop=True)
+    required_non_null_columns = [
+        "future_return",
+        "up_label",
+        "risk_label",
+        *feature_columns,
+    ]
+    required_non_null_columns = [column for column in required_non_null_columns if column in features.columns]
+    features = features[output_columns].dropna(subset=required_non_null_columns).reset_index(drop=True)
     features["date"] = pd.to_datetime(features["date"]).dt.strftime("%Y-%m-%d %H:%M:%S")
     return features
 
@@ -97,8 +110,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    raw_path = Path(config["data"]["raw_candles_path"])
-    output_path = Path(config["data"]["features_path"])
+    raw_path = resolve_ml_path(args.config, config["data"]["raw_candles_path"])
+    output_path = resolve_ml_path(args.config, config["data"]["features_path"])
 
     candles = pd.read_csv(raw_path)
     candles = normalize_columns(candles)

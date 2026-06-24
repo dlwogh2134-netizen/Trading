@@ -14,6 +14,12 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(file)
 
 
+def resolve_ml_path(config_path: str, target_path: str) -> Path:
+    base_dir = Path(config_path).resolve().parent.parent
+    path = Path(target_path)
+    return path if path.is_absolute() else base_dir / path
+
+
 def split_by_time(df: pd.DataFrame, validation_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
     dates = pd.Series(pd.to_datetime(df["date"]).sort_values().unique())
     split_index = max(1, int(len(dates) * (1 - validation_ratio)))
@@ -41,8 +47,8 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    features_path = Path(config["data"]["features_path"])
-    model_path = Path(config["model"]["output_path"])
+    features_path = resolve_ml_path(args.config, config["data"]["features_path"])
+    model_path = resolve_ml_path(args.config, config["model"]["output_path"])
     metrics_path = model_path.with_suffix(".metrics.json")
 
     df = pd.read_csv(features_path)
@@ -60,6 +66,7 @@ def main() -> None:
     metrics = calculate_metrics(valid_df[target_column], valid_prob)
     metrics["model_version"] = config["model"]["version"]
     metrics["asset_type"] = config["model"]["asset_type"]
+    metrics["target_column"] = target_column
     metrics["train_rows"] = int(len(train_df))
     metrics["valid_rows"] = int(len(valid_df))
     metrics["train_start_date"] = str(train_df["date"].min())

@@ -20,10 +20,13 @@ teamproject/
 │   └── migrations/               # DB 버전 관리 SQL 마이그레이션 파일들
 ├── ml/                           # LightGBM 사전학습 및 예측 파이프라인
 │   ├── README.md                 # 로컬/Colab 학습 실행 가이드
+│   ├── experiments.md            # LightGBM 실험 결과 누적 기록
 │   ├── requirements.txt          # ML 전용 Python 의존성
 │   ├── configs/
-│   │   ├── lgbm_stock_v1.yaml    # 주식 신호 모델 설정
-│   │   └── lgbm_crypto_v1.yaml   # 코인 신호 모델 설정
+│   │   ├── lgbm_stock_v1.yaml         # 주식 상승 신호 모델 설정
+│   │   ├── lgbm_stock_risk_v1.yaml    # 주식 하락 위험 모델 설정
+│   │   ├── lgbm_crypto_v1.yaml        # 코인 상승 신호 모델 설정
+│   │   └── lgbm_crypto_risk_v1.yaml   # 코인 하락 위험 모델 설정
 │   ├── data/
 │   │   ├── raw/                  # 원천 캔들 CSV 보관
 │   │   └── processed/            # 피처/라벨/예측 CSV 출력
@@ -33,7 +36,8 @@ teamproject/
 │       ├── build_features.py     # 캔들 데이터 기반 피처/라벨 생성
 │       ├── train_model.py        # LightGBM 학습 및 모델 저장
 │       ├── evaluate.py           # 검증 지표 출력
-│       └── predict.py            # 저장 모델 기반 최신 데이터 예측
+│       ├── predict.py            # 저장 모델 기반 최신 데이터 예측
+│       └── backtest_signals.py   # 상위 signal_score 후보 기준 단순 백테스트
 ├── backend/                      # Flask 백엔드 (API Gateway & 자동매매 엔진)
 │   ├── app.py                    # Flask 서버 진입점 (현재 구현됨)
 │   ├── requirements.txt          # 파이썬 의존성 패키지 목록 (현재 구현됨)
@@ -51,6 +55,7 @@ teamproject/
 │   │   ├── news_repository.py    # 뉴스 데이터 조회/저장 서비스 (현재 구현됨)
 │   │   ├── news_query_planner.py # 뉴스 수집 쿼리 예산/쿨다운/우선순위 플래너
 │   │   ├── news_ingest.py        # 뉴스 수집 서비스 (현재 구현됨)
+│   │   ├── symbol_metadata.py    # 모델 결과 표시용 심볼명/시장/섹터 메타데이터 매핑 (현재 구현됨)
 │   │   ├── agent.py              # LLM & LangChain 챗봇 오케스트레이터 (추가 예정)
 │   │   └── trading_engine.py     # 백그라운드 조건 감시 엔진 (추가 예정)
 │   ├── utils/                    # 공통 유틸리티 함수
@@ -113,6 +118,12 @@ teamproject/
     * 주식은 Toss Open API, 코인은 Binance 공개 캔들 API를 사용합니다.
     * Toss 수집 시 프론트엔드는 Supabase access token만 전달하고, 서버가 `user_api_keys`에서 로그인 사용자 API Key를 읽어 내부에서만 복호화합니다.
     * 생성 파일은 `ml/data/raw/stock_candles.csv` 또는 `ml/data/raw/crypto_candles.csv`에 저장합니다.
+  * **모델 결과 조회 API (`GET /api/ml/model-results`)**:
+    * 관리자 페이지(`/admin/ml-data`)에서 최신 모델 성능 지표와 예측 순위를 조회합니다.
+    * `ml/models/*.metrics.json`, `ml/data/processed/*_predictions_lgbm_v1.csv`, `ml/data/processed/*_backtest_*.json`을 읽어 주식/코인 결과를 분리 반환합니다.
+    * 상승 모델 지표, 하락 위험 모델 지표, 복합 점수 예측 결과, `up_only/composite` 백테스트 요약을 함께 제공합니다.
+    * 예측 결과의 티커는 `symbol_metadata.py`의 임시 메타데이터로 표시명, 시장, 섹터를 보강합니다. 추후 `watchlist_symbols` 테이블이 운영되면 DB 기반 메타데이터로 이전합니다.
+    * 인증 헤더가 없는 요청은 차단하며, API Key나 계좌 정보는 응답에 포함하지 않습니다.
   * **통합 시세 조회 API (`GET /api/chart/candles`)**:
     * 프론트엔드에 일관된 데이터 인터페이스를 제공하기 위한 게이트웨이 라우트입니다.
     * 요청 파라미터(`exchange`, `symbol`, `interval`)에 맞추어 각각의 거래소 클라이언트를 동적으로 스위칭 호출합니다.
@@ -154,13 +165,14 @@ teamproject/
   * LightGBM 초기 MVP는 맥북 M2 로컬 Python 환경에서 개발하고 검증합니다.
   * 데이터가 커지거나 반복 튜닝 시간이 길어지는 경우 Colab을 학습 전용 보조 환경으로 사용합니다.
 * **주식/코인 모델 분리**:
-  * 주식은 `lgbm_stock_v1.yaml` 기준으로 3거래일 단위 상승/하락 위험 신호를 학습합니다.
-  * 코인은 `lgbm_crypto_v1.yaml` 기준으로 4시간 단위 상승/하락 위험 신호를 학습합니다.
+  * 주식은 `lgbm_stock_v1.yaml`와 `lgbm_stock_risk_v1.yaml` 기준으로 상승 확률과 하락 위험을 분리 학습합니다.
+  * 코인은 `lgbm_crypto_v1.yaml`와 `lgbm_crypto_risk_v1.yaml` 기준으로 상승 확률과 하락 위험을 분리 학습합니다.
   * 코인 모델은 24시간 시장 특성을 반영해 5분·15분·1시간·4시간·24시간 수익률과 거래량·변동성 피처를 우선 사용합니다.
 * **역할 분리**:
   * `ml/src/build_features.py`는 캔들 CSV를 읽어 과거 기반 피처와 미래 라벨을 생성합니다.
   * `ml/src/train_model.py`는 생성된 피처 파일로 LightGBM 모델을 학습하고 `ml/models/`에 저장합니다.
   * `ml/src/predict.py`는 저장된 모델로 최신 피처의 상승 확률, 하락 위험 점수, 종합 신호 점수를 산출합니다.
+  * `ml/src/backtest_signals.py`는 검증 구간에서 날짜별 상위 `signal_score` 후보의 단순 미래 수익률을 계산합니다.
   * Flask 백엔드는 학습을 직접 수행하지 않고, 검증된 모델 파일을 로드해 예측 API만 제공합니다.
 * **데이터 보안**:
   * `ml/data/`와 `ml/models/`에는 대용량 데이터와 모델 산출물이 생성되므로 Git 커밋 대상에서 제외합니다.
