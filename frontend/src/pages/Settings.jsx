@@ -3,7 +3,7 @@ import { supabase } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import InvestmentSurveyModal from '../components/InvestmentSurveyModal'
 
-export default function Settings({ isLoggedIn, userEmail, handleLogout, userProfile, hideHeader }) {
+export default function Settings({ isLoggedIn, userEmail, handleLogout, userProfile, setUserProfile, hideHeader }) {
   // 브로커 연동 현황 상태
   const [status, setStatus] = useState({
     TOSS: { registered: false },
@@ -57,11 +57,7 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
 
   const [newPassword, setNewPassword] = useState('')
 
-  const [investmentProfile, setInvestmentProfile] = useState({
-    investment_type: '위험중립형',
-    risk_score: 29,
-    created_at: '2026-06-24'
-  })
+
 
   // 세션 헤더 획득 헬퍼 함수
   const getAuthHeader = async () => {
@@ -818,7 +814,7 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
             </div>
 
             <div className="text-sm text-slate-500 mt-2">
-              최근 분석일 : {investmentProfile?.created_at}
+              최근 분석일 : {userProfile?.updated_at ? new Date(userProfile.updated_at).toLocaleDateString('ko-KR') : '기록 없음'}
             </div>
           </div>
 
@@ -834,7 +830,15 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
           showSurveyModal && (
             <InvestmentSurveyModal
               onClose={() => setShowSurveyModal(false)}
-              userProfile={userProfile}
+              onSuccess={(type, score) => {
+                setUserProfile(prev => prev ? {
+                  ...prev,
+                  invest_type: type,
+                  invest_score: score,
+                  updated_at: new Date().toISOString()
+                } : null)
+                setShowSurveyModal(false)
+              }}
             />
           )
         }
