@@ -20,6 +20,8 @@
 
 LightGBM 결과는 매매 실행 명령이 아니라 상승 확률, 하락 위험 확률, 종합 신호 점수입니다. 실제 주문은 기존 Human-in-the-Loop 승인 흐름을 반드시 거쳐야 합니다.
 
+상승만 따로 보고 끝내지 않습니다. 실제 후보 선별에서는 "오를 가능성"과 함께 "떨어질 위험"도 같이 봐야 하므로, 현재 파이프라인은 `up_label` 모델과 `risk_label` 모델을 분리해 학습하고 최종적으로 복합 점수까지 계산합니다.
+
 ## 2. 로컬 실행
 
 ```bash
@@ -48,20 +50,69 @@ symbol,date,open,high,low,close,volume
 exchange,asset_type,market_country,currency
 ```
 
-주식 모델:
+주식 모델 1차 실행:
 
 ```bash
 python src/build_features.py --config configs/lgbm_stock_v1.yaml
 python src/train_model.py --config configs/lgbm_stock_v1.yaml
+python src/train_model.py --config configs/lgbm_stock_risk_v1.yaml
+python src/evaluate.py --config configs/lgbm_stock_v1.yaml
+python src/evaluate.py --config configs/lgbm_stock_risk_v1.yaml
 python src/predict.py --config configs/lgbm_stock_v1.yaml
+python src/backtest_signals.py --config configs/lgbm_stock_v1.yaml --strategy up_only
+python src/backtest_signals.py --config configs/lgbm_stock_v1.yaml --strategy composite
 ```
 
-코인 모델:
+코인 모델 1차 실행:
 
 ```bash
 python src/build_features.py --config configs/lgbm_crypto_v1.yaml
 python src/train_model.py --config configs/lgbm_crypto_v1.yaml
+python src/train_model.py --config configs/lgbm_crypto_risk_v1.yaml
+python src/evaluate.py --config configs/lgbm_crypto_v1.yaml
+python src/evaluate.py --config configs/lgbm_crypto_risk_v1.yaml
 python src/predict.py --config configs/lgbm_crypto_v1.yaml
+python src/backtest_signals.py --config configs/lgbm_crypto_v1.yaml --strategy up_only
+python src/backtest_signals.py --config configs/lgbm_crypto_v1.yaml --strategy composite
+```
+
+위 명령은 `teamproject` 루트에서 실행해도 되고 `ml/` 디렉토리 안에서 실행해도 되도록 경로 해석을 맞춰두었습니다.
+
+## 2.1 생성 결과물 의미
+
+학습과 예측을 끝내면 아래 파일들이 핵심 산출물입니다.
+
+```text
+ml/models/lgbm_stock_signal_v1.joblib
+ml/models/lgbm_stock_risk_v1.joblib
+ml/models/lgbm_crypto_signal_v1.joblib
+ml/models/lgbm_crypto_risk_v1.joblib
+
+ml/models/*.metrics.json
+ml/data/processed/*_predictions_lgbm_v1.csv
+ml/data/processed/*_backtest_up_only_v1.json
+ml/data/processed/*_backtest_composite_v1.json
+```
+
+예측 CSV 주요 컬럼은 다음 의미를 가집니다.
+
+```text
+up_probability      = 오를 가능성
+risk_probability    = 떨어질 위험 가능성
+up_signal_score     = 상승 모델 점수(0~100)
+risk_signal_score   = 하락 위험 모델 점수(0~100)
+signal_score        = 최종 복합 점수 = (up_probability - risk_probability) * 100
+scoring_strategy    = up_only 또는 composite
+```
+
+백테스트 JSON 주요 필드는 다음 의미를 가집니다.
+
+```text
+top_avg_future_return      = 점수 상위 N개 후보 평균 미래 수익률
+universe_avg_future_return = 전체 후보 평균 미래 수익률
+excess_return              = 상위 후보가 전체 평균보다 얼마나 더 좋았는지
+date_win_rate              = 날짜 기준 승률
+selection_win_rate         = 선택된 종목 기준 승률
 ```
 
 ## 3. API 수집 CSV 생성
@@ -90,10 +141,16 @@ python ../backend/scripts/export_training_candles.py \
   --interval 1d \
   --count 200 \
   --auth-token "$SUPABASE_ACCESS_TOKEN" \
+  --sleep-seconds 2 \
+  --retry 3 \
+  --retry-wait-seconds 60 \
+  --append \
   --output data/raw/stock_candles.csv
 ```
 
 국내 주식은 장 운영 시간과 Toss API 제공 범위의 영향을 받을 수 있으므로, 장중에는 위 명령으로 실제 수집을 확인하고 장외에는 실패 응답 또는 빈 데이터를 정상적으로 기록해 원인을 확인합니다.
+
+Toss에서 `HTTP 429 rate-limit-exceeded`가 발생하면 요청 한도를 초과한 것입니다. 이 경우 종목 수를 한 번에 너무 많이 넣지 말고, 요청 간 대기초를 늘리거나 5~10종목 단위로 나누어 `--append` 옵션으로 병합 저장합니다.
 
 ## 4. Colab 사용 기준
 

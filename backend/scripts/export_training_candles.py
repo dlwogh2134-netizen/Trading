@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,8 @@ def http_json(
     params: dict[str, Any] | None = None,
     data: dict[str, Any] | None = None,
     timeout: int = 15,
+    retry: int = 0,
+    retry_wait_seconds: float = 60.0,
 ) -> Any:
     request_url = url
     if params:
@@ -55,14 +58,25 @@ def http_json(
         body = urlencode(data).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
 
-    request = Request(request_url, data=body, headers=request_headers, method=method)
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw)
-    except HTTPError as error:
-        raw = error.read().decode("utf-8")
-        raise RuntimeError(f"HTTP {error.code}: {raw}") from error
+    last_error: Exception | None = None
+    for attempt in range(retry + 1):
+        request = Request(request_url, data=body, headers=request_headers, method=method)
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+                return json.loads(raw)
+        except HTTPError as error:
+            raw = error.read().decode("utf-8")
+            last_error = RuntimeError(f"HTTP {error.code}: {raw}")
+            if error.code == 429 and attempt < retry:
+                wait_seconds = retry_wait_seconds * (attempt + 1)
+                print(f"요청 한도 초과로 {wait_seconds:.1f}초 대기 후 재시도합니다. ({attempt + 1}/{retry})", file=sys.stderr)
+                time.sleep(wait_seconds)
+                continue
+            raise last_error from error
+    if last_error:
+        raise last_error
+    raise RuntimeError("알 수 없는 HTTP 요청 실패입니다.")
 
 
 def parse_symbols(symbols: str) -> list[str]:
@@ -73,7 +87,15 @@ def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+def deduplicate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (str(row.get("exchange", "")), str(row.get("symbol", "")), str(row.get("date", "")))
+        unique_rows[key] = row
+    return sorted(unique_rows.values(), key=lambda row: (row.get("symbol", ""), row.get("date", "")))
+
+
+def write_rows(path: Path, rows: list[dict[str, Any]], append: bool = False) -> None:
     ensure_parent(path)
     fieldnames = [
         "exchange",
@@ -88,6 +110,11 @@ def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
         "close",
         "volume",
     ]
+    if append and path.exists():
+        with path.open("r", newline="", encoding="utf-8") as file:
+            existing_rows = list(csv.DictReader(file))
+        rows = deduplicate_rows([*existing_rows, *rows])
+
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -150,16 +177,29 @@ def fetch_toss_token(api_key: str, secret_key: str) -> str:
         },
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
+        retry=2,
+        retry_wait_seconds=30,
     )
     return payload["access_token"]
 
 
-def fetch_toss_candles(symbols: list[str], auth_token: str, interval: str, count: int) -> list[dict[str, Any]]:
+def fetch_toss_candles(
+    symbols: list[str],
+    auth_token: str,
+    interval: str,
+    count: int,
+    sleep_seconds: float = 2.0,
+    retry: int = 3,
+    retry_wait_seconds: float = 60.0,
+) -> list[dict[str, Any]]:
     saved_key = fetch_saved_key(auth_token, "TOSS", "REAL")
     access_token = fetch_toss_token(saved_key["access_key"], saved_key["secret_key"])
 
     rows: list[dict[str, Any]] = []
-    for symbol in symbols:
+    for index, symbol in enumerate(symbols):
+        if index > 0 and sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
         payload = http_json(
             "https://openapi.tossinvest.com/api/v1/candles",
             headers={"Authorization": f"Bearer {access_token}"},
@@ -170,6 +210,8 @@ def fetch_toss_candles(symbols: list[str], auth_token: str, interval: str, count
                 "adjusted": "true",
             },
             timeout=15,
+            retry=retry,
+            retry_wait_seconds=retry_wait_seconds,
         )
 
         result = payload.get("result", {})
@@ -192,13 +234,25 @@ def fetch_toss_candles(symbols: list[str], auth_token: str, interval: str, count
     return sorted(rows, key=lambda row: (row["symbol"], row["date"]))
 
 
-def fetch_binance_klines(symbols: list[str], interval: str, limit: int) -> list[dict[str, Any]]:
+def fetch_binance_klines(
+    symbols: list[str],
+    interval: str,
+    limit: int,
+    sleep_seconds: float = 0.2,
+    retry: int = 2,
+    retry_wait_seconds: float = 10.0,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for symbol in symbols:
+    for index, symbol in enumerate(symbols):
+        if index > 0 and sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+
         payload = http_json(
             "https://api.binance.com/api/v3/klines",
             params={"symbol": symbol, "interval": interval, "limit": min(limit, 1000)},
             timeout=15,
+            retry=retry,
+            retry_wait_seconds=retry_wait_seconds,
         )
 
         for item in payload:
@@ -229,6 +283,10 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=200)
     parser.add_argument("--auth-token", default=None, help="저장된 Toss API 키 조회용 Supabase JWT")
     parser.add_argument("--output", default=None)
+    parser.add_argument("--sleep-seconds", type=float, default=None, help="종목별 요청 사이 대기 초")
+    parser.add_argument("--retry", type=int, default=None, help="HTTP 429 재시도 횟수")
+    parser.add_argument("--retry-wait-seconds", type=float, default=None, help="HTTP 429 재시도 기본 대기 초")
+    parser.add_argument("--append", action="store_true", help="기존 CSV에 병합 저장하고 중복 행을 제거합니다.")
     args = parser.parse_args()
 
     symbols = parse_symbols(args.symbols)
@@ -242,17 +300,32 @@ def main() -> None:
             raise ValueError("TOSS 수집에는 --auth-token Supabase JWT가 필요합니다.")
         interval = args.interval or "1d"
         output = Path(args.output or PROJECT_ROOT / "ml" / "data" / "raw" / "stock_candles.csv")
-        rows = fetch_toss_candles(symbols, args.auth_token, interval, args.count)
+        rows = fetch_toss_candles(
+            symbols,
+            args.auth_token,
+            interval,
+            args.count,
+            sleep_seconds=args.sleep_seconds if args.sleep_seconds is not None else 2.0,
+            retry=args.retry if args.retry is not None else 3,
+            retry_wait_seconds=args.retry_wait_seconds if args.retry_wait_seconds is not None else 60.0,
+        )
     elif args.exchange == "BINANCE":
         if args.asset_type != "CRYPTO":
             raise ValueError("BINANCE 수집은 CRYPTO asset-type만 지원합니다.")
         interval = args.interval or "1h"
         output = Path(args.output or PROJECT_ROOT / "ml" / "data" / "raw" / "crypto_candles.csv")
-        rows = fetch_binance_klines(symbols, interval, args.count)
+        rows = fetch_binance_klines(
+            symbols,
+            interval,
+            args.count,
+            sleep_seconds=args.sleep_seconds if args.sleep_seconds is not None else 0.2,
+            retry=args.retry if args.retry is not None else 2,
+            retry_wait_seconds=args.retry_wait_seconds if args.retry_wait_seconds is not None else 10.0,
+        )
     else:
         raise ValueError(f"지원하지 않는 거래소입니다: {args.exchange}")
 
-    write_rows(output, rows)
+    write_rows(output, rows, append=args.append)
     print(f"CSV 생성 완료: {output}")
     print(f"행 수: {len(rows):,}")
 

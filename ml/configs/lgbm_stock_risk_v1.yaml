@@ -1,22 +1,18 @@
 data:
   raw_candles_path: data/raw/stock_candles.csv
   features_path: data/processed/stock_features_lgbm_v1.csv
-  predictions_path: data/processed/stock_predictions_lgbm_v1.csv
-  backtest_up_only_summary_path: data/processed/stock_backtest_up_only_v1.json
-  backtest_up_only_daily_path: data/processed/stock_backtest_up_only_daily_v1.csv
-  backtest_composite_summary_path: data/processed/stock_backtest_composite_v1.json
-  backtest_composite_daily_path: data/processed/stock_backtest_composite_daily_v1.csv
+  predictions_path: data/processed/stock_risk_predictions_lgbm_v1.csv
 
 model:
-  version: lgbm_stock_signal_v1
+  version: lgbm_stock_risk_v1
   asset_type: STOCK
-  output_path: models/lgbm_stock_signal_v1.joblib
+  output_path: models/lgbm_stock_risk_v1.joblib
   horizon_periods: 3
   up_return_threshold: 0.01
   risk_return_threshold: -0.02
   validation_ratio: 0.2
   random_state: 42
-  target_column: up_label
+  target_column: risk_label
   feature_columns:
     - return_1
     - return_3
@@ -28,9 +24,6 @@ model:
     - volume_ratio_5
     - volatility_20
     - rsi_14
-
-prediction:
-  risk_model_path: models/lgbm_stock_risk_v1.joblib
 
 lightgbm:
   objective: binary
