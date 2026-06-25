@@ -13,7 +13,13 @@ from backend.services.ml_job_service import create_job, list_jobs, run_ml_pipeli
 from backend.services.ml_automation_service import list_automation_presets, resolve_automation_preset
 from backend.services.ml_registry_service import list_model_registry, set_serving_model
 from backend.services.ml_model_service import (
+    build_active_signal_payload,
+    build_dataset_quality_report,
+    build_promotion_guard_report,
     build_readiness_payload,
+    build_serving_audit_report,
+    build_training_audit_bundle,
+    find_model_result_by_version,
     list_experiment_reports,
     run_experiment_report,
     resolve_active_model_selection,
@@ -71,8 +77,9 @@ def export_ml_candles():
     if not symbols:
         return jsonify({"success": False, "message": "수집할 심볼 또는 preset을 입력해 주세요."}), 400
 
-    if count < 1 or count > 1000:
-        return jsonify({"success": False, "message": "count는 1 이상 1000 이하로 입력해 주세요."}), 400
+    # v8 코인 30m 수집은 count=5000 필요 → 상한을 10000으로 상향
+    if count < 1 or count > 10000:
+        return jsonify({"success": False, "message": "count는 1 이상 10000 이하로 입력해 주세요."}), 400
 
     try:
         token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else auth_header
@@ -117,7 +124,10 @@ def export_ml_candles():
                 retry=retry,
                 retry_wait_seconds=retry_wait_seconds,
             )
-            output = os.path.join(project_root_path, "ml", "data", "raw", "crypto_candles.csv")
+            # interval에 따라 파일 분리 (1h/30m 혼재 방지)
+            candle_interval = (interval or "1h").lower()
+            crypto_filename = "crypto_candles_30m.csv" if candle_interval == "30m" else "crypto_candles.csv"
+            output = os.path.join(project_root_path, "ml", "data", "raw", crypto_filename)
         else:
             return jsonify({"success": False, "message": "지원하지 않는 asset_type/exchange 조합입니다."}), 400
 
@@ -258,11 +268,26 @@ def run_ml_training_job():
             sync_training_job_to_supabase(auth_header, latest_training_job)
         sync_model_registry_to_supabase(auth_header, summary_output)
         auto_report = None
+        training_audit = None
         if result["success"]:
             try:
                 auto_report = run_experiment_report(auth_header=auth_header, output=None)
             except Exception:
                 auto_report = None
+            try:
+                training_audit = build_training_audit_bundle(
+                    auth_header=auth_header,
+                    asset_type=None,
+                    config_path=config,
+                )
+                update_job(
+                    train_job["id"],
+                    {
+                        "training_audit": training_audit,
+                    },
+                )
+            except Exception:
+                training_audit = None
 
         status_code = 200 if result["success"] else 500
         return jsonify({
@@ -271,6 +296,7 @@ def run_ml_training_job():
             "data": {
                 "job_id": train_job["id"],
                 "report": auto_report,
+                "training_audit": sanitize_nan(training_audit),
                 **result,
             }
         }), status_code
@@ -439,7 +465,12 @@ def run_ml_full_pipeline_job():
                 retry=int(dataset_config.get("retry", 2)),
                 retry_wait_seconds=float(dataset_config.get("retry_wait_seconds", 10.0)),
             )
-            output = os.path.join(project_root_path, "ml", "data", "raw", "crypto_candles.csv")
+            # raw_output 키 우선, 없으면 interval 기반으로 파일 분리 (1h/30m 혼재 방지)
+            raw_output_name = dataset_config.get(
+                "raw_output",
+                "crypto_candles_30m.csv" if str(dataset_config["interval"]).lower() == "30m" else "crypto_candles.csv",
+            )
+            output = os.path.join(project_root_path, "ml", "data", "raw", raw_output_name)
         else:
             raise ValueError("지원하지 않는 자동화 dataset 조합입니다.")
 
@@ -495,11 +526,26 @@ def run_ml_full_pipeline_job():
             sync_training_job_to_supabase(auth_header, latest_training_job)
         sync_model_registry_to_supabase(auth_header, training_config.get("summary_output"))
         auto_report = None
+        training_audit = None
         if result["success"]:
             try:
                 auto_report = run_experiment_report(auth_header=auth_header, output=None)
             except Exception:
                 auto_report = None
+            try:
+                training_audit = build_training_audit_bundle(
+                    auth_header=auth_header,
+                    asset_type=dataset_config["asset_type"],
+                    config_path=training_config["config"],
+                )
+                update_job(
+                    train_job["id"],
+                    {
+                        "training_audit": training_audit,
+                    },
+                )
+            except Exception:
+                training_audit = None
 
         status_code = 200 if result["success"] else 500
         return jsonify({
@@ -514,10 +560,14 @@ def run_ml_full_pipeline_job():
                 "dataset_rows": len(rows),
                 "dataset_failures": failures[:20],
                 "report": auto_report,
+                "training_audit": sanitize_nan(training_audit),
                 **result,
             }
         }), status_code
     except Exception as e:
+        import traceback
+        traceback.print_exc()
+        current_app.logger.error(f"ML full pipeline failed: {str(e)}\n{traceback.format_exc()}")
         if "dataset_job" in locals():
             failed_dataset_job = update_job(
                 dataset_job["id"],
@@ -525,6 +575,7 @@ def run_ml_full_pipeline_job():
                     "status": "failed",
                     "finished_at": datetime.utcnow().isoformat() + "Z",
                     "error": str(e),
+                    "stderr": f"Dataset export failed:\n{str(e)}\n\nTraceback:\n{traceback.format_exc()}",
                 },
             )
             if failed_dataset_job:
@@ -536,6 +587,7 @@ def run_ml_full_pipeline_job():
                     "status": "failed",
                     "finished_at": datetime.utcnow().isoformat() + "Z",
                     "error": str(e),
+                    "stderr": f"Training run failed:\n{str(e)}\n\nTraceback:\n{traceback.format_exc()}",
                 },
             )
             if failed_train_job:
@@ -616,11 +668,23 @@ def activate_ml_registry_version():
         data = request.json or {}
         asset_type = str(data.get("asset_type") or "").upper()
         model_version = str(data.get("model_version") or "").strip()
+        force_activate = bool(data.get("force", False))
 
         if asset_type not in ("STOCK", "CRYPTO"):
             return jsonify({"success": False, "message": "asset_type은 STOCK 또는 CRYPTO여야 합니다."}), 400
         if not model_version:
             return jsonify({"success": False, "message": "model_version이 필요합니다."}), 400
+
+        asset_key = "stock" if asset_type == "STOCK" else "crypto"
+        guard_report = build_promotion_guard_report(asset_key, auth_header, model_version)
+        if guard_report is None:
+            return jsonify({"success": False, "message": "후보 모델 검증 정보를 찾을 수 없습니다."}), 404
+        if not guard_report["passed"] and not force_activate:
+            return jsonify({
+                "success": False,
+                "message": "승격 기준을 통과하지 못해 서비스 반영이 차단되었습니다.",
+                "data": sanitize_nan(guard_report),
+            }), 409
 
         registry_rows = safe_query_supabase(
             auth_header,
@@ -639,6 +703,7 @@ def activate_ml_registry_version():
                 "data": {
                     "asset_type": asset_type,
                     "model_version": model_version,
+                    "guard_report": guard_report,
                     "registry": file_target,
                 }
             })
@@ -666,6 +731,7 @@ def activate_ml_registry_version():
             "data": {
                 "asset_type": asset_type,
                 "model_version": model_version,
+                "guard_report": sanitize_nan(guard_report),
             }
         })
     except Exception as e:
@@ -691,6 +757,80 @@ def get_ml_readiness():
         return jsonify({
             "success": False,
             "message": f"ML 운영 준비 상태 조회 실패: {str(e)}"
+        }), 500
+
+@ml_bp.route("/api/ml/data-quality", methods=["GET"])
+def get_ml_data_quality():
+    """원천 학습 데이터 CSV의 중복, 결측, 최신성, 가격 이상치를 점검합니다."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        get_user_id_from_header(auth_header)
+        asset_type = str(request.args.get("asset_type") or "").upper()
+        if asset_type not in ("STOCK", "CRYPTO"):
+            return jsonify({"success": False, "message": "asset_type은 STOCK 또는 CRYPTO여야 합니다."}), 400
+
+        asset_key = "stock" if asset_type == "STOCK" else "crypto"
+        return jsonify({
+            "success": True,
+            "data": sanitize_nan(build_dataset_quality_report(asset_key)),
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"데이터 품질 조회 실패: {str(e)}"
+        }), 500
+
+@ml_bp.route("/api/ml/registry/promotion-check", methods=["GET"])
+def get_ml_promotion_check():
+    """후보 모델이 활성 모델로 승격 가능한지 절대/상대 기준으로 검증합니다."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        get_user_id_from_header(auth_header)
+        asset_type = str(request.args.get("asset_type") or "").upper()
+        model_version = str(request.args.get("model_version") or "").strip()
+        if asset_type not in ("STOCK", "CRYPTO"):
+            return jsonify({"success": False, "message": "asset_type은 STOCK 또는 CRYPTO여야 합니다."}), 400
+        if not model_version:
+            return jsonify({"success": False, "message": "model_version이 필요합니다."}), 400
+
+        asset_key = "stock" if asset_type == "STOCK" else "crypto"
+        guard_report = build_promotion_guard_report(asset_key, auth_header, model_version)
+        if guard_report is None:
+            return jsonify({"success": False, "message": "후보 모델 검증 정보를 찾을 수 없습니다."}), 404
+
+        return jsonify({
+            "success": True,
+            "data": sanitize_nan(guard_report),
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"승격 검증 조회 실패: {str(e)}"
+        }), 500
+
+@ml_bp.route("/api/ml/serving-audit", methods=["GET"])
+def get_ml_serving_audit():
+    """현재 serving 모델과 추천 후보를 함께 감사하여 즉시 운영 판단이 가능하도록 반환합니다."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        get_user_id_from_header(auth_header)
+        return jsonify({
+            "success": True,
+            "data": sanitize_nan(build_serving_audit_report(auth_header)),
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"serving 감사 조회 실패: {str(e)}"
         }), 500
 
 @ml_bp.route("/api/ml/active-model", methods=["GET"])
@@ -730,6 +870,63 @@ def get_ml_active_model():
         return jsonify({
             "success": False,
             "message": f"활성 모델 조회 실패: {str(e)}"
+        }), 500
+
+@ml_bp.route("/api/ml/predictions/active", methods=["GET"])
+def get_ml_active_predictions():
+    """활성 모델 기준 최신 예측 결과와 검증/백테스트 수치를 챗봇 연동용 포맷으로 반환합니다."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        get_user_id_from_header(auth_header)
+        asset_type = str(request.args.get("asset_type") or "").upper()
+        if asset_type not in ("STOCK", "CRYPTO"):
+            return jsonify({"success": False, "message": "asset_type은 STOCK 또는 CRYPTO여야 합니다."}), 400
+
+        limit = int(request.args.get("limit", 20))
+        if limit < 1 or limit > 200:
+            return jsonify({"success": False, "message": "limit은 1 이상 200 이하로 입력해 주세요."}), 400
+
+        symbols_param = str(request.args.get("symbols") or "").strip()
+        symbols = [symbol.strip().upper() for symbol in symbols_param.split(",") if symbol.strip()]
+
+        position = str(request.args.get("position") or "").upper().strip() or None
+        if position and position not in ("LONG", "HOLD", "SHORT"):
+            return jsonify({"success": False, "message": "position은 LONG, HOLD, SHORT 중 하나여야 합니다."}), 400
+
+        min_signal_score = request.args.get("min_signal_score")
+        if min_signal_score in (None, ""):
+            min_signal_score_value = None
+        else:
+            min_signal_score_value = float(min_signal_score)
+
+        asset_key = "stock" if asset_type == "STOCK" else "crypto"
+        payload = build_active_signal_payload(
+            asset_key=asset_key,
+            auth_header=auth_header,
+            symbols=symbols,
+            position=position,
+            min_signal_score=min_signal_score_value,
+            limit=limit,
+        )
+        if payload is None:
+            return jsonify({"success": False, "message": "활성 예측 결과를 찾을 수 없습니다."}), 404
+
+        return jsonify({
+            "success": True,
+            "data": sanitize_nan(payload),
+        })
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "message": f"활성 예측 조회 파라미터 오류: {str(e)}"
+        }), 400
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"활성 예측 조회 실패: {str(e)}"
         }), 500
 
 @ml_bp.route("/api/ml/report", methods=["POST"])

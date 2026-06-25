@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { ASSET_ACCOUNTS_MOCK, FALLBACK_HOLDINGS } from '../dashboardConstants.js'
 import { Rate, SectionHeader } from '../components/DashboardComponents.jsx'
 
@@ -86,8 +87,12 @@ export default function AssetsTab({ balance, allocation }) {
             </thead>
             <tbody>
               {holdings.map((item) => (
-                <tr key={item.id} className="border-b border-slate-800/80 last:border-b-0">
-                  <td className="px-5 py-4 font-bold text-white">{item.name}</td>
+                <tr key={item.id} className="border-b border-slate-800/80 last:border-b-0 hover:bg-slate-800/20">
+                  <td className="px-5 py-4 font-bold text-white">
+                    <Link to={`/asset/STOCK/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline">
+                      {item.name}
+                    </Link>
+                  </td>
                   <td className="px-5 py-4 text-slate-300">{item.account}</td>
                   <td className="px-5 py-4 font-mono">{item.quantity}</td>
                   <td className="px-5 py-4 font-mono">{item.average}</td>

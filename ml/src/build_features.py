@@ -240,8 +240,9 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
     candles = candles.sort_values(["symbol", "date"]).reset_index(drop=True)
     candles["date_ymd"] = candles["date"].dt.strftime("%Y-%m-%d")
     asset_type = str(config["model"]["asset_type"]).upper()
+    # 30분 캔들 지원: CRYPTO는 30분 단위 내림으로 병합 키 생성 (1h 캔들도 호환)
     candles["date_merge_key"] = (
-        candles["date"].dt.floor("h").dt.strftime("%Y-%m-%d %H:00:00")
+        candles["date"].dt.floor("30min").dt.strftime("%Y-%m-%d %H:%M:00")
         if asset_type == "CRYPTO"
         else candles["date"].dt.strftime("%Y-%m-%d")
     )
@@ -257,7 +258,8 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         low = group["low"].astype(float)
         volume = group["volume"].astype(float)
 
-        for period in [1, 3, 4, 5, 10, 12, 20, 24]:
+        # return_48: 30분 캔들에서 48봉 = 24시간 대응 수익률 추가
+        for period in [1, 3, 4, 5, 10, 12, 20, 24, 48]:
             group[f"return_{period}"] = close.pct_change(period)
 
         for period in [4, 5, 20, 24]:
@@ -297,6 +299,9 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         group["neutral_label"] = (group["future_return"].abs() < neutral_zone_abs_return).astype(int)
         group["horizon_periods"] = horizon_periods
         group["symbol"] = symbol
+        # 잔차 수익률 라벨은 market 수익률 차감 후 apply_residual_labels()에서 후처리 적용
+        group["residual_up_label"] = group["up_label"]   # 임시: 나중에 잔차 기반으로 덮어씀
+        group["residual_risk_label"] = group["risk_label"]  # 임시: 나중에 잔차 기반으로 덮어씀
 
         if asset_type == "CRYPTO":
             group["hour_of_day"] = group["date"].dt.hour
@@ -348,6 +353,23 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         features[f"sector_relative_return_{period}"] = features[f"return_{period}"] - features[f"sector_return_{period}_mean"]
 
     features = apply_optional_features(features, config)
+
+    # 외부 피처 병합 후 NaN 방어: 시계열 순서 내 인접 값으로 임시 대체 (최대 2칸 이내)
+    optional_ffill_columns = [
+        "news_sentiment", "news_article_count_24h", "news_burst_zscore",
+        "negative_keyword_ratio", "market_news_sentiment", "market_news_article_count_24h",
+        "market_news_burst_zscore", "market_negative_keyword_ratio",
+        "funding_rate", "open_interest", "open_interest_change_24h",
+        "coinone_binance_spread", "kimchi_premium", "leader_btc_dominance_proxy",
+        "warning_flag", "price_limit_proximity", "turnover_ratio", "market_open_flag",
+    ]
+    for col in optional_ffill_columns:
+        if col in features.columns:
+            features[col] = (
+                features.groupby("symbol")[col].transform(
+                    lambda x: x.ffill(limit=2)
+                )
+            )
 
     for column in [
         "news_sentiment",
@@ -403,6 +425,46 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         features["relative_to_market_return_4"] = features["return_4"] - features["crypto_market_return_4"]
         features["relative_to_market_return_24"] = features["return_24"] - features["crypto_market_return_24"]
 
+        # 잔차 수익률 라벨: BTC 시장 동조 노이즈 제거 후 개별 알파 예측 (v8+)
+        # config에 use_residual_label: true 설정 시 활성화
+        label_config = config.get("labels", {})
+        if label_config.get("use_residual_label", False):
+            market_symbol = str(label_config.get("residual_market_symbol", "BTCUSDT")).upper()
+            btc_col = f"{market_symbol.lower()}_return_{int(config['model']['horizon_periods'])}"
+            if btc_col not in features.columns:
+                # horizon_periods 봉 수익률 BTC 컬럼이 없으면 가장 근접한 것을 사용
+                btc_col = "btcusdt_return_24" if "btcusdt_return_24" in features.columns else None
+            if btc_col and btc_col in features.columns:
+                residual_return = features["future_return"] - features[btc_col].fillna(0.0)
+                up_threshold_r = float(config["model"]["up_return_threshold"])
+                risk_threshold_r = float(config["model"]["risk_return_threshold"])
+                features["residual_up_label"] = (residual_return >= up_threshold_r).astype(int)
+                features["residual_risk_label"] = (residual_return <= risk_threshold_r).astype(int)
+
+    if asset_type == "STOCK":
+        # 주식 잔차 수익률 라벨: 국가별 지수(KOSPI/NASDAQ) 수익률 차감 (v8+)
+        label_config = config.get("labels", {})
+        if label_config.get("use_residual_label", False):
+            horizon = int(config["model"]["horizon_periods"])
+            up_threshold_r = float(config["model"]["up_return_threshold"])
+            risk_threshold_r = float(config["model"]["risk_return_threshold"])
+            residual_return = features["future_return"].copy()
+            kr_col = f"macro_KOSPI_return_{horizon}"
+            us_col = f"macro_NASDAQ_return_{horizon}"
+            if kr_col not in features.columns:
+                kr_col = "macro_KOSPI_return_3" if "macro_KOSPI_return_3" in features.columns else None
+            if us_col not in features.columns:
+                us_col = "macro_NASDAQ_return_3" if "macro_NASDAQ_return_3" in features.columns else None
+            if kr_col and us_col:
+                market_ret = np.where(
+                    features.get("is_kr_asset", pd.Series(1, index=features.index)) == 1,
+                    features[kr_col].fillna(0.0),
+                    features[us_col].fillna(0.0),
+                )
+                residual_return = features["future_return"] - market_ret
+            features["residual_up_label"] = (residual_return >= up_threshold_r).astype(int)
+            features["residual_risk_label"] = (residual_return <= risk_threshold_r).astype(int)
+
     if drop_neutral_samples and neutral_zone_abs_return > 0:
         features = features[features["neutral_label"] == 0].copy()
 
@@ -424,6 +486,9 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         "up_label",
         "risk_label",
         "neutral_label",
+        # 잔차 수익률 라벨: 시장 동조 노이즈 차감 후 개별 알파 예측용 (v8+)
+        "residual_up_label",
+        "residual_risk_label",
         *feature_columns,
     ]
     output_columns = [column for column in output_columns if column in features.columns]

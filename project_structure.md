@@ -10,10 +10,12 @@
 
 ```text
 teamproject/
+├── .env.example                  # 전체 환경 변수 설정 템플릿 파일
 ├── .gitignore                    # 전체 Git 무시 파일 설정
 ├── README.md                     # 프로젝트 소개 및 실행 방법
 ├── agents.md                     # AI 개발 가이드 및 제약 수칙
 ├── database_specification.md     # Supabase 테이블 및 ERD 명세
+├── design.md                     # 프론트엔드 UI 디자인 규격 설계서
 ├── project_structure.md          # [본 문서] 디렉토리 아키텍처 설계 가이드
 ├── supabase/                     # Supabase CLI 설정 및 DB 마이그레이션
 │   ├── config.toml               # 로컬/원격 Supabase 설정 파일
@@ -25,6 +27,7 @@ teamproject/
 │   ├── live_run_checklist.md     # 관리자 페이지 기준 실전 실행 체크리스트
 │   ├── automation_plan.md        # 자동 수집/자동 학습/모델 레지스트리 설계 계획
 │   ├── requirements.txt          # ML 전용 Python 의존성
+│   ├── test_yf.py                # Yahoo Finance API 연동 테스트 및 디버깅 스크립트
 │   ├── configs/
 │   │   ├── lgbm_stock_v1.yaml         # 주식 상승 신호 모델 설정
 │   │   ├── lgbm_stock_risk_v1.yaml    # 주식 하락 위험 모델 설정
@@ -40,7 +43,12 @@ teamproject/
 │   ├── data/
 │   │   ├── raw/                  # 원천 캔들 CSV 보관
 │   │   │   ├── *.template.csv    # 뉴스/코인 외부/주식 이벤트 피처 템플릿 예시
-│   │   ├── ops/                  # 데이터셋/학습 작업 이력(JSON), 모델 레지스트리 상태 및 운영 보조 산출물
+│   │   │   ├── macro_indices.csv # 글로벌 매크로 지표 데이터셋
+│   │   │   ├── stock_candles.csv # 수집된 주식 캔들 데이터셋
+│   │   │   └── crypto_candles.csv# 수집된 코인 캔들 데이터셋
+│   │   ├── ops/                  # 데이터셋/학습 작업 이력 및 모델 레지스트리 상태
+│   │   │   ├── job_history.json  # ML 백그라운드 작업 실행 이력로그
+│   │   │   └── model_registry.json# ML 서빙/추천 모델 레지스트리 상태 보관
 │   │   ├── processed/            # 피처/라벨/예측 CSV 출력
 │   │   └── reference/            # 유니버스 프리셋, 고정 메타 데이터 파일
 │   │       └── training_universes.json # 주식/코인 확장 수집용 프리셋 목록
@@ -62,10 +70,11 @@ teamproject/
 │   ├── app.py                    # Flask 서버 진입점 (CORS, 전역 인스턴스 바인딩, Blueprint 라우트 등록 및 스케줄러 기동)
 │   ├── requirements.txt          # 파이썬 의존성 패키지 목록 (현재 구현됨)
 │   ├── scripts/
-│   │   └── export_training_candles.py # 학습용 주식/코인 캔들 CSV 수집 스크립트 (preset/chunk/failure-output 지원)
+│   │   ├── export_training_candles.py # 학습용 주식/코인 캔들 CSV 수집 스크립트 (preset/chunk/failure-output 지원)
+│   │   └── sync_kis_market_universe.py # KIS 모의투자/실거래 대상 주식 유니버스 동기화 스크립트
 │   ├── routes/                   # Blueprint 기반 API 라우트 레이어 (리팩토링 완료)
 │   │   ├── __init__.py           # routes 패키지 초기화 파일
-│   │   ├── home.py               # 대시보드, 홈/시장 현황, 잔고 조회 라우트 Blueprint
+│   │   ├── home.py               # 대시보드, 홈/시장 현황, 잔고 및 종목 검색/자동완성 API 라우트 Blueprint
 │   │   ├── keys.py               # API 키 등록, 저장, 조회, 테스트 라우트 Blueprint
 │   │   ├── ml.py                 # ML 데이터셋 추출, 작업 상태, 학습/튜닝, 활성 모델, 리포트 라우트 Blueprint
 │   │   └── news.py               # 뉴스 피드 조회, 실시간 동기화, AI 요약 보장 라우트 Blueprint
@@ -76,6 +85,8 @@ teamproject/
 │   │   ├── coinone_client.py     # 코인원 가상자산 메인 클라이언트 (현재 구현됨 - HMAC-SHA512 API)
 │   │   ├── binance_client.py     # 바이낸스 가상자산 확장 클라이언트 (현재 구현됨)
 │   │   ├── upbit_client.py       # 업비트 가상자산 클라이언트 (레거시/비활성화됨)
+│   │   ├── kis_market_universe.py# KIS 주식 정보 및 티커 동기화 유니버스 관리자 (현재 구현됨)
+│   │   ├── market_repository.py  # 시장 유니버스 및 실시간 캐시 스토리지 서비스 (현재 구현됨)
 │   │   ├── news_repository.py    # 뉴스 데이터 조회/저장 서비스 (현재 구현됨)
 │   │   ├── news_summary_service.py # 뉴스 GPT 요약 생성 서비스
 │   │   ├── news_query_planner.py # 뉴스 수집 쿼리 예산/쿨다운/우선순위 플래너
@@ -106,7 +117,9 @@ teamproject/
         ├── App.jsx               # 라우팅 및 전역 세션 감지
         ├── App.css               # 공통 컴포넌트 세부 스타일시트
         ├── index.css             # Tailwind v4 및 전역 CSS 변수 설정
-        ├── supabaseClient.js     # Supabase Client 인스턴스 초기화
+        ├── supabaseClient.js     # Supabase Client 인스턴스 초기화 (사용자 인증용)
+        ├── dashboardConstants.js # 대시보드 및 상세 페이지 공통 상수 정의 파일
+        ├── dashboardUtils.js     # 통화, 백분율 변환 및 날짜 포맷팅 유틸 파일
         ├── lib/
         │   └── supabaseClient.js # Supabase Client 보조 초기화 파일
         ├── pages/                # 라우트 단위 페이지 컴포넌트
@@ -114,9 +127,15 @@ teamproject/
         │   ├── News.jsx          # 뉴스 화면
         │   ├── AdminMlData.jsx   # [UPDATE] HPO 튜닝 패널 및 JobLogModal 상세 로그 뷰어 통합 관리자 화면
         │   ├── Login.jsx         # 로그인 페이지
-        │   └── Settings.jsx      # 사용자 계정 및 투자성향 재분석 설정 페이지
+        │   ├── Signup.jsx        # 회원가입 페이지
+        │   ├── Home.jsx          # 서비스 소개 및 온보딩 메인 랜딩 페이지
+        │   ├── Settings.jsx      # 사용자 계정 및 투자성향 재분석 설정 페이지
+        │   ├── AssetsTab.jsx     # 대시보드 - 보유 자산 현황 요약 탭 뷰
+        │   ├── TradeHistoryTab.jsx # 대시보드 - 주문/체결 제안 수동 승인 및 이력 조회 탭 뷰
+        │   └── WatchlistTab.jsx  # 대시보드 - 사용자 등록 관심 종목 감시 및 예측 점수 탭 뷰
         ├── components/           # 재사용 가능한 UI 컴포넌트
         │   ├── Header.jsx        # 상단 공통 헤더
+        │   ├── DashboardComponents.jsx # 대시보드 내부용 컴포넌트 모음
         │   └── InvestmentSurveyModal.jsx # [NEW] 공통 투자 성향 진단 설문 통합 모달 컴포넌트
         ├── hooks/                # 커스텀 훅 (추가 예정)
         └── context/              # AuthContext 등 전역 컨텍스트 (추가 예정)
@@ -158,12 +177,14 @@ teamproject/
   * **ML 운영 준비 상태 API (`GET /api/ml/readiness`)**:
     * 관리자 페이지에서 Toss 키 준비 여부, 원천 CSV, 외부 피처, 현재 serving 상태를 한 번에 조회합니다.
     * Toss 키 항목은 `supabase.user_api_keys -> encrypted_access_key/encrypted_secret_key -> crypto.decrypt` 경로를 설명용 메타데이터로 함께 반환해, 실제 데이터셋 수집이 어떤 보안 흐름으로 동작하는지 운영자가 확인할 수 있게 합니다.
+    * 원천 주식/코인 CSV 각각에 대해 중복 행 수, 필수값 누락, 가격 이상치, 최신 캔들 시각, stale 시간까지 포함한 데이터 품질 요약을 함께 반환합니다.
   * **ML 작업 이력 API (`GET /api/ml/jobs`)**:
     * 최근 데이터셋 수집 및 학습 실행 이력을 조회합니다.
     * 현재는 Supabase 테이블이 아니라 파일 기반 작업 이력(JSON)을 읽습니다.
   * **ML 학습 실행 API (`POST /api/ml/jobs/train`)**:
     * 관리자 페이지에서 특정 config/risk-config 조합의 학습을 직접 실행합니다.
     * 내부적으로 `ml/src/run_pipeline_bundle.py`를 호출하고, stdout/stderr 일부와 상태를 작업 이력에 남깁니다.
+    * 학습 성공 시 응답 본문과 작업 이력에 `training_audit`를 추가하여, 해당 모델의 승격 가능 여부와 전체 serving 감사 결과를 바로 확인할 수 있습니다.
   * **모델 결과 조회 API (`GET /api/ml/model-results`)**:
     * 관리자 페이지(`/admin/ml-data`)에서 최신 모델 성능 지표와 예측 순위를 조회합니다.
     * `ml/models/*.metrics.json`, `ml/data/processed/*_predictions_lgbm_v*.csv`, `ml/data/processed/*_backtest_*.json`을 읽어 주식/코인 결과를 분리 반환합니다.
@@ -172,11 +193,35 @@ teamproject/
     * 인증 헤더가 없는 요청은 차단하며, API Key나 계좌 정보는 응답에 포함하지 않습니다.
     * 추천 버전은 단순 최신 버전이 아니라 비용 반영 백테스트와 시계열 안정성을 함께 고려해 선택합니다.
     * 프론트엔드 관리자 페이지는 선택 버전과 `SERVING / PICK / LATEST` 기준 버전 사이의 핵심 지표 차이를 별도 요약 패널로 보여 주어, 운영자가 어떤 버전을 올릴지 빠르게 판단할 수 있게 합니다.
+  * **데이터 품질 점검 API (`GET /api/ml/data-quality`)**:
+    * `asset_type=STOCK|CRYPTO` 기준으로 현재 원천 학습 CSV의 건강 상태를 독립적으로 점검합니다.
+    * 중복 행, 결측, OHLC 이상치, 거래량 이상치, 최신성 부족 여부를 운영자가 빠르게 확인할 수 있습니다.
+  * **승격 검증 API (`GET /api/ml/registry/promotion-check`)**:
+    * 특정 후보 모델이 실제 serving 버전으로 올라갈 수 있는지 사전 검증합니다.
+    * 절대 기준(valid_rows, CV ROC AUC, precision, excess return, MDD)과 현재 serving 대비 상대 하락 폭 제한을 함께 검사합니다.
+  * **serving 감사 API (`GET /api/ml/serving-audit`)**:
+    * 현재 serving 모델과 추천 후보를 자산별로 함께 감사합니다.
+    * 현재 서비스 모델이 기준 미달인지, 추천 후보가 승격 가능한지, 어떤 조치가 필요한지까지 한 번에 반환합니다.
+  * **모델 활성화 API (`POST /api/ml/registry/activate`)**:
+    * 기본값으로 승격 게이트를 통과한 모델만 활성화됩니다.
+    * 기준 미달 모델은 409 응답으로 차단되며, 실패한 항목과 데이터 품질 이슈를 함께 반환합니다.
+    * 운영자가 명시적으로 필요할 때만 `force=true`로 강제 승격할 수 있습니다.
+  * **활성 예측 조회 API (`GET /api/ml/predictions/active`)**:
+    * 챗봇 및 대시보드가 현재 활성 모델의 최신 예측을 직접 조회하는 백엔드 엔드포인트입니다.
+    * `asset_type=STOCK|CRYPTO`가 필수이며, `symbols=005930,AAPL`, `position=LONG`, `min_signal_score=60`, `limit=20` 필터를 지원합니다.
+    * 응답에는 필터링된 예측 목록뿐 아니라 검증 ROC AUC, 시계열 CV, 비용 반영 백테스트 초과수익률, 최대 낙폭, LONG/HOLD/SHORT 분포까지 함께 포함되어 모델 성능을 수치로 바로 확인할 수 있습니다.
+  * **스케줄러 후속 감사 작업**:
+    * 자동 학습 스케줄러는 학습 완료 후 `promotion_audit`, `serving_audit` 작업을 추가로 기록합니다.
+    * 또한 원래의 `training_run` 작업 자체에도 `training_audit`가 함께 남아, 운영자는 단순히 학습 성공 여부만이 아니라 “이 모델이 승격 가능한지”, “현재 serving이 아직 건강한지”를 같은 작업 문맥에서 바로 확인할 수 있습니다.
   * **통합 시세 조회 API (`GET /api/chart/candles`)**:
     * 프론트엔드에 일관된 데이터 인터페이스를 제공하기 위한 게이트웨이 라우트입니다.
     * 요청 파라미터(`exchange`, `symbol`, `interval`)에 맞추어 각각의 거래소 클라이언트를 동적으로 스위칭 호출합니다.
     * 각 거래소마다 상이한 시간 및 가격 포맷을 융합하여 TradingView Lightweight Charts 규격(`time`, `open`, `high`, `low`, `close`)으로 변환(어댑터 패턴)하여 공통 규격의 JSON 배열로 반환합니다.
     * 빈번한 중복 호출로 인한 거래소 API 차단(Rate Limit)을 예방하기 위해 백엔드 레벨에서 정적 캐싱(Caching)을 수행합니다.
+  * **종목 이름 자동완성 검색 API (`GET /api/symbol/search`)**:
+    * 사용자가 대시보드 퀵 검색창에 한글 입력(예: "삼성")을 진행할 때, 입력 도중 실시간으로 매칭되는 종목명(삼성전자, 삼성전기 등)의 후보 리스트를 매핑 테이블(`symbol_metadata.py`)에서 필터링하여 프론트엔드 드롭다운 컴포넌트에 즉각 반환합니다.
+  * **종목코드 매핑 API (`GET /api/symbol/lookup`)**:
+    * 사용자가 선택한 한글 종목명에 대해 내부에서 사용하는 고유 심볼/종목코드 정보를 매핑하여 정확한 코드로 변환해 반환합니다.
 * **`services/toss_client.py` (현재 구현됨, 메인 주식 클라이언트)**:
   * Toss Open API의 인증, 시세, 종목 정보, 시장 정보, 계좌, 보유자산, 주문 전 검증, 주문, 주문 조회를 담당합니다.
   * `/oauth2/token` 토큰 발급은 form-urlencoded 방식으로 처리합니다.

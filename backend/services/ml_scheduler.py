@@ -2,11 +2,17 @@ import os
 import time
 import threading
 import requests
+import yaml
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from backend.services.ml_automation_service import resolve_automation_preset
 from backend.services.ml_job_service import create_job, list_jobs, update_job, run_ml_pipeline, run_ml_tuning
+from backend.services.ml_model_service import (
+    build_promotion_guard_report,
+    build_serving_audit_report,
+    build_training_audit_bundle,
+)
 from backend.services.supabase_client import (
     sync_dataset_job_to_supabase,
     sync_training_job_to_supabase,
@@ -30,6 +36,96 @@ crypto = CryptoHelper(ENCRYPTION_KEY)
 # 모듈 수준의 전역 상태 변수
 _news_ingest_started = False
 _ml_automation_started = False
+
+def resolve_model_version_from_config(config_path: str) -> str | None:
+    """학습 설정 파일에서 모델 버전을 읽어 자동 감사 대상에 사용합니다."""
+    try:
+        config_file = PROJECT_ROOT / config_path if not str(config_path).startswith("/") else Path(config_path)
+        config = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        return str(((config or {}).get("model") or {}).get("version") or "").strip() or None
+    except Exception:
+        return None
+
+def record_model_audit_jobs(auth_header: str, asset_key: str, model_version: str | None) -> None:
+    """학습 직후 후보 모델 승격 검증과 전체 serving 감사를 작업 이력에 남깁니다."""
+    if not model_version:
+        return
+
+    promotion_job = create_job(
+        "promotion_audit",
+        {
+            "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+            "model_version": model_version,
+        },
+    )
+    try:
+        guard_report = build_promotion_guard_report(asset_key, auth_header, model_version)
+        update_job(
+            promotion_job["id"],
+            {
+                "status": "success" if guard_report else "failed",
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "audit_kind": "promotion_guard",
+                "guard_report": guard_report,
+            },
+        )
+    except Exception as error:
+        update_job(
+            promotion_job["id"],
+            {
+                "status": "failed",
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "error": str(error),
+                "audit_kind": "promotion_guard",
+            },
+        )
+
+    serving_job = create_job(
+        "serving_audit",
+        {
+            "asset_type": "ALL",
+            "model_version": model_version,
+        },
+    )
+    try:
+        audit_report = build_serving_audit_report(auth_header)
+        update_job(
+            serving_job["id"],
+            {
+                "status": "success",
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "audit_kind": "serving_audit",
+                "serving_audit_report": audit_report,
+            },
+        )
+    except Exception as error:
+        update_job(
+            serving_job["id"],
+            {
+                "status": "failed",
+                "finished_at": datetime.utcnow().isoformat() + "Z",
+                "error": str(error),
+                "audit_kind": "serving_audit",
+            },
+        )
+
+def attach_training_audit_to_job(job_id: str, auth_header: str, asset_type: str, config_path: str) -> None:
+    """학습 작업 이력에도 감사 결과를 함께 기록합니다."""
+    try:
+        training_audit = build_training_audit_bundle(
+            auth_header=auth_header,
+            asset_type=asset_type,
+            config_path=config_path,
+        )
+        if training_audit:
+            update_job(
+                job_id,
+                {
+                    "training_audit": training_audit,
+                },
+            )
+    except Exception:
+        pass
 
 def start_news_ingest_scheduler(news_ingest_service, news_ingest_enabled: bool, news_ingest_interval_seconds: int) -> None:
     """뉴스 수집 스케줄러를 백그라운드 스레드로 구동합니다."""
@@ -87,7 +183,8 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                 if last_crypto_hour != crypto_slot_str:
                     last_crypto_hour = crypto_slot_str  # 실행 시도 전에 먼저 등록하여 에러 발생 시 무한 재시도 방지
                     try:
-                        preset = resolve_automation_preset("crypto-v7-full")
+                    # v8: 30분 캔들 + 잔차 수익률 라벨 + Ridge 앙상블 자동화
+                        preset = resolve_automation_preset("crypto-v8-full")
                         dataset_config = preset["dataset"]
                         training_config = preset["training"]
                         
@@ -128,7 +225,9 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                             retry=int(dataset_config.get("retry", 2)),
                             retry_wait_seconds=float(dataset_config.get("retry_wait_seconds", 10.0)),
                         )
-                        output = PROJECT_ROOT / "ml" / "data" / "raw" / "crypto_candles.csv"
+                        # 수집 간격에 따라 별도 파일로 분리 저장 (1h/30m 혼재 방지)
+                        raw_output_name = dataset_config.get("raw_output", "crypto_candles.csv")
+                        output = PROJECT_ROOT / "ml" / "data" / "raw" / raw_output_name
                         write_rows(output, rows, append=bool(dataset_config.get("append", True)))
                         
                         update_job(
@@ -177,6 +276,12 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                         
                         if supabase_service_role_key:
                             auth_header = f"Bearer {supabase_service_role_key}"
+                            attach_training_audit_to_job(
+                                train_job["id"],
+                                auth_header,
+                                dataset_config["asset_type"],
+                                training_config["config"],
+                            )
                             latest_ds_job = next((j for j in list_jobs(limit=100) if j.get("id") == dataset_job["id"]), None)
                             if latest_ds_job:
                                 sync_dataset_job_to_supabase(auth_header, latest_ds_job)
@@ -184,6 +289,11 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                             if latest_tr_job:
                                 sync_training_job_to_supabase(auth_header, latest_tr_job)
                             sync_model_registry_to_supabase(auth_header, training_config.get("summary_output"))
+                            record_model_audit_jobs(
+                                auth_header,
+                                "crypto",
+                                resolve_model_version_from_config(training_config["config"]),
+                            )
                         
                     except Exception:
                         pass
@@ -216,7 +326,8 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                                     access_token = token_json.get("access_token")
                                     
                                     if access_token:
-                                        preset = resolve_automation_preset("stock-v7-full")
+                                # v8: 잔차 수익률 라벨 + Ridge 앙상블 주식 자동화
+                                        preset = resolve_automation_preset("stock-v8-full")
                                         dataset_config = preset["dataset"]
                                         training_config = preset["training"]
                                         
@@ -310,10 +421,21 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                                         latest_ds_job = next((j for j in list_jobs(limit=100) if j.get("id") == dataset_job["id"]), None)
                                         if latest_ds_job:
                                             sync_dataset_job_to_supabase(auth_header, latest_ds_job)
+                                        attach_training_audit_to_job(
+                                            train_job["id"],
+                                            auth_header,
+                                            dataset_config["asset_type"],
+                                            training_config["config"],
+                                        )
                                         latest_tr_job = next((j for j in list_jobs(limit=100) if j.get("id") == train_job["id"]), None)
                                         if latest_tr_job:
                                             sync_training_job_to_supabase(auth_header, latest_tr_job)
                                         sync_model_registry_to_supabase(auth_header, training_config.get("summary_output"))
+                                        record_model_audit_jobs(
+                                            auth_header,
+                                            "stock",
+                                            resolve_model_version_from_config(training_config["config"]),
+                                        )
                                         
                             except Exception:
                                 pass

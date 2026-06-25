@@ -112,7 +112,13 @@ python src/train_model.py --config configs/lgbm_crypto_v1.yaml
 ```text
 관리자 페이지: http://localhost:5173/admin/ml-data
 백엔드 API: POST http://localhost:5050/api/ml/export-candles
+활성 예측 API: GET http://localhost:5050/api/ml/predictions/active?asset_type=STOCK&symbols=005930&limit=5
+데이터 품질 API: GET http://localhost:5050/api/ml/data-quality?asset_type=STOCK
+승격 검증 API: GET http://localhost:5050/api/ml/registry/promotion-check?asset_type=STOCK&model_version=lgbm_stock_signal_v7
+serving 감사 API: GET http://localhost:5050/api/ml/serving-audit
 ```
+
+`GET /api/ml/predictions/active`는 현재 serving 모델이 있거나 승격 기준을 통과한 추천 모델이 있을 때만 응답합니다. 기준 통과 모델이 없으면 활성 예측을 비워 두어, 최신이지만 품질이 낮은 모델을 챗봇이 실수로 사용하지 않게 합니다.
 
 코인 CSV는 Binance 공개 캔들 API로 즉시 수집할 수 있습니다.
 

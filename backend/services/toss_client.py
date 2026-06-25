@@ -1,9 +1,12 @@
 import os
 import json
 import time
+import uuid
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from backend.services.exchange_client import ExchangeClient
+
+KST = timezone(timedelta(hours=9))
 
 TOSS_TOKEN_CACHE_FILE = ".toss_token_cache.json"
 
@@ -17,6 +20,25 @@ class TossClient(ExchangeClient):
         self.account_seq = account_seq
         self.env = env.upper()
         self.base_url = "https://openapi.tossinvest.com"
+
+    def _clear_token_cache(self):
+        """
+        로컬 캐시 파일에서 현재 client_id에 해당하는 토큰 정보를 삭제하여 갱신을 강제합니다.
+        """
+        cache = {}
+        if os.path.exists(TOSS_TOKEN_CACHE_FILE):
+            try:
+                with open(TOSS_TOKEN_CACHE_FILE, "r") as f:
+                    cache = json.load(f)
+            except Exception:
+                pass
+        if self.client_id in cache:
+            del cache[self.client_id]
+            try:
+                with open(TOSS_TOKEN_CACHE_FILE, "w") as f:
+                    json.dump(cache, f, indent=2)
+            except Exception:
+                pass
 
     def _get_cached_token(self) -> str:
         """
@@ -78,7 +100,6 @@ class TossClient(ExchangeClient):
         }
         res = requests.post(url, data=payload, headers=headers)
         if res.status_code != 200:
-            # OAuth2 표준 에러 형식에 맞추어 예외 발생
             err_data = {}
             try:
                 err_data = res.json()
@@ -88,10 +109,7 @@ class TossClient(ExchangeClient):
             raise Exception(f"토스 토큰 발급 실패: {err_msg}")
         return res.json()
 
-    def get_accounts(self) -> list:
-        """
-        사용자의 계좌 목록 정보를 가져옵니다.
-        """
+    def _get_accounts_impl(self) -> list:
         token = self._get_cached_token()
         url = f"{self.base_url}/api/v1/accounts"
         headers = {
@@ -100,7 +118,6 @@ class TossClient(ExchangeClient):
         }
         res = requests.get(url, headers=headers)
         
-        # /api/v1/accounts가 실패하는 경우 /v1/accounts로 폴백
         if res.status_code != 200:
             fallback_url = f"{self.base_url}/v1/accounts"
             res = requests.get(fallback_url, headers=headers)
@@ -109,13 +126,10 @@ class TossClient(ExchangeClient):
             raise Exception(f"토스 계좌 목록 조회 실패 (상태 코드 {res.status_code}): {res.text}")
 
         data = res.json()
-        
-        # 토스증권 API의 에러 스키마 검증
         if "error" in data:
             err = data["error"]
             raise Exception(f"토스 계좌 조회 에러 [{err.get('code')}]: {err.get('message')} (Request ID: {err.get('requestId')})")
 
-        # 토스증권 API는 주로 {"result": [...]} 또는 {"result": {"accounts": [...]}} 등의 형태를 가짐
         result = data.get("result", [])
         if isinstance(result, dict):
             accounts = result.get("accounts", [])
@@ -124,10 +138,20 @@ class TossClient(ExchangeClient):
 
         return accounts
 
-    def get_balance(self) -> dict:
+    def get_accounts(self) -> list:
         """
-        선택된 계좌의 보유 자산 정보를 조회하여 잔고 객체를 반환합니다.
+        사용자의 계좌 목록 정보를 가져옵니다. (토큰 만료 시 재시도 포함)
         """
+        try:
+            return self._get_accounts_impl()
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._get_accounts_impl()
+            raise e
+
+    def _get_balance_impl(self) -> dict:
         if not self.account_seq:
             accounts = self.get_accounts()
             if not accounts:
@@ -143,7 +167,6 @@ class TossClient(ExchangeClient):
         }
         res = requests.get(url, headers=headers)
 
-        # /api/v1/holdings가 실패하는 경우 /v1/accounts/holdings로 폴백
         if res.status_code != 200:
             fallback_url = f"{self.base_url}/v1/accounts/holdings"
             res = requests.get(fallback_url, headers=headers)
@@ -152,15 +175,12 @@ class TossClient(ExchangeClient):
             raise Exception(f"토스 보유 종목 조회 실패 (상태 코드 {res.status_code}): {res.text}")
 
         data = res.json()
-        
         if "error" in data:
             err = data["error"]
             raise Exception(f"토스 보유자산 조회 에러 [{err.get('code')}]: {err.get('message')}")
 
         result = data.get("result", {})
         holdings_list = []
-        
-        # result 구조가 리스트인 경우와 딕셔너리 내부 리스트인 경우를 유연하게 핸들링
         raw_holdings = []
         if isinstance(result, dict):
             raw_holdings = result.get("holdings", [])
@@ -170,7 +190,6 @@ class TossClient(ExchangeClient):
         total_eval = 0.0
         available_cash = 0.0
 
-        # 평가 금액 파싱
         if isinstance(result, dict):
             try:
                 total_eval = float(result.get("totalEvaluationAmount", 0.0))
@@ -207,7 +226,6 @@ class TossClient(ExchangeClient):
                 "profit_rate": profit_rate
             })
 
-            # total_eval이 계산되지 않았을 경우 누적 합산하여 보강
             if total_eval == 0.0:
                 total_eval += current_price * qty
 
@@ -220,10 +238,20 @@ class TossClient(ExchangeClient):
             "holdings": holdings_list
         }
 
-    def get_price(self, symbol: str) -> dict:
+    def get_balance(self) -> dict:
         """
-        종목 코드에 해당하는 주식 현재가를 가져옵니다.
+        보유 자산 정보를 조회합니다. (토큰 만료 시 재시도 포함)
         """
+        try:
+            return self._get_balance_impl()
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._get_balance_impl()
+            raise e
+
+    def _get_price_impl(self, symbol: str) -> dict:
         token = self._get_cached_token()
         url = f"{self.base_url}/api/v1/prices"
         headers = {
@@ -252,10 +280,20 @@ class TossClient(ExchangeClient):
             "raw": data
         }
 
-    def place_order(self, symbol: str, qty: float, side: str, ord_type: str, price: float = None) -> dict:
+    def get_price(self, symbol: str) -> dict:
         """
-        토스증권 매수/매도 주문을 접수합니다.
+        현재가를 조회합니다. (토큰 만료 시 재시도 포함)
         """
+        try:
+            return self._get_price_impl(symbol)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._get_price_impl(symbol)
+            raise e
+
+    def _place_order_impl(self, symbol: str, qty: float, side: str, ord_type: str, price: float = None) -> dict:
         if self.env == "MOCK":
             return {
                 "order_id": f"MOCK-TOSS-{int(time.time())}",
@@ -270,14 +308,13 @@ class TossClient(ExchangeClient):
             "X-Tossinvest-Account": self.account_seq,
             "Content-Type": "application/json"
         }
-        # clientOrderId 생성
         client_order_id = f"toss-{uuid.uuid4().hex[:16]}"
         payload = {
             "clientOrderId": client_order_id,
             "symbol": symbol,
             "quantity": qty,
-            "side": side.upper(), # BUY / SELL
-            "orderType": ord_type.upper(), # LIMIT / MARKET
+            "side": side.upper(),
+            "orderType": ord_type.upper(),
         }
         if price:
             payload["price"] = price
@@ -294,10 +331,20 @@ class TossClient(ExchangeClient):
             "raw": data
         }
 
-    def get_order_status(self, order_id: str) -> dict:
+    def place_order(self, symbol: str, qty: float, side: str, ord_type: str, price: float = None) -> dict:
         """
-        주문 식별 번호에 해당하는 주문의 상태를 확인합니다.
+        주문을 접수합니다. (토큰 만료 시 재시도 포함)
         """
+        try:
+            return self._place_order_impl(symbol, qty, side, ord_type, price)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._place_order_impl(symbol, qty, side, ord_type, price)
+            raise e
+
+    def _get_order_status_impl(self, order_id: str) -> dict:
         token = self._get_cached_token()
         url = f"{self.base_url}/api/v1/orders/{order_id}"
         headers = {
@@ -318,3 +365,234 @@ class TossClient(ExchangeClient):
             "executed_qty": float(result.get("executedQuantity", 0)),
             "raw": data
         }
+
+    def get_order_status(self, order_id: str) -> dict:
+        """
+        주문 상태를 조회합니다. (토큰 만료 시 재시도 포함)
+        """
+        try:
+            return self._get_order_status_impl(order_id)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._get_order_status_impl(order_id)
+            raise e
+
+    def _get_candles_impl(self, symbol: str, interval: str = "1d", count: int = 120) -> list:
+        token = self._get_cached_token()
+        url = f"{self.base_url}/api/v1/candles"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "count": min(count, 200),
+            "adjusted": "true"
+        }
+        res = requests.get(url, headers=headers, params=params)
+        if res.status_code != 200:
+            raise Exception(f"Toss get_candles failed: {res.text}")
+            
+        data = res.json()
+        if "error" in data:
+            err = data["error"]
+            raise Exception(f"Toss get_candles error [{err.get('code')}]: {err.get('message')}")
+            
+        result = data.get("result", {})
+        candles = []
+        is_intraday = interval not in ("1d", "1w", "1M", "day", "week", "month", "D", "W", "M")
+        
+        for candle in result.get("candles", []):
+            try:
+                timestamp = candle.get("timestamp", "")
+                if is_intraday:
+                    try:
+                        dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                        dt = dt.replace(tzinfo=KST)
+                        time_val = int(dt.timestamp())
+                    except ValueError:
+                        try:
+                            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                            dt = dt.astimezone(KST)
+                            time_val = int(dt.timestamp())
+                        except ValueError:
+                            time_val = timestamp
+                else:
+                    time_val = timestamp.split(" ")[0] if " " in timestamp else timestamp
+                    
+                candles.append({
+                    "time": time_val,
+                    "open": float(candle.get("openPrice", 0)),
+                    "high": float(candle.get("highPrice", 0)),
+                    "low": float(candle.get("lowPrice", 0)),
+                    "close": float(candle.get("closePrice", 0)),
+                    "volume": float(candle.get("volume", 0))
+                })
+            except (ValueError, TypeError):
+                pass
+                
+        seen = set()
+        unique_candles = []
+        for c in candles:
+            if c["time"] not in seen:
+                seen.add(c["time"])
+                unique_candles.append(c)
+                
+        unique_candles.sort(key=lambda x: x["time"])
+        return unique_candles
+
+    def get_candles(self, symbol: str, interval: str = "1d", count: int = 120) -> list:
+        """
+        주식 캔들 데이터를 조회합니다. 미지원 주기(5m, 15m, 30m, 1h, 1w, 1M 등)일 경우 자체 리샘플링하여 반환합니다.
+        (토큰 만료 시 자동 재시도 포함)
+        """
+        normalized_interval = interval
+        if interval in ("1d", "D", "day"):
+            normalized_interval = "1d"
+        elif interval in ("1m", "minute"):
+            normalized_interval = "1m"
+
+        # 1. 토스 네이티브 지원 주기인 경우 바로 호출
+        if normalized_interval in ("1d", "1m"):
+            try:
+                return self._get_candles_impl(symbol, interval=normalized_interval, count=count)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                    self._clear_token_cache()
+                    return self._get_candles_impl(symbol, interval=normalized_interval, count=count)
+                raise e
+
+        # 2. 토스 미지원 주기인 경우 자체 리샘플링
+        # 2-A. 분봉/시간봉 리샘플링 (5m, 15m, 30m, 1h, 60m 등)
+        if normalized_interval in ("5m", "15m", "30m", "60m", "1h"):
+            interval_minutes = 5
+            if normalized_interval == "15m":
+                interval_minutes = 15
+            elif normalized_interval == "30m":
+                interval_minutes = 30
+            elif normalized_interval in ("60m", "1h"):
+                interval_minutes = 60
+
+            # 1분봉 데이터를 최대한 많이 가져옴 (리샘플링하기 위해 count보다 넉넉히 가져옴, 최대 200개 한계)
+            raw_candles = self.get_candles(symbol, interval="1m", count=200)
+            if not raw_candles:
+                return []
+
+            interval_seconds = interval_minutes * 60
+            buckets = {}
+            for c in raw_candles:
+                try:
+                    ts = int(c["time"])
+                except (ValueError, TypeError):
+                    continue
+                bucket_ts = (ts // interval_seconds) * interval_seconds
+                if bucket_ts not in buckets:
+                    buckets[bucket_ts] = []
+                buckets[bucket_ts].append(c)
+
+            resampled = []
+            for b_ts, c_list in sorted(buckets.items()):
+                resampled.append({
+                    "time": b_ts,
+                    "open": c_list[0]["open"],
+                    "high": max(x["high"] for x in c_list),
+                    "low": min(x["low"] for x in c_list),
+                    "close": c_list[-1]["close"],
+                    "volume": sum(x["volume"] for x in c_list)
+                })
+            return resampled[-count:]
+
+        # 2-B. 주봉/월봉 리샘플링 (1w, W, 1M, M 등)
+        elif normalized_interval in ("1w", "W", "week", "1M", "M", "month"):
+            raw_candles = self.get_candles(symbol, interval="1d", count=200)
+            if not raw_candles:
+                return []
+
+            buckets = {}
+            is_week = normalized_interval in ("1w", "W", "week")
+
+            for c in raw_candles:
+                date_str = c["time"]
+                try:
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError:
+                    continue
+
+                if is_week:
+                    monday = dt - timedelta(days=dt.weekday())
+                    bucket_key = monday.strftime("%Y-%m-%d")
+                else:
+                    bucket_key = dt.strftime("%Y-%m-01")
+
+                if bucket_key not in buckets:
+                    buckets[bucket_key] = []
+                buckets[bucket_key].append(c)
+
+            resampled = []
+            for b_key, c_list in sorted(buckets.items()):
+                resampled.append({
+                    "time": b_key,
+                    "open": c_list[0]["open"],
+                    "high": max(x["high"] for x in c_list),
+                    "low": min(x["low"] for x in c_list),
+                    "close": c_list[-1]["close"],
+                    "volume": sum(x["volume"] for x in c_list)
+                })
+            return resampled[-count:]
+
+        # 3. 그 외의 경우 일봉으로 폴백
+        return self.get_candles(symbol, interval="1d", count=count)
+
+    def _get_orderbook_impl(self, symbol: str) -> dict:
+        token = self._get_cached_token()
+        url = f"{self.base_url}/api/v1/orderbook"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        res = requests.get(url, headers=headers, params={"symbol": symbol})
+        if res.status_code != 200:
+            raise Exception(f"토스 호가 조회 실패: {res.text}")
+        return res.json()
+
+    def get_orderbook(self, symbol: str) -> dict:
+        """
+        종목코드에 해당하는 호가 정보(Orderbook)를 가져옵니다. (토큰 만료 시 재시도 포함)
+        """
+        try:
+            return self._get_orderbook_impl(symbol)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._get_orderbook_impl(symbol)
+            raise e
+
+    def _get_trades_impl(self, symbol: str) -> dict:
+        token = self._get_cached_token()
+        url = f"{self.base_url}/api/v1/trades"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        res = requests.get(url, headers=headers, params={"symbol": symbol})
+        if res.status_code != 200:
+            raise Exception(f"토스 체결 조회 실패: {res.text}")
+        return res.json()
+
+    def get_trades(self, symbol: str) -> dict:
+        """
+        종목코드에 해당하는 실시간 체결 정보(Trades)를 가져옵니다. (토큰 만료 시 재시도 포함)
+        """
+        try:
+            return self._get_trades_impl(symbol)
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                return self._get_trades_impl(symbol)
+            raise e

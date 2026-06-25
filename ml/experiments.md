@@ -615,3 +615,92 @@ crypto_v6
 - 주식은 v6에서 분류 지표와 `up_only` 백테스트가 모두 양수로 나와 다음 비교 후보로 볼 만합니다.
 - 코인은 분류 지표는 나쁘지 않지만 비용 반영 백테스트가 아직 음수라, 외부 피처 실측값 투입 전까지는 운영 추천 모델로 바로 올리기 어렵습니다.
 - 특히 뉴스/펀딩/오픈이자 피처가 현재 0으로 대체된 상태라, 실제 데이터를 채워 넣은 뒤 재평가하는 것이 다음 단계입니다.
+
+---
+
+## 2026-06-25 7차 v8 고도화 준비 (Kaggle & 퀀트 모범 사례 반영)
+
+### 목적
+
+* 코인 시장의 극심한 노이즈와 빠른 템포를 이겨내고, 모델의 ROC AUC ≥ 0.58 목표를 안정적으로 달성합니다.
+* Kaggle Master 및 글로벌 퀀트 펀드(G-Research) 성공 사례를 적용한 알고리즘 고도화를 시작합니다.
+
+### 핵심 변경 포인트
+
+#### 1. 코인 캔들 간격 1h → 30m 전환
+
+| 항목 | v7 | v8 |
+|---|---|---|
+| 캔들 간격 | 1h | **30m** |
+| 데이터 수량 | 2500개 (≈104일) | **5000개 (≈104일 유지)** |
+| 예측 기간 | 4봉 = 4시간 | **6봉 = 3시간** |
+| date_merge_key | floor("h") | **floor("30min")** |
+| 외부 피처 NaN | fillna(0) | **ffill(limit=2) 후 fillna(0)** |
+
+* 30분 단위로 세분화하면 한 번의 학습 세션에서 2배 많은 데이터 포인트를 확보합니다.
+* 4시간 대신 3시간 예측(6봉)으로 단기 모멘텀을 더 정밀하게 포착합니다.
+
+#### 2. 잔차 수익률 라벨 (Residual Returns)
+
+| 항목 | v7 | v8 |
+|---|---|---|
+| 타겟 라벨 | `up_label` (절대 수익률) | **`residual_up_label` (잔차 수익률)** |
+| 코인 기준 차감 | 없음 | **BTC 시장 동조 수익률 차감** |
+| 주식 기준 차감 | 없음 | **KOSPI/NASDAQ 지수 수익률 차감** |
+
+* 시장 전체가 오를 때 같이 오르는 것은 알파가 아닙니다.
+* 잔차 수익률 = `future_return - btc_market_return` 기준으로 라벨을 생성해 순수 개별 강세 종목을 선별합니다.
+
+#### 3. Ridge + LightGBM 앙상블
+
+| 항목 | v7 | v8 |
+|---|---|---|
+| 예측 모델 | LightGBM 단일 | **LGBM 70% + Ridge 30% 가중 평균** |
+| 저장 구조 | model, calibrator | **model, ridge_model, calibrator** |
+| 앙상블 설정 | 없음 | `use_ensemble: true` (configs/*.yaml) |
+
+* 변동성이 심한 장세에서 LightGBM 단일 모델의 신호 편차를 Ridge L2 정규화로 안정화합니다.
+* `use_ensemble: false` (v7 이전 configs)로 설정하면 기존 LGBM 단독 동작을 그대로 유지합니다.
+
+### 설정 파일
+
+| 설정 파일 | 버전 |
+|---|---|
+| `lgbm_crypto_v8.yaml` | 코인 상승 신호 모델 |
+| `lgbm_crypto_risk_v8.yaml` | 코인 하락 위험 모델 |
+| `lgbm_stock_v8.yaml` | 주식 상승 신호 모델 |
+| `lgbm_stock_risk_v8.yaml` | 주식 하락 위험 모델 |
+
+### 자동화 프리셋
+
+| 프리셋 키 | 수집 간격 | 수량 | 학습 설정 |
+|---|---|---|---|
+| `crypto-v8-full` | 30m | 5000 | lgbm_crypto_v8.yaml |
+| `stock-v8-full` | 1d | 700 | lgbm_stock_v8.yaml |
+
+### 기준선 (v7, 비교 대상)
+
+```text
+stock_v7
+- up roc_auc: (v7 HPO 튜닝 완료, 파라미터 최적화됨)
+
+crypto_v7
+- up roc_auc: 0.6233 (v6 기준)
+- composite excess_return_net: -0.000447 (아직 음수)
+```
+
+### 성공 기준 (v8 목표)
+
+```text
+1. 코인 composite excess_return_net > 0 (비용 반영 백테스트 양전환)
+2. 코인 ROC AUC ≥ 0.63 유지 (30m 전환 후 성능 비교)
+3. 주식 ROC AUC ≥ 0.56 유지 (잔차 라벨 전환 후 성능 비교)
+4. 앙상블 모델이 단일 LGBM 대비 selection_win_rate_net 개선 확인
+```
+
+### 다음 작업
+
+1. `crypto_candles.csv`를 30m 기준으로 재수집 후 v8 파이프라인 실행 검증.
+2. v7 vs v8 성능 비교표를 실험 완료 후 여기에 추가.
+3. Ridge 앙상블 성능이 단일 모델보다 낮을 경우 `use_ensemble: false`로 롤백.
+

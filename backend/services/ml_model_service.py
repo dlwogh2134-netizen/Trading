@@ -1,9 +1,12 @@
+import csv
 import os
 import sys
 import subprocess
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+
+import yaml
 
 from backend.utils.file_helpers import (
     read_json_file,
@@ -18,6 +21,39 @@ from backend.services.ml_registry_service import list_model_registry
 from backend.services.symbol_metadata import enrich_symbol
 
 PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+PROMOTION_THRESHOLDS = {
+    "stock": {
+        "min_valid_rows": 800,
+        "min_cv_roc_auc": 0.50,
+        "min_precision_at_top_10pct": 0.40,
+        "min_composite_excess_return_net": 0.0,
+        "min_composite_precision_at_top_n": 0.50,
+        "min_risk_cv_roc_auc": 0.50,
+        "min_max_drawdown_net": -0.55,
+        "max_cv_roc_auc_drop_vs_serving": 0.01,
+        "max_excess_return_drop_vs_serving": 0.001,
+        "max_precision_drop_vs_serving": 0.02,
+        "meaningful_improvement_cv_roc_auc": 0.005,
+        "meaningful_improvement_excess_return_net": 0.001,
+        "meaningful_improvement_precision_at_top_n": 0.01,
+    },
+    "crypto": {
+        "min_valid_rows": 1500,
+        "min_cv_roc_auc": 0.58,
+        "min_precision_at_top_10pct": 0.24,
+        "min_composite_excess_return_net": 0.0,
+        "min_composite_precision_at_top_n": 0.50,
+        "min_risk_cv_roc_auc": 0.56,
+        "min_max_drawdown_net": -0.60,
+        "max_cv_roc_auc_drop_vs_serving": 0.015,
+        "max_excess_return_drop_vs_serving": 0.001,
+        "max_precision_drop_vs_serving": 0.02,
+        "meaningful_improvement_cv_roc_auc": 0.005,
+        "meaningful_improvement_excess_return_net": 0.001,
+        "meaningful_improvement_precision_at_top_n": 0.01,
+    },
+}
 
 def build_readiness_payload(auth_header: str) -> dict:
     """ML 자동화 및 모델 서빙을 위한 데이터셋과 API 키 준비 상태 페이로드를 생성합니다."""
@@ -54,6 +90,8 @@ def build_readiness_payload(auth_header: str) -> dict:
     registry_groups = load_registry_groups(auth_header)
     stock_serving = next((row.get("model_version") for row in registry_groups["stock"] if row.get("is_serving")), None)
     crypto_serving = next((row.get("model_version") for row in registry_groups["crypto"] if row.get("is_serving")), None)
+    stock_quality = build_dataset_quality_report("stock")
+    crypto_quality = build_dataset_quality_report("crypto")
 
     return {
         "keys": {
@@ -72,11 +110,13 @@ def build_readiness_payload(auth_header: str) -> dict:
                 "path": str(stock_raw_path),
                 "exists": stock_raw_path.exists(),
                 "rows": count_csv_rows(stock_raw_path),
+                "quality": stock_quality,
             },
             "crypto_raw": {
                 "path": str(crypto_raw_path),
                 "exists": crypto_raw_path.exists(),
                 "rows": count_csv_rows(crypto_raw_path),
+                "quality": crypto_quality,
             },
             "macro_raw": {
                 "path": str(macro_path),
@@ -215,6 +255,7 @@ def run_experiment_report(
 
 def build_model_result(asset_key: str, version: int) -> dict:
     """특정 자산과 버전번호를 기준으로 로컬 파일시스템에 적재된 학습 지표, 예측 리스트, 백테스트 내역을 빌드합니다."""
+    config_path = PROJECT_ROOT / "ml" / "configs" / f"lgbm_{asset_key}_v{version}.yaml"
     up_metrics_path = PROJECT_ROOT / "ml" / "models" / f"lgbm_{asset_key}_signal_v{version}.metrics.json"
     risk_metrics_path = PROJECT_ROOT / "ml" / "models" / f"lgbm_{asset_key}_risk_v{version}.metrics.json"
     predictions_path = PROJECT_ROOT / "ml" / "data" / "processed" / f"{asset_key}_predictions_lgbm_v{version}.csv"
@@ -229,6 +270,7 @@ def build_model_result(asset_key: str, version: int) -> dict:
         "version": f"v{version}",
         "version_number": version,
         "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+        "config_path": str(config_path),
         "metrics": up_metrics,
         "risk_metrics": risk_metrics,
         "predictions": predictions,
@@ -286,15 +328,136 @@ def pick_recommended_model_result(version_results: list[dict]) -> dict | None:
         return pick_default_model_result(version_results)
     return max(updated_results, key=score_model_result)
 
+def evaluate_promotion_candidate(
+    asset_key: str,
+    candidate: dict,
+    current_serving: dict | None = None,
+    dataset_quality: dict | None = None,
+) -> dict:
+    """후보 모델 단일 건을 절대 기준과 serving 대비 상대 기준으로 평가합니다."""
+    thresholds = PROMOTION_THRESHOLDS[asset_key]
+    dataset_quality = dataset_quality or build_dataset_quality_report(asset_key)
+
+    candidate_metrics = candidate.get("metrics") or {}
+    candidate_risk_metrics = candidate.get("risk_metrics") or {}
+    candidate_cv = candidate_metrics.get("time_series_cv_average") or {}
+    candidate_risk_cv = candidate_risk_metrics.get("time_series_cv_average") or {}
+    candidate_backtest = (candidate.get("backtests") or {}).get("composite", {}).get("data") or {}
+
+    current_metrics = (current_serving or {}).get("metrics") or {}
+    current_cv = current_metrics.get("time_series_cv_average") or {}
+    current_backtest = ((current_serving or {}).get("backtests") or {}).get("composite", {}).get("data") or {}
+
+    checks: list[dict] = []
+
+    def add_check(name: str, passed: bool, actual, threshold=None, comparator: str | None = None, detail: str | None = None) -> None:
+        checks.append(
+            {
+                "name": name,
+                "passed": passed,
+                "actual": actual,
+                "threshold": threshold,
+                "comparator": comparator,
+                "detail": detail,
+            }
+        )
+
+    add_check("dataset_quality", dataset_quality["status"] == "healthy", dataset_quality["status"], "healthy", "==", "원천 데이터 중복/결측/이상치가 없어야 합니다.")
+    add_check("valid_rows", (candidate_metrics.get("valid_rows") or 0) >= thresholds["min_valid_rows"], candidate_metrics.get("valid_rows"), thresholds["min_valid_rows"], ">=")
+    add_check("cv_roc_auc", (candidate_cv.get("roc_auc") or 0.0) >= thresholds["min_cv_roc_auc"], candidate_cv.get("roc_auc"), thresholds["min_cv_roc_auc"], ">=")
+    add_check(
+        "precision_at_top_10pct",
+        (candidate_cv.get("precision_at_top_10pct") or candidate_metrics.get("precision_at_top_10pct") or 0.0) >= thresholds["min_precision_at_top_10pct"],
+        candidate_cv.get("precision_at_top_10pct") or candidate_metrics.get("precision_at_top_10pct"),
+        thresholds["min_precision_at_top_10pct"],
+        ">=",
+    )
+    add_check("risk_cv_roc_auc", (candidate_risk_cv.get("roc_auc") or 0.0) >= thresholds["min_risk_cv_roc_auc"], candidate_risk_cv.get("roc_auc"), thresholds["min_risk_cv_roc_auc"], ">=")
+    add_check(
+        "composite_excess_return_net",
+        (candidate_backtest.get("excess_return_net") or 0.0) >= thresholds["min_composite_excess_return_net"],
+        candidate_backtest.get("excess_return_net"),
+        thresholds["min_composite_excess_return_net"],
+        ">=",
+    )
+    add_check(
+        "composite_precision_at_top_n",
+        (candidate_backtest.get("precision_at_top_n") or 0.0) >= thresholds["min_composite_precision_at_top_n"],
+        candidate_backtest.get("precision_at_top_n"),
+        thresholds["min_composite_precision_at_top_n"],
+        ">=",
+    )
+    add_check("max_drawdown_net", (candidate_backtest.get("max_drawdown_net") or -1.0) >= thresholds["min_max_drawdown_net"], candidate_backtest.get("max_drawdown_net"), thresholds["min_max_drawdown_net"], ">=")
+
+    if current_serving and current_serving.get("version") != candidate.get("version"):
+        candidate_cv_roc_auc = candidate_cv.get("roc_auc") or 0.0
+        current_cv_roc_auc = current_cv.get("roc_auc") or 0.0
+        candidate_excess_return = candidate_backtest.get("excess_return_net") or 0.0
+        current_excess_return = current_backtest.get("excess_return_net") or 0.0
+        candidate_precision_top_n = candidate_backtest.get("precision_at_top_n") or 0.0
+        current_precision_top_n = current_backtest.get("precision_at_top_n") or 0.0
+
+        add_check("vs_serving_cv_roc_auc_drop", candidate_cv_roc_auc >= current_cv_roc_auc - thresholds["max_cv_roc_auc_drop_vs_serving"], candidate_cv_roc_auc - current_cv_roc_auc, -thresholds["max_cv_roc_auc_drop_vs_serving"], ">=", "현재 serving 대비 CV ROC AUC가 과도하게 하락하면 안 됩니다.")
+        add_check("vs_serving_excess_return_drop", candidate_excess_return >= current_excess_return - thresholds["max_excess_return_drop_vs_serving"], candidate_excess_return - current_excess_return, -thresholds["max_excess_return_drop_vs_serving"], ">=", "현재 serving 대비 비용 반영 초과수익이 과도하게 하락하면 안 됩니다.")
+        add_check("vs_serving_precision_drop", candidate_precision_top_n >= current_precision_top_n - thresholds["max_precision_drop_vs_serving"], candidate_precision_top_n - current_precision_top_n, -thresholds["max_precision_drop_vs_serving"], ">=", "현재 serving 대비 상위 후보 적중률이 과도하게 하락하면 안 됩니다.")
+
+        improvement_flags = [
+            candidate_cv_roc_auc >= current_cv_roc_auc + thresholds["meaningful_improvement_cv_roc_auc"],
+            candidate_excess_return >= current_excess_return + thresholds["meaningful_improvement_excess_return_net"],
+            candidate_precision_top_n >= current_precision_top_n + thresholds["meaningful_improvement_precision_at_top_n"],
+        ]
+        add_check(
+            "meaningful_improvement",
+            any(improvement_flags),
+            {
+                "cv_roc_auc_delta": candidate_cv_roc_auc - current_cv_roc_auc,
+                "excess_return_net_delta": candidate_excess_return - current_excess_return,
+                "precision_at_top_n_delta": candidate_precision_top_n - current_precision_top_n,
+            },
+            "at least one improvement",
+            None,
+            "현재 serving 대비 의미 있는 개선이 최소 1개 이상 필요합니다.",
+        )
+
+    failed_checks = [check for check in checks if not check["passed"]]
+    return {
+        "passed": len(failed_checks) == 0,
+        "checks": checks,
+        "failed_checks": failed_checks,
+        "dataset_quality": dataset_quality,
+        "thresholds": thresholds,
+    }
+
+def pick_passing_recommended_model_result(asset_key: str, version_results: list[dict], current_serving: dict | None = None) -> dict | None:
+    """승격 기준을 통과한 후보 중 점수가 가장 좋은 모델만 추천 대상으로 선택합니다."""
+    dataset_quality = build_dataset_quality_report(asset_key)
+    passing_results = [
+        result
+        for result in version_results
+        if result.get("updated") and evaluate_promotion_candidate(asset_key, result, current_serving=current_serving, dataset_quality=dataset_quality)["passed"]
+    ]
+    if not passing_results:
+        return None
+    return max(passing_results, key=score_model_result)
+
 def build_registry_fallback(asset_key: str) -> list[dict]:
     """DB에 연결할 수 없는 경우, 로컬 파일시스템의 정보들을 파싱하여 가상 레지스트리 상태 목록을 동적으로 구성합니다."""
     version_results = discover_model_versions(asset_key)
     latest_result = pick_default_model_result(version_results)
-    recommended_result = pick_recommended_model_result(version_results)
     registry_map = {
         (str(row.get("asset_type", "")).upper(), str(row.get("model_version", ""))): row
         for row in list_model_registry("STOCK" if asset_key == "stock" else "CRYPTO")
     }
+    serving_result = None
+    for result in version_results:
+        metrics = result.get("metrics") or {}
+        asset_type = "STOCK" if asset_key == "stock" else "CRYPTO"
+        model_version = metrics.get("model_version") or f"lgbm_{asset_key}_signal_{result['version']}"
+        registry_row = registry_map.get((asset_type, model_version), {})
+        if registry_row.get("is_serving"):
+            serving_result = result
+            break
+    recommended_result = pick_passing_recommended_model_result(asset_key, version_results, current_serving=serving_result)
     rows = []
     for result in version_results:
         metrics = result.get("metrics") or {}
@@ -355,7 +518,6 @@ def resolve_active_model_selection(asset_key: str, auth_header: str | None) -> d
         return None
 
     latest_result = pick_default_model_result(version_results)
-    recommended_result = pick_recommended_model_result(version_results)
     registry_rows = registry_groups.get(asset_key, [])
     registry_map = {
         str(row.get("model_version") or ""): row
@@ -366,8 +528,16 @@ def resolve_active_model_selection(asset_key: str, auth_header: str | None) -> d
         (row.get("version") for row in registry_rows if row.get("is_latest")),
         latest_result["version"] if latest_result else None,
     )
+    current_serving_result = next((result for result in version_results if result.get("version") == serving_version), None)
+    recommended_result = pick_passing_recommended_model_result(asset_key, version_results, current_serving=current_serving_result)
     recommended_version = next(
-        (row.get("version") for row in registry_rows if row.get("is_recommended")),
+        (
+            row.get("version")
+            for row in registry_rows
+            if row.get("is_recommended")
+            and recommended_result
+            and row.get("version") == recommended_result.get("version")
+        ),
         recommended_result["version"] if recommended_result else None,
     )
 
@@ -380,12 +550,13 @@ def resolve_active_model_selection(asset_key: str, auth_header: str | None) -> d
                 **result,
                 "is_serving": bool(registry_row.get("is_serving", False)),
                 "is_latest": bool(registry_row.get("is_latest", latest_version == result["version"])),
-                "is_recommended": bool(registry_row.get("is_recommended", recommended_version == result["version"])),
+                "is_recommended": bool(recommended_version == result["version"]),
                 "registry": registry_row,
             }
         )
 
-    selected_version = serving_version or recommended_version or (recommended_result["version"] if recommended_result else None)
+    selection_status = "serving" if serving_version else "recommended" if recommended_version else "fallback_latest"
+    selected_version = serving_version or recommended_version or (latest_result["version"] if latest_result else None)
     active_result = next(
         (item for item in decorated_versions if item.get("version") == selected_version),
         decorated_versions[0] if decorated_versions else None,
@@ -399,5 +570,475 @@ def resolve_active_model_selection(asset_key: str, auth_header: str | None) -> d
         "serving_version": serving_version,
         "latest_version": latest_version,
         "recommended_version": recommended_version,
+        "selection_status": selection_status,
         "versions": decorated_versions,
+    }
+
+def coerce_float(value) -> float | None:
+    """문자열 또는 숫자 값을 float로 변환하고 실패 시 None을 반환합니다."""
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def coerce_int(value) -> int | None:
+    """문자열 또는 숫자 값을 int로 변환하고 실패 시 None을 반환합니다."""
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+def load_prediction_rows(path: Path) -> list[dict]:
+    """예측 CSV 전체 행을 읽고 챗봇 응답에 바로 쓸 수 있도록 기본 타입을 정규화합니다."""
+    if not path.exists():
+        return []
+
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            normalized = {
+                **row,
+                "horizon_periods": coerce_int(row.get("horizon_periods")),
+                "up_probability": coerce_float(row.get("up_probability")),
+                "risk_probability": coerce_float(row.get("risk_probability")),
+                "up_signal_score": coerce_float(row.get("up_signal_score")),
+                "risk_signal_score": coerce_float(row.get("risk_signal_score")),
+                "signal_score": coerce_float(row.get("signal_score")),
+            }
+            rows.append(enrich_symbol(normalized))
+    return rows
+
+def build_prediction_performance_snapshot(active_result: dict) -> dict:
+    """활성 모델의 검증 지표와 백테스트 핵심 수치를 챗봇 친화적인 구조로 요약합니다."""
+    metrics = active_result.get("metrics") or {}
+    risk_metrics = active_result.get("risk_metrics") or {}
+    composite_backtest = (active_result.get("backtests") or {}).get("composite", {}).get("data") or {}
+    up_only_backtest = (active_result.get("backtests") or {}).get("up_only", {}).get("data") or {}
+    metrics_cv = metrics.get("time_series_cv_average") or {}
+    risk_metrics_cv = risk_metrics.get("time_series_cv_average") or {}
+
+    return {
+        "validation": {
+            "accuracy": metrics.get("accuracy"),
+            "roc_auc": metrics.get("roc_auc"),
+            "average_precision": metrics.get("average_precision"),
+            "precision": metrics.get("precision"),
+            "recall": metrics.get("recall"),
+            "precision_at_top_10pct": metrics.get("precision_at_top_10pct"),
+            "valid_rows": metrics.get("valid_rows"),
+            "valid_start_date": metrics.get("valid_start_date"),
+            "valid_end_date": metrics.get("valid_end_date"),
+        },
+        "time_series_cv": {
+            "roc_auc": metrics_cv.get("roc_auc"),
+            "precision_at_top_10pct": metrics_cv.get("precision_at_top_10pct"),
+            "risk_roc_auc": risk_metrics_cv.get("roc_auc"),
+            "risk_precision_at_top_10pct": risk_metrics_cv.get("precision_at_top_10pct"),
+        },
+        "backtest_composite": {
+            "test_periods": composite_backtest.get("test_periods"),
+            "top_n": composite_backtest.get("top_n"),
+            "excess_return_net": composite_backtest.get("excess_return_net"),
+            "date_win_rate_net": composite_backtest.get("date_win_rate_net"),
+            "selection_win_rate_net": composite_backtest.get("selection_win_rate_net"),
+            "precision_at_top_n": composite_backtest.get("precision_at_top_n"),
+            "max_drawdown_net": composite_backtest.get("max_drawdown_net"),
+            "avg_signal_score": composite_backtest.get("avg_signal_score"),
+        },
+        "backtest_up_only": {
+            "test_periods": up_only_backtest.get("test_periods"),
+            "top_n": up_only_backtest.get("top_n"),
+            "excess_return_net": up_only_backtest.get("excess_return_net"),
+            "date_win_rate_net": up_only_backtest.get("date_win_rate_net"),
+            "selection_win_rate_net": up_only_backtest.get("selection_win_rate_net"),
+            "precision_at_top_n": up_only_backtest.get("precision_at_top_n"),
+            "max_drawdown_net": up_only_backtest.get("max_drawdown_net"),
+            "avg_signal_score": up_only_backtest.get("avg_signal_score"),
+        },
+    }
+
+def build_prediction_overview(rows: list[dict]) -> dict:
+    """예측 행 전체 분포를 요약해 챗봇과 관리자 화면에서 빠르게 상태를 파악할 수 있게 합니다."""
+    if not rows:
+        return {
+            "total_predictions": 0,
+            "long_count": 0,
+            "hold_count": 0,
+            "short_count": 0,
+            "avg_up_probability": None,
+            "avg_risk_probability": None,
+            "avg_signal_score": None,
+            "max_signal_score": None,
+            "min_signal_score": None,
+            "latest_prediction_time": None,
+        }
+
+    def average(values: list[float | None]) -> float | None:
+        filtered = [value for value in values if value is not None]
+        if not filtered:
+            return None
+        return sum(filtered) / len(filtered)
+
+    signal_scores = [coerce_float(row.get("signal_score")) for row in rows]
+    latest_prediction_time = max((str(row.get("date") or "") for row in rows), default=None)
+
+    return {
+        "total_predictions": len(rows),
+        "long_count": sum(1 for row in rows if str(row.get("position") or "").upper() == "LONG"),
+        "hold_count": sum(1 for row in rows if str(row.get("position") or "").upper() == "HOLD"),
+        "short_count": sum(1 for row in rows if str(row.get("position") or "").upper() == "SHORT"),
+        "avg_up_probability": average([coerce_float(row.get("up_probability")) for row in rows]),
+        "avg_risk_probability": average([coerce_float(row.get("risk_probability")) for row in rows]),
+        "avg_signal_score": average(signal_scores),
+        "max_signal_score": max((value for value in signal_scores if value is not None), default=None),
+        "min_signal_score": min((value for value in signal_scores if value is not None), default=None),
+        "latest_prediction_time": latest_prediction_time,
+    }
+
+def build_dataset_quality_report(asset_key: str) -> dict:
+    """원천 캔들 CSV 기준으로 중복, 결측, 최신성, 가격 이상치를 점검합니다."""
+    dataset_path = PROJECT_ROOT / "ml" / "data" / "raw" / f"{asset_key}_candles.csv"
+    required_columns = ["exchange", "asset_type", "symbol", "date", "open", "high", "low", "close", "volume"]
+    report = {
+        "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+        "path": str(dataset_path),
+        "exists": dataset_path.exists(),
+        "row_count": 0,
+        "unique_symbol_count": 0,
+        "duplicate_symbol_date_count": 0,
+        "missing_required_value_count": 0,
+        "invalid_price_row_count": 0,
+        "invalid_volume_row_count": 0,
+        "oldest_timestamp": None,
+        "latest_timestamp": None,
+        "staleness_hours": None,
+        "status": "missing",
+        "issues": [],
+    }
+    if not dataset_path.exists():
+        report["issues"].append("원천 캔들 CSV가 없습니다.")
+        return report
+
+    seen_keys: set[tuple[str, str]] = set()
+    duplicate_count = 0
+    missing_required_count = 0
+    invalid_price_count = 0
+    invalid_volume_count = 0
+    row_count = 0
+    symbols: set[str] = set()
+    oldest_dt = None
+    latest_dt = None
+
+    with dataset_path.open("r", encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            row_count += 1
+            symbol = str(row.get("symbol") or "").upper()
+            date_text = str(row.get("date") or "")
+            if symbol:
+                symbols.add(symbol)
+
+            if not all(str(row.get(column) or "").strip() for column in required_columns):
+                missing_required_count += 1
+
+            key = (symbol, date_text)
+            if key in seen_keys:
+                duplicate_count += 1
+            else:
+                seen_keys.add(key)
+
+            open_price = coerce_float(row.get("open"))
+            high_price = coerce_float(row.get("high"))
+            low_price = coerce_float(row.get("low"))
+            close_price = coerce_float(row.get("close"))
+            volume = coerce_float(row.get("volume"))
+
+            if (
+                open_price is None or high_price is None or low_price is None or close_price is None
+                or open_price <= 0 or high_price <= 0 or low_price <= 0 or close_price <= 0
+                or high_price < low_price
+                or high_price < max(open_price, close_price)
+                or low_price > min(open_price, close_price)
+            ):
+                invalid_price_count += 1
+
+            if volume is None or volume < 0:
+                invalid_volume_count += 1
+
+            try:
+                parsed_dt = datetime.fromisoformat(date_text.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+
+            if oldest_dt is None or parsed_dt < oldest_dt:
+                oldest_dt = parsed_dt
+            if latest_dt is None or parsed_dt > latest_dt:
+                latest_dt = parsed_dt
+
+    report["row_count"] = row_count
+    report["unique_symbol_count"] = len(symbols)
+    report["duplicate_symbol_date_count"] = duplicate_count
+    report["missing_required_value_count"] = missing_required_count
+    report["invalid_price_row_count"] = invalid_price_count
+    report["invalid_volume_row_count"] = invalid_volume_count
+    report["oldest_timestamp"] = oldest_dt.isoformat() if oldest_dt else None
+    report["latest_timestamp"] = latest_dt.isoformat() if latest_dt else None
+
+    if latest_dt is not None:
+        now_utc = datetime.now(timezone.utc)
+        latest_utc = latest_dt.astimezone(timezone.utc) if latest_dt.tzinfo else latest_dt.replace(tzinfo=timezone.utc)
+        report["staleness_hours"] = round((now_utc - latest_utc).total_seconds() / 3600, 2)
+
+    issues = report["issues"]
+    if row_count == 0:
+        issues.append("원천 데이터 행 수가 0건입니다.")
+    if duplicate_count > 0:
+        issues.append(f"심볼+일시 기준 중복 행이 {duplicate_count}건 있습니다.")
+    if missing_required_count > 0:
+        issues.append(f"필수값 누락 행이 {missing_required_count}건 있습니다.")
+    if invalid_price_count > 0:
+        issues.append(f"OHLC 가격 이상치 행이 {invalid_price_count}건 있습니다.")
+    if invalid_volume_count > 0:
+        issues.append(f"거래량 이상치 행이 {invalid_volume_count}건 있습니다.")
+    if report["staleness_hours"] is not None:
+        stale_limit = 72 if asset_key == "stock" else 12
+        if report["staleness_hours"] > stale_limit:
+            issues.append(f"데이터 최신성이 낮습니다. 마지막 캔들 기준 {report['staleness_hours']}시간 지났습니다.")
+
+    report["status"] = "healthy" if not issues else "warning"
+    return report
+
+def find_model_result_by_version(version_results: list[dict], version_text: str) -> dict | None:
+    """v7 또는 lgbm_stock_signal_v7 형태 모두 허용하여 대상 모델 결과를 찾습니다."""
+    normalized = str(version_text or "").strip()
+    if not normalized:
+        return None
+
+    for result in version_results:
+        model_version = str((result.get("metrics") or {}).get("model_version") or "")
+        if normalized in {str(result.get("version") or ""), model_version}:
+            return result
+    return None
+
+def build_promotion_guard_report(asset_key: str, auth_header: str | None, model_version: str) -> dict | None:
+    """후보 모델이 서비스 반영 가능한지 절대 기준과 현재 serving 대비 상대 기준으로 평가합니다."""
+    selection = resolve_active_model_selection(asset_key, auth_header)
+    if selection is None:
+        return None
+
+    version_results = selection.get("versions") or []
+    candidate = find_model_result_by_version(version_results, model_version)
+    if candidate is None:
+        return None
+
+    current_serving = next((row for row in version_results if row.get("is_serving")), None)
+    evaluation = evaluate_promotion_candidate(asset_key, candidate, current_serving=current_serving)
+    candidate_metrics = candidate.get("metrics") or {}
+
+    return {
+        "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+        "candidate_version": candidate.get("version"),
+        "candidate_model_version": (candidate_metrics.get("model_version") or model_version),
+        "serving_version": (current_serving or {}).get("version"),
+        "serving_model_version": ((current_serving or {}).get("metrics") or {}).get("model_version"),
+        "passed": evaluation["passed"],
+        "thresholds": evaluation["thresholds"],
+        "dataset_quality": evaluation["dataset_quality"],
+        "checks": evaluation["checks"],
+        "failed_checks": evaluation["failed_checks"],
+    }
+
+def build_serving_audit_report(auth_header: str | None) -> dict:
+    """현재 serving 모델과 추천 후보를 함께 감사하여 운영자가 즉시 조치할 수 있게 요약합니다."""
+    asset_reports: dict[str, dict] = {}
+    blocking_count = 0
+
+    for asset_key in ("stock", "crypto"):
+        selection = resolve_active_model_selection(asset_key, auth_header)
+        if selection is None:
+            asset_reports[asset_key] = {
+                "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+                "status": "missing",
+                "message": "모델 결과를 찾을 수 없습니다.",
+            }
+            blocking_count += 1
+            continue
+
+        serving_version = selection.get("serving_version")
+        recommended_version = selection.get("recommended_version")
+        active_result = selection.get("active_result") or {}
+        current_version = serving_version or active_result.get("version")
+        current_model_version = (
+            ((active_result.get("metrics") or {}).get("model_version"))
+            if current_version == active_result.get("version")
+            else None
+        )
+        if current_model_version is None:
+            matched = find_model_result_by_version(selection.get("versions") or [], current_version or "")
+            current_model_version = ((matched or {}).get("metrics") or {}).get("model_version")
+
+        current_guard = build_promotion_guard_report(asset_key, auth_header, current_model_version or current_version or "")
+        recommended_guard = None
+        if recommended_version:
+            recommended_match = find_model_result_by_version(selection.get("versions") or [], recommended_version)
+            recommended_model_version = ((recommended_match or {}).get("metrics") or {}).get("model_version") or recommended_version
+            recommended_guard = build_promotion_guard_report(asset_key, auth_header, recommended_model_version)
+
+        report_status = "healthy"
+        message = "현재 serving 모델이 기준을 통과합니다."
+        actions: list[str] = []
+
+        if current_guard is None:
+            report_status = "missing"
+            message = "현재 serving 모델의 감사 정보를 만들 수 없습니다."
+            actions.append("serving 모델 메타데이터를 확인해야 합니다.")
+            blocking_count += 1
+        elif not current_guard.get("passed"):
+            report_status = "warning"
+            message = "현재 serving 모델이 내부 승격 기준을 통과하지 못합니다."
+            actions.append("serving 교체 또는 기준 재검토가 필요합니다.")
+            blocking_count += 1
+
+        if recommended_guard and recommended_guard.get("passed"):
+            actions.append("추천 후보가 기준을 통과하므로 승격 검토가 가능합니다.")
+        elif recommended_guard and not recommended_guard.get("passed"):
+            actions.append("추천 후보도 아직 기준 미달입니다.")
+
+        asset_reports[asset_key] = {
+            "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+            "status": report_status,
+            "message": message,
+            "serving_version": serving_version,
+            "recommended_version": recommended_version,
+            "latest_version": selection.get("latest_version"),
+            "current_guard": current_guard,
+            "recommended_guard": recommended_guard,
+            "actions": actions,
+        }
+
+    overall_status = "healthy" if blocking_count == 0 else "warning"
+    return {
+        "status": overall_status,
+        "blocking_count": blocking_count,
+        "assets": asset_reports,
+    }
+
+def read_model_version_from_config(config_path: str) -> str | None:
+    """학습 설정 파일에서 모델 버전을 읽어옵니다."""
+    try:
+        config_file = PROJECT_ROOT / config_path if not str(config_path).startswith("/") else Path(config_path)
+        config = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        return str((config.get("model") or {}).get("version") or "").strip() or None
+    except Exception:
+        return None
+
+def read_asset_type_from_config(config_path: str) -> str | None:
+    """학습 설정 파일에서 자산 유형을 읽어옵니다."""
+    try:
+        config_file = PROJECT_ROOT / config_path if not str(config_path).startswith("/") else Path(config_path)
+        config = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        asset_type = str((config.get("model") or {}).get("asset_type") or "").upper().strip()
+        return asset_type or None
+    except Exception:
+        return None
+
+def build_training_audit_bundle(
+    auth_header: str | None,
+    asset_type: str | None,
+    config_path: str | None = None,
+    model_version: str | None = None,
+) -> dict | None:
+    """학습 직후 승격 검증과 serving 감사를 공통 포맷으로 구성합니다."""
+    normalized_asset_type = str(asset_type or "").upper() or str(read_asset_type_from_config(str(config_path or "")) or "").upper()
+    if normalized_asset_type not in ("STOCK", "CRYPTO"):
+        return None
+
+    asset_key = "stock" if normalized_asset_type == "STOCK" else "crypto"
+    resolved_model_version = str(model_version or "").strip() or read_model_version_from_config(str(config_path or ""))
+    if not resolved_model_version:
+        return None
+
+    promotion_guard = build_promotion_guard_report(asset_key, auth_header, resolved_model_version)
+    serving_audit = build_serving_audit_report(auth_header)
+
+    return {
+        "asset_type": normalized_asset_type,
+        "asset_key": asset_key,
+        "model_version": resolved_model_version,
+        "promotion_guard": promotion_guard,
+        "serving_audit": serving_audit,
+    }
+
+def build_active_signal_payload(
+    asset_key: str,
+    auth_header: str | None,
+    symbols: list[str] | None = None,
+    position: str | None = None,
+    min_signal_score: float | None = None,
+    limit: int = 20,
+) -> dict | None:
+    """활성 모델의 최신 예측과 성능 수치를 챗봇/대시보드 공용 응답 포맷으로 구성합니다."""
+    selection = resolve_active_model_selection(asset_key, auth_header)
+    if selection is None:
+        return None
+    if selection.get("selection_status") == "fallback_latest" and not selection.get("serving_version") and not selection.get("recommended_version"):
+        return None
+
+    active_result = selection["active_result"]
+    predictions_path = Path(str(active_result.get("predictions_path") or ""))
+    if not predictions_path.exists():
+        return None
+
+    all_rows = load_prediction_rows(predictions_path)
+    symbol_set = {symbol.upper() for symbol in (symbols or []) if symbol}
+    normalized_position = str(position or "").upper().strip() or None
+
+    filtered_rows = []
+    for row in all_rows:
+        row_symbol = str(row.get("symbol") or "").upper()
+        row_position = str(row.get("position") or "").upper()
+        signal_score = coerce_float(row.get("signal_score"))
+
+        if symbol_set and row_symbol not in symbol_set:
+            continue
+        if normalized_position and row_position != normalized_position:
+            continue
+        if min_signal_score is not None and (signal_score is None or signal_score < min_signal_score):
+            continue
+        filtered_rows.append(row)
+
+    filtered_rows.sort(
+        key=lambda row: (coerce_float(row.get("signal_score")) is not None, coerce_float(row.get("signal_score")) or -1e9),
+        reverse=True,
+    )
+    limited_rows = filtered_rows[:limit]
+
+    metrics = active_result.get("metrics") or {}
+    summary_path = (((active_result.get("registry") or {}).get("summary_path")) or "")
+
+    return {
+        "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
+        "selected_version": active_result.get("version"),
+        "model_version": metrics.get("model_version"),
+        "serving_version": selection.get("serving_version"),
+        "recommended_version": selection.get("recommended_version"),
+        "latest_version": selection.get("latest_version"),
+        "config_path": active_result.get("config_path"),
+        "summary_path": summary_path,
+        "predictions_path": str(predictions_path),
+        "performance": build_prediction_performance_snapshot(active_result),
+        "overview": build_prediction_overview(all_rows),
+        "filtered_overview": build_prediction_overview(filtered_rows),
+        "filters": {
+            "symbols": sorted(symbol_set),
+            "position": normalized_position,
+            "min_signal_score": min_signal_score,
+            "limit": limit,
+        },
+        "predictions": limited_rows,
     }

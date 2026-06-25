@@ -8,6 +8,7 @@ import News from './pages/News'
 import Settings from './pages/Settings'
 import Home from './pages/Home'
 import AdminMlData from './pages/AdminMlData'
+import AssetDetail from './pages/AssetDetail'
 import InvestmentSurveyModal from './components/InvestmentSurveyModal'
 
 export default function App() {
@@ -302,6 +303,17 @@ export default function App() {
         />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route 
+          path="/asset/:assetType/:symbol" 
+          element={
+            <AssetDetail 
+              isLoggedIn={isLoggedIn} 
+              userEmail={userEmail} 
+              handleLogout={handleLogout}
+              userProfile={userProfile}
+            />
+          } 
+        />
       </Routes>
     </Router>
   )

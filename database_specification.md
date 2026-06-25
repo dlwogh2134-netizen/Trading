@@ -214,6 +214,10 @@ erDiagram
         uuid id PK "기본키"
         string asset_type "자산 종류"
         string model_version "모델 버전"
+        string model_path "모델 파일 경로"
+        string metrics_path "metrics 파일 경로"
+        string summary_path "요약 JSON 경로"
+        string recommendation_reason "추천 사유"
         boolean is_latest "최신 여부"
         boolean is_recommended "추천 여부"
         boolean is_serving "서비스 반영 여부"
@@ -513,6 +517,8 @@ LightGBM 모델은 서비스 요청 중 직접 학습하지 않고, `ml/` 디렉
 * **운영 원칙**:
   * 주식 모델과 코인 모델은 `asset_type`과 `model_version`을 기준으로 분리합니다.
   * 새 모델이 기존 모델보다 검증 성능과 백테스트 안정성이 좋을 때만 서비스 모델로 교체합니다.
+  * 현재 백엔드 활성 예측 조회 API(`GET /api/ml/predictions/active`)는 우선 로컬 `*_predictions_lgbm_v*.csv`와 summary/metrics/backtest 아티팩트를 읽어 응답하며, 추후 `model_predictions` 테이블 동기화가 붙더라도 동일한 수치 스키마를 유지합니다.
+  * 서비스 반영 API는 `valid_rows`, 시계열 CV ROC AUC, 상위 후보 precision, 비용 반영 초과수익률, 최대 낙폭, 원천 CSV 데이터 품질을 함께 검사해 기준 미달 모델의 승격을 차단합니다.
 
 ### 5.6 `ml_dataset_jobs`, `ml_training_runs`, `ml_model_registry`
 

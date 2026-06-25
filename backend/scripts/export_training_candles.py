@@ -110,8 +110,8 @@ def load_preset_symbols(preset_name: str, universe_path: Path) -> list[str]:
     return [str(symbol).upper() for symbol in preset]
 
 
-def ensure_parent(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def ensure_parent(path: Path | str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
 
 
 def deduplicate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -122,8 +122,9 @@ def deduplicate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(unique_rows.values(), key=lambda row: (row.get("symbol", ""), row.get("date", "")))
 
 
-def write_rows(path: Path, rows: list[dict[str, Any]], append: bool = False) -> None:
-    ensure_parent(path)
+def write_rows(path: Path | str, rows: list[dict[str, Any]], append: bool = False) -> None:
+    path_obj = Path(path)
+    ensure_parent(path_obj)
     fieldnames = [
         "exchange",
         "asset_type",
@@ -137,22 +138,23 @@ def write_rows(path: Path, rows: list[dict[str, Any]], append: bool = False) -> 
         "close",
         "volume",
     ]
-    if append and path.exists():
-        with path.open("r", newline="", encoding="utf-8") as file:
+    if append and path_obj.exists():
+        with path_obj.open("r", newline="", encoding="utf-8") as file:
             existing_rows = list(csv.DictReader(file))
         rows = deduplicate_rows([*existing_rows, *rows])
 
-    with path.open("w", newline="", encoding="utf-8") as file:
+    with path_obj.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
 
-def write_failures(path: Path | None, failures: list[dict[str, Any]]) -> None:
+def write_failures(path: Path | str | None, failures: list[dict[str, Any]]) -> None:
     if path is None:
         return
-    ensure_parent(path)
-    path.write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
+    path_obj = Path(path)
+    ensure_parent(path_obj)
+    path_obj.write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def get_user_id_from_token(auth_token: str) -> str:

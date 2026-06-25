@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import Header from '../components/Header.jsx'
 import Settings from './Settings'
 import { ASSET_PERIOD_OPTIONS, ASSET_TREND_DATA, WATCHLIST_MOCK } from '../dashboardConstants.js'
@@ -17,6 +18,55 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
   })
   const [activeTab, setActiveTab] = useState('dashboard')
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  
+  // 퀵 검색 상태 선언
+  const [searchAssetType, setSearchAssetType] = useState('STOCK')
+  const [searchSymbol, setSearchSymbol] = useState('')
+  const [suggestions, setSuggestions] = useState([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const navigate = useNavigate()
+
+  const handleSearchGo = async (e) => {
+    e.preventDefault()
+    const query = searchSymbol.trim()
+    if (!query) return
+
+    try {
+      const response = await fetch(`http://localhost:5050/api/symbol/lookup?query=${encodeURIComponent(query)}`)
+      const resData = await response.json()
+      if (resData.success && resData.data) {
+        const { symbol, asset_type } = resData.data
+        navigate(`/asset/${asset_type}/${symbol}`)
+      } else {
+        navigate(`/asset/${searchAssetType}/${query.toUpperCase()}`)
+      }
+    } catch (err) {
+      console.error("종목 검색 매핑 실패:", err)
+      navigate(`/asset/${searchAssetType}/${query.toUpperCase()}`)
+    }
+  }
+
+  // 실시간 추천 검색어 핸들러
+  const handleSearchInputChange = async (e) => {
+    const val = e.target.value
+    setSearchSymbol(val)
+
+    if (val.trim().length > 0) {
+      try {
+        const response = await fetch(`http://localhost:5050/api/symbol/search?query=${encodeURIComponent(val)}`)
+        const resData = await response.json()
+        if (resData.success && resData.data) {
+          setSuggestions(resData.data)
+          setShowSuggestions(true)
+        }
+      } catch (err) {
+        console.error("추천 검색어 로드 실패:", err)
+      }
+    } else {
+      setSuggestions([])
+      setShowSuggestions(false)
+    }
+  }
   const [selectedAssetPeriod, setSelectedAssetPeriod] = useState('1m')
   const [assetDateRange, setAssetDateRange] = useState(() => getAssetPeriodRange('1m'))
   const [isAssetCalendarOpen, setIsAssetCalendarOpen] = useState(false)
@@ -209,6 +259,76 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                 </div>
               </div>
 
+              {/* 종목 퀵 검색 이동 터미널 */}
+              <div className="bg-slate-surface border border-slate-700/80 rounded-lg p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">종목 퀵 이동 터미널</h3>
+                  <p className="text-[11px] text-slate-400 mt-1">원하는 주식코드나 가상자산 심볼을 입력하여 상세 차트와 수동 매매 창으로 즉시 이동합니다.</p>
+                </div>
+                <form onSubmit={handleSearchGo} className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                  <div className="flex bg-slate-800 p-0.5 rounded border border-slate-700 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSearchAssetType('STOCK')}
+                      className={`px-3 py-1.5 rounded transition-all cursor-pointer font-bold ${searchAssetType === 'STOCK' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                    >
+                      주식
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSearchAssetType('CRYPTO')}
+                      className={`px-3 py-1.5 rounded transition-all cursor-pointer font-bold ${searchAssetType === 'CRYPTO' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+                    >
+                      코인
+                    </button>
+                  </div>
+                  <div className="relative w-full sm:w-48">
+                    <input
+                      type="text"
+                      value={searchSymbol}
+                      onChange={handleSearchInputChange}
+                      onFocus={() => { if (searchSymbol.trim()) setShowSuggestions(true) }}
+                      onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                      placeholder={searchAssetType === 'STOCK' ? '예: 005930 또는 AAPL' : '예: BTC 또는 ETH'}
+                      className="bg-[#0f172a] border border-slate-700 text-[#e2e2ec] font-mono text-xs rounded px-3 py-2 w-full focus:outline-none focus:border-blue-600"
+                      required
+                      autoComplete="off"
+                    />
+
+                    {showSuggestions && suggestions.length > 0 && (
+                      <div className="absolute left-0 right-0 mt-1 bg-[#090d1a]/95 border border-[#1f2945] rounded-lg shadow-2xl z-50 max-h-60 overflow-y-auto backdrop-blur-md">
+                        {suggestions.map((item) => (
+                          <div
+                            key={item.symbol}
+                            onClick={() => {
+                              navigate(`/asset/${item.asset_type}/${item.symbol}`)
+                              setSearchSymbol('')
+                              setSuggestions([])
+                              setShowSuggestions(false)
+                            }}
+                            className="flex justify-between items-center px-3 py-2.5 hover:bg-blue-950/40 cursor-pointer border-b border-[#1f2945]/30 last:border-none transition-all"
+                          >
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-white">{item.display_name}</span>
+                              <span className="text-[9px] text-slate-500 font-mono">{item.symbol}</span>
+                            </div>
+                            <span className="text-[9px] font-bold text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-900/60 uppercase tracking-widest font-mono">
+                              {item.asset_type === 'STOCK' ? '주식' : '코인'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="submit"
+                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded transition-all cursor-pointer w-full sm:w-auto active:scale-[0.98]"
+                  >
+                    이동
+                  </button>
+                </form>
+              </div>
+
               <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.55fr)]">
                 {/* 총 자산 가치 그래프 (Sparkline) */}
                 <div className="bg-slate-surface border border-slate-700/80 rounded-lg p-5 flex flex-col gap-3">
@@ -346,14 +466,21 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/40">
-                        {WATCHLIST_MOCK.map((item) => (
-                          <tr key={item.id} className="hover:bg-slate-800/20 transition-colors">
-                            <td className="px-3 py-2.5 font-bold text-white">{item.name}</td>
-                            <td className="px-3 py-2.5 text-slate-400">{item.market}</td>
-                            <td className="px-3 py-2.5 text-right font-mono text-slate-300">{item.average}</td>
-                            <td className="px-3 py-2.5 text-right"><Rate value={item.change} /></td>
-                          </tr>
-                        ))}
+                        {WATCHLIST_MOCK.map((item) => {
+                          const itemAssetType = item.account?.includes('주식') ? 'STOCK' : 'CRYPTO'
+                          return (
+                            <tr key={item.id} className="hover:bg-slate-800/20 transition-colors">
+                              <td className="px-3 py-2.5 font-bold text-white">
+                                <Link to={`/asset/${itemAssetType}/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline">
+                                  {item.name}
+                                </Link>
+                              </td>
+                              <td className="px-3 py-2.5 text-slate-400">{item.market}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-slate-300">{item.average}</td>
+                              <td className="px-3 py-2.5 text-right"><Rate value={item.change} /></td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -396,7 +523,9 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                         {balance.holdings.map((stock) => (
                           <tr key={stock.symbol} className="hover:bg-slate-800/40 transition-colors">
                             <td className="py-3 px-3 font-sans">
-                              <div className="font-semibold text-white">{stock.name}</div>
+                              <Link to={`/asset/STOCK/${stock.symbol}`} className="font-semibold text-blue-400 hover:text-blue-300 hover:underline block">
+                                {stock.name}
+                              </Link>
                               <div className="text-[10px] text-slate-500 font-mono">{stock.symbol}</div>
                             </td>
                             <td className="py-3 px-3 text-right text-slate-300">{stock.qty}</td>

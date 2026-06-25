@@ -227,9 +227,25 @@ def main() -> None:
     up_model = up_payload["model"]
     up_calibrator = up_payload.get("calibrator")
     up_feature_columns = up_payload["config"]["model"]["feature_columns"]
+    # 앙상블 Ridge 모델 로드 (v8+ payload 호환)
+    up_ridge_model = up_payload.get("ridge_model")
+    up_training_opts = up_payload["config"].get("training", {})
+    up_lgbm_w = float(up_training_opts.get("ensemble_lgbm_weight", 0.7))
+    up_ridge_w = float(up_training_opts.get("ensemble_ridge_weight", 0.3))
+
     valid_df = valid_df.copy()
-    valid_df["up_probability"] = up_model.predict_proba(valid_df[up_feature_columns])[:, 1]
-    valid_df["up_probability"] = apply_probability_calibration(valid_df["up_probability"].to_numpy(), up_calibrator)
+    up_prob_raw = up_model.predict_proba(valid_df[up_feature_columns])[:, 1]
+    # 앙상블 Ridge 예측 확률 합산 (ridge_model 없으면 LGBM만 사용)
+    if up_ridge_model is not None:
+        try:
+            import numpy as np
+            scaler = up_ridge_model._feature_scaler
+            x_scaled = scaler.transform(valid_df[up_feature_columns].fillna(0.0))
+            ridge_prob_raw = np.clip(up_ridge_model.predict(x_scaled), 0.0, 1.0)
+            up_prob_raw = up_lgbm_w * up_prob_raw + up_ridge_w * ridge_prob_raw
+        except Exception:
+            pass
+    valid_df["up_probability"] = apply_probability_calibration(up_prob_raw, up_calibrator)
     valid_df["risk_probability"] = 1 - valid_df["up_probability"]
     valid_df["scoring_strategy"] = "up_only"
     valid_df["up_model_version"] = up_payload["config"]["model"]["version"]

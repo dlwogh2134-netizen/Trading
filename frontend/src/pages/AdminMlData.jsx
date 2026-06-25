@@ -1,8 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import Header from '../components/Header.jsx'
 import { supabase } from '../supabaseClient'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
+
+const PROJECT_ROOT_PATH = '/Users/kangheesung/10-19_개발/13_프로젝트/13.05_트레이딩/teamproject'
+
+function formatPath(path) {
+  if (!path || typeof path !== 'string') return path || '-'
+  if (path.startsWith(PROJECT_ROOT_PATH)) {
+    return '.' + path.substring(PROJECT_ROOT_PATH.length)
+  }
+  const idx = path.indexOf('/teamproject/')
+  if (idx !== -1) {
+    return '.' + path.substring(idx + '/teamproject'.length)
+  }
+  return path
+}
+
+function formatPathInText(text) {
+  if (!text || typeof text !== 'string') return text
+  let formatted = text.replaceAll(PROJECT_ROOT_PATH, '.')
+  const idx = formatted.indexOf('/teamproject/')
+  if (idx !== -1) {
+    formatted = formatted.replaceAll(PROJECT_ROOT_PATH.substring(0, PROJECT_ROOT_PATH.indexOf('/teamproject') + 12), '.')
+  }
+  return formatted
+}
 
 const presets = {
   stock: {
@@ -79,6 +103,7 @@ const tuningPresets = [
     config: 'ml/configs/lgbm_stock_v7.yaml',
     defaultTrials: 20,
     summary: '주식 v7 모델에 대해 Optuna로 최적의 하이퍼파라미터(learning_rate, num_leaves 등)를 탐색합니다.',
+    version: 'v7',
   },
   {
     key: 'crypto-v7-tune',
@@ -86,6 +111,25 @@ const tuningPresets = [
     config: 'ml/configs/lgbm_crypto_v7.yaml',
     defaultTrials: 20,
     summary: '코인 v7 모델에 대해 Optuna로 최적의 하이퍼파라미터를 탐색합니다.',
+    version: 'v7',
+  },
+  {
+    key: 'stock-v8-tune',
+    label: '주식 v8 HPO 튜닝',
+    config: 'ml/configs/lgbm_stock_v8.yaml',
+    defaultTrials: 20,
+    summary: '주식 v8 모델에 대해 Optuna로 하이퍼파라미터를 탐색합니다 (잔차 라벨 기반).',
+    version: 'v8',
+    isNew: true,
+  },
+  {
+    key: 'crypto-v8-tune',
+    label: '코인 v8 HPO 튜닝',
+    config: 'ml/configs/lgbm_crypto_v8.yaml',
+    defaultTrials: 20,
+    summary: '코인 v8 모델에 대해 Optuna로 하이퍼파라미터를 탐색합니다 (30m 캔들 기반).',
+    version: 'v8',
+    isNew: true,
   },
 ]
 
@@ -94,11 +138,27 @@ const automationPresets = [
     key: 'stock-v7-full',
     label: '주식 v7 자동 수집+학습',
     summary: 'Toss stock_core_90 수집 후 v7 학습까지 한 번에 실행',
+    version: 'v7',
   },
   {
     key: 'crypto-v7-full',
     label: '코인 v7 자동 수집+학습',
-    summary: 'Binance crypto_core_30 수집 후 v7 학습까지 한 번에 실행',
+    summary: 'Binance crypto_core_30 수집 후 v7 학습까지 한 번에 실행 (1h 캔들)',
+    version: 'v7',
+  },
+  {
+    key: 'stock-v8-full',
+    label: '주식 v8 자동 수집+학습',
+    summary: '잔차 수익률 라벨 + Ridge 앙상블 주식 모델 (KOSPI/NASDAQ 시장 노이즈 제거)',
+    version: 'v8',
+    isNew: true,
+  },
+  {
+    key: 'crypto-v8-full',
+    label: '코인 v8 자동 수집+학습',
+    summary: '30m 캔들 5000개 수집 후 v8 학습 — 잔차 수익률 라벨 + Ridge 앙상블 (파일: crypto_candles_30m.csv)',
+    version: 'v8',
+    isNew: true,
   },
 ]
 
@@ -168,7 +228,7 @@ function JobLogModal({ job, onClose }) {
   if (!job) return null
 
   const handleCopy = () => {
-    const text = `=== Job Log: ${job.label || job.id} ===\n\n[STDOUT]\n${job.stdout || 'No stdout'}\n\n[STDERR]\n${job.stderr || 'No stderr'}`
+    const text = `=== Job Log: ${job.label || job.id} ===\n\n[TRAINING AUDIT]\n${JSON.stringify(job.training_audit || null, null, 2)}\n\n[GUARD REPORT]\n${JSON.stringify(job.guard_report || null, null, 2)}\n\n[SERVING AUDIT]\n${JSON.stringify(job.serving_audit_report || null, null, 2)}\n\n[STDOUT]\n${job.stdout || 'No stdout'}\n\n[STDERR]\n${job.stderr || 'No stderr'}`
     navigator.clipboard.writeText(text)
     alert('로그가 클립보드에 복사되었습니다.')
   }
@@ -199,6 +259,43 @@ function JobLogModal({ job, onClose }) {
             <div className="rounded bg-black/30 p-3 border border-slate-800/60 text-slate-400">
               <p>설정: {job.config || '-'}</p>
               <p>인터벌: {job.interval || '-'}</p>
+            </div>
+          ) : null}
+
+          {job.training_audit || job.guard_report || job.serving_audit_report ? (
+            <div className="grid gap-4 xl:grid-cols-3">
+              <div className="rounded border border-slate-800 bg-black/30 p-3">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">학습 감사</p>
+                {job.training_audit?.promotion_guard ? (
+                  <GuardSummary guardReport={job.training_audit.promotion_guard} />
+                ) : (
+                  <p className="text-[10px] text-slate-500">학습 감사 정보가 없습니다.</p>
+                )}
+              </div>
+              <div className="rounded border border-slate-800 bg-black/30 p-3">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">승격 검증</p>
+                <GuardSummary guardReport={job.guard_report} />
+              </div>
+              <div className="rounded border border-slate-800 bg-black/30 p-3">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">서빙 감사</p>
+                {job.serving_audit_report ? (
+                  <div className="space-y-2">
+                    <AuditBadge status={job.serving_audit_report.status}>
+                      {job.serving_audit_report.status === 'healthy' ? '전체 정상' : '경고'}
+                    </AuditBadge>
+                    <p className="text-[10px] text-slate-400">차단 항목 {job.serving_audit_report.blocking_count ?? 0}건</p>
+                  </div>
+                ) : job.training_audit?.serving_audit ? (
+                  <div className="space-y-2">
+                    <AuditBadge status={job.training_audit.serving_audit.status}>
+                      {job.training_audit.serving_audit.status === 'healthy' ? '전체 정상' : '경고'}
+                    </AuditBadge>
+                    <p className="text-[10px] text-slate-400">차단 항목 {job.training_audit.serving_audit.blocking_count ?? 0}건</p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-500">서빙 감사 정보가 없습니다.</p>
+                )}
+              </div>
             </div>
           ) : null}
 
@@ -368,9 +465,388 @@ function formatTime(isoString) {
     const minute = pad(date.getMinutes())
     const second = pad(date.getSeconds())
     return `${month}-${day} ${hour}:${minute}:${second}`
-  } catch (e) {
+  } catch {
     return isoString
   }
+}
+
+const PROMOTION_CHECK_LABELS = {
+  dataset_quality: '데이터 품질',
+  valid_rows: '검증 행 수',
+  cv_roc_auc: '시계열 CV 구분력',
+  precision_at_top_10pct: '상위 10% 적중',
+  risk_cv_roc_auc: '하락 위험 구분력',
+  composite_excess_return_net: '복합 초과수익(순)',
+  composite_precision_at_top_n: '복합 상위후보 적중',
+  max_drawdown_net: '최대 낙폭',
+  vs_serving_cv_roc_auc_drop: '서빙 대비 CV 하락폭',
+  vs_serving_excess_return_drop: '서빙 대비 수익 하락폭',
+  vs_serving_precision_drop: '서빙 대비 적중 하락폭',
+  meaningful_improvement: '의미 있는 개선',
+}
+
+function getHealthTone(status) {
+  if (status === 'healthy') {
+    return 'border-emerald-500/40 bg-emerald-950/20 text-emerald-300'
+  }
+  if (status === 'warning') {
+    return 'border-amber-500/40 bg-amber-950/20 text-amber-300'
+  }
+  if (status === 'missing') {
+    return 'border-red-500/40 bg-red-950/20 text-red-300'
+  }
+  return 'border-slate-700 bg-slate-900/40 text-slate-400'
+}
+
+function getHealthLabel(status) {
+  if (status === 'healthy') return '정상'
+  if (status === 'warning') return '경고'
+  if (status === 'missing') return '누락'
+  return '확인 필요'
+}
+
+function getCheckLabel(name) {
+  return PROMOTION_CHECK_LABELS[name] || name
+}
+
+function formatCheckActual(value) {
+  if (value === null || value === undefined || value === '') return '-'
+  if (typeof value === 'object') return JSON.stringify(value)
+  const numberValue = Number(value)
+  if (Number.isNaN(numberValue)) return String(value)
+  return numberValue.toFixed(4)
+}
+
+function summarizeFailedChecks(guardReport, limit = 3) {
+  const failedChecks = guardReport?.failed_checks || []
+  if (!failedChecks.length) {
+    return []
+  }
+
+  return failedChecks.slice(0, limit).map((check) => {
+    const actual = formatCheckActual(check.actual)
+    const threshold = typeof check.threshold === 'object'
+      ? JSON.stringify(check.threshold)
+      : formatCheckActual(check.threshold)
+    const comparator = check.comparator ? ` ${check.comparator} ${threshold}` : ''
+    return `${getCheckLabel(check.name)}: ${actual}${comparator}`
+  })
+}
+
+function buildQualityDetail(dataset) {
+  if (!dataset) {
+    return '-'
+  }
+
+  const quality = dataset.quality
+  if (!quality) {
+    return `${dataset.rows ?? 0} rows\n${dataset.path || '-'}`
+  }
+
+  const issueSummary = quality.issues?.length ? quality.issues.join('\n') : '이상 징후 없음'
+  const staleText = quality.staleness_hours === null || quality.staleness_hours === undefined
+    ? '-'
+    : `${quality.staleness_hours}h`
+
+  return [
+    `${dataset.rows ?? quality.row_count ?? 0} rows / symbols ${quality.unique_symbol_count ?? 0}`,
+    `status: ${getHealthLabel(quality.status)} / stale: ${staleText}`,
+    `dup ${quality.duplicate_symbol_date_count ?? 0} / missing ${quality.missing_required_value_count ?? 0} / price ${quality.invalid_price_row_count ?? 0} / volume ${quality.invalid_volume_row_count ?? 0}`,
+    issueSummary,
+    dataset.path || quality.path || '-',
+  ].join('\n')
+}
+
+function AuditBadge({ status, children }) {
+  return (
+    <span className={`rounded border px-2 py-1 text-[10px] font-bold ${getHealthTone(status)}`}>
+      {children || getHealthLabel(status)}
+    </span>
+  )
+}
+
+function GuardSummary({ guardReport, compact = false }) {
+  if (!guardReport) {
+    return <p className="text-[10px] text-slate-500">승격 검증 정보가 아직 없습니다.</p>
+  }
+
+  const failedLines = summarizeFailedChecks(guardReport, compact ? 2 : 5)
+  const tooltipText = failedLines.length ? failedLines.join('\n') : '모든 승격 기준을 통과했습니다.'
+  const failedCount = guardReport.failed_checks?.length ?? 0
+
+  return (
+    <div className="space-y-1 inline-block" title={tooltipText}>
+      <div className="flex items-center gap-1 whitespace-nowrap">
+        <AuditBadge status={guardReport.passed ? 'healthy' : 'warning'}>
+          {guardReport.passed 
+            ? '승격 통과' 
+            : `차단 (실패 ${failedCount}건)`}
+        </AuditBadge>
+      </div>
+      {!compact && failedLines.length ? (
+        <div className="space-y-1 mt-1">
+          {failedLines.map((line) => (
+            <p key={line} className="break-all text-[10px] leading-4 text-amber-200">
+              {line}
+            </p>
+          ))}
+        </div>
+      ) : !compact ? (
+        <p className="text-[10px] text-emerald-300">모든 승격 기준을 통과했습니다.</p>
+      ) : null}
+    </div>
+  )
+}
+
+function ActiveSignalPanel({ title, data, loading, error, guardReport, onRefresh }) {
+  const overview = data?.overview
+  const filteredOverview = data?.filtered_overview
+  const performance = data?.performance
+  const predictions = data?.predictions || []
+
+  return (
+    <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Active Signals</p>
+          <h2 className="mt-1 text-xl font-bold text-white">{title}</h2>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="w-full rounded border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+        >
+          {loading ? '불러오는 중' : '신호 새로고침'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+          활성 신호를 불러오는 중입니다.
+        </div>
+      ) : error ? (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-800 bg-amber-950/20 p-4 text-sm leading-6 text-amber-200">
+            {error}
+          </div>
+          {guardReport ? (
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">차단 사유</p>
+              <GuardSummary guardReport={guardReport} compact />
+            </div>
+          ) : null}
+        </div>
+      ) : !data ? (
+        <div className="space-y-3">
+          <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+            아직 활성 신호 데이터가 없습니다.
+          </div>
+          {guardReport ? (
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">현재 검증 상태</p>
+              <GuardSummary guardReport={guardReport} compact />
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">승격 검증 요약</p>
+            <GuardSummary guardReport={guardReport} compact />
+          </div>
+
+          <div className="flex flex-wrap gap-2 text-[10px]">
+            <span className="rounded border border-fuchsia-500/30 px-2 py-1 font-bold text-fuchsia-300">SERVING {data.serving_version || '-'}</span>
+            <span className="rounded border border-emerald-500/30 px-2 py-1 font-bold text-emerald-300">PICK {data.recommended_version || '-'}</span>
+            <span className="rounded border border-slate-600 px-2 py-1 font-bold text-slate-300">LATEST {data.latest_version || '-'}</span>
+            <span className="rounded border border-ai-cyan/30 px-2 py-1 font-bold text-ai-cyan">{data.model_version || '-'}</span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
+              <p className="text-[10px] text-slate-500">전체 예측 수</p>
+              <p className="mt-1 font-mono text-lg font-bold text-white">{overview?.total_predictions ?? 0}</p>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
+              <p className="text-[10px] text-slate-500">LONG / HOLD / SHORT</p>
+              <p className="mt-1 font-mono text-sm font-bold text-white">
+                {overview?.long_count ?? 0} / {overview?.hold_count ?? 0} / {overview?.short_count ?? 0}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
+              <p className="text-[10px] text-slate-500">평균 상승 확률</p>
+              <p className="mt-1 font-mono text-lg font-bold text-emerald-300">{formatPercent(filteredOverview?.avg_up_probability)}</p>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
+              <p className="text-[10px] text-slate-500">평균 하락 위험</p>
+              <p className="mt-1 font-mono text-lg font-bold text-amber-300">{formatPercent(filteredOverview?.avg_risk_probability)}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">성능 스냅샷</p>
+              <div className="mt-3 grid gap-2 text-xs text-slate-300">
+                <p>시계열 CV 구분력: <span className="font-mono text-white">{formatMetric(performance?.cv_roc_auc)}</span></p>
+                <p>상위 10% 적중: <span className="font-mono text-white">{formatMetric(performance?.precision_at_top_10pct)}</span></p>
+                <p>하락 구분력: <span className="font-mono text-white">{formatMetric(performance?.risk_cv_roc_auc)}</span></p>
+                <p>복합 초과수익(순): <span className="font-mono text-ai-cyan">{formatReturnPercent(performance?.composite_excess_return_net)}</span></p>
+                <p>복합 적중률: <span className="font-mono text-white">{formatMetric(performance?.composite_precision_at_top_n)}</span></p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">현재 필터 결과</p>
+              <div className="mt-3 grid gap-2 text-xs text-slate-300">
+                <p>표시 개수: <span className="font-mono text-white">{predictions.length}</span></p>
+                <p>최대 점수: <span className="font-mono text-white">{formatMetric(filteredOverview?.max_signal_score)}</span></p>
+                <p>최소 점수: <span className="font-mono text-white">{formatMetric(filteredOverview?.min_signal_score)}</span></p>
+                <p>평균 점수: <span className="font-mono text-white">{formatMetric(filteredOverview?.avg_signal_score)}</span></p>
+                <p>마지막 예측 시각: <span className="font-mono break-all text-white">{filteredOverview?.latest_prediction_time || overview?.latest_prediction_time || '-'}</span></p>
+              </div>
+            </div>
+          </div>
+
+          {predictions.length ? (
+            <div className="grid gap-2">
+              {predictions.slice(0, 8).map((row) => (
+                <div
+                  key={`${data.asset_type}-${row.symbol}-${row.date}`}
+                  className="grid gap-3 rounded-lg border border-slate-800 bg-[#0f172a] p-3 sm:grid-cols-[1fr_auto_auto_auto]"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="break-words text-sm font-bold text-white">{row.display_name || row.symbol}</p>
+                      {row.position ? (
+                        <span className={`rounded px-1.5 py-0.5 text-[9px] font-black tracking-widest ${
+                          row.position === 'SHORT'
+                            ? 'bg-rose-950/80 text-rose-300 border border-rose-700/60'
+                            : row.position === 'LONG'
+                              ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
+                              : 'bg-slate-900/80 text-slate-300 border border-slate-700/60'
+                        }`}>
+                          {row.position}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      <span className="rounded border border-slate-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                        {row.symbol}
+                      </span>
+                      {row.market ? (
+                        <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">
+                          {row.market}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 break-words text-xs text-slate-500">{row.date}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">상승 확률</p>
+                    <p className="font-mono text-sm text-emerald-300">{formatPercent(row.up_probability)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">하락 위험</p>
+                    <p className="font-mono text-sm text-amber-300">{formatPercent(row.risk_probability)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">복합 점수</p>
+                    <p className="font-mono text-sm text-ai-cyan">{formatMetric(row.signal_score)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+              현재 필터에 맞는 활성 신호가 없습니다.
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ServingAuditPanel({ data, loading, error, onRefresh }) {
+  return (
+    <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Serving Audit</p>
+          <h2 className="mt-1 text-xl font-bold text-white">운영 모델 감사</h2>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="w-full rounded border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+        >
+          {loading ? '불러오는 중' : '감사 결과 새로고침'}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+          운영 감사 정보를 불러오는 중입니다.
+        </div>
+      ) : error ? (
+        <div className="rounded-lg border border-red-800 bg-red-950/30 p-4 text-sm leading-6 text-red-300">
+          {error}
+        </div>
+      ) : !data ? (
+        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+          아직 운영 감사 정보가 없습니다.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+            <AuditBadge status={data.status}>{data.status === 'healthy' ? '전체 정상' : '즉시 확인 필요'}</AuditBadge>
+            <span className="text-sm text-slate-300">차단 항목 {data.blocking_count ?? 0}건</span>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-2">
+            {Object.entries(data.assets || {}).map(([assetKey, report]) => (
+              <div key={assetKey} className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold text-white">{report.asset_type === 'STOCK' ? '주식 모델' : '코인 모델'}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-400">{report.message}</p>
+                  </div>
+                  <AuditBadge status={report.status} />
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                  <span className="rounded border border-fuchsia-500/30 px-2 py-1 font-bold text-fuchsia-300">SERVING {report.serving_version || '-'}</span>
+                  <span className="rounded border border-emerald-500/30 px-2 py-1 font-bold text-emerald-300">PICK {report.recommended_version || '-'}</span>
+                  <span className="rounded border border-slate-600 px-2 py-1 font-bold text-slate-300">LATEST {report.latest_version || '-'}</span>
+                </div>
+
+                {report.actions?.length ? (
+                  <div className="mt-3 space-y-1">
+                    {report.actions.map((action) => (
+                      <p key={action} className="text-[10px] leading-5 text-slate-300">{action}</p>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded border border-slate-800 bg-black/10 p-3">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">현재 서빙 기준</p>
+                    <GuardSummary guardReport={report.current_guard} compact />
+                  </div>
+                  <div className="rounded border border-slate-800 bg-black/10 p-3">
+                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">추천 후보 기준</p>
+                    <GuardSummary guardReport={report.recommended_guard} compact />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
@@ -407,6 +883,7 @@ function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
             <th className="px-3 py-2">유형</th>
             <th className="px-3 py-2">상태</th>
             <th className="px-3 py-2">설정</th>
+            <th className="px-3 py-2">검증</th>
             <th className="px-3 py-2">시작</th>
             <th className="px-3 py-2">종료</th>
             <th className="px-3 py-2 text-right">로그</th>
@@ -421,7 +898,7 @@ function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
                 </p>
                 {job.output ? (
                   <p className="mt-1 truncate font-mono text-[10px] text-slate-500 max-w-[150px]" title={job.output}>
-                    {job.output}
+                    {formatPath(job.output)}
                   </p>
                 ) : null}
                 {job.failure_count ? (
@@ -442,8 +919,28 @@ function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
               </td>
               <td className="px-3 py-2">
                 <p className="truncate font-mono text-[10px] text-slate-400 max-w-[150px]" title={job.config || job.interval || '-'}>
-                  {job.config || job.interval || '-'}
+                  {formatPath(job.config) || job.interval || '-'}
                 </p>
+              </td>
+              <td className="px-3 py-2">
+                <div className="min-w-[180px] space-y-1">
+                  {job.training_audit?.promotion_guard ? (
+                    <GuardSummary guardReport={job.training_audit.promotion_guard} compact />
+                  ) : job.guard_report ? (
+                    <GuardSummary guardReport={job.guard_report} compact />
+                  ) : job.serving_audit_report ? (
+                    <div className="space-y-1">
+                      <AuditBadge status={job.serving_audit_report.status}>
+                        {job.serving_audit_report.status === 'healthy' ? '서빙 정상' : '서빙 경고'}
+                      </AuditBadge>
+                      <p className="text-[10px] text-slate-500">
+                        차단 {job.serving_audit_report.blocking_count ?? 0}건
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-500">감사 정보 없음</p>
+                  )}
+                </div>
               </td>
               <td className="px-3 py-2 font-mono text-[10px] text-slate-400 whitespace-nowrap">{formatTime(job.started_at)}</td>
               <td className="px-3 py-2 font-mono text-[10px] text-slate-400 whitespace-nowrap">{formatTime(job.finished_at)}</td>
@@ -464,7 +961,7 @@ function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
   )
 }
 
-function RegistryPanel({ title, rows = [], loading, error, onActivate, activatingKey }) {
+function RegistryPanel({ title, rows = [], loading, error, onActivate, activatingKey, promotionChecks = {}, promotionChecksLoading = false }) {
   return (
     <div className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
       <div className="mb-4">
@@ -493,12 +990,16 @@ function RegistryPanel({ title, rows = [], loading, error, onActivate, activatin
                 <th className="px-3 py-2">CV 구분력</th>
                 <th className="px-3 py-2">상위 10%</th>
                 <th className="px-3 py-2">상태</th>
+                <th className="px-3 py-2">승격 검증</th>
                 <th className="px-3 py-2">작업</th>
                 <th className="px-3 py-2">경로</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {rows.map((row) => {
+                const guardReport = promotionChecks[`${row.asset_type}:${row.model_version}`]
+
+                return (
                 <tr key={`${row.asset_type}-${row.model_version}`} className="border-t border-slate-800 align-top">
                   <td className="px-3 py-2">
                     <p className="font-mono text-white">{row.model_version}</p>
@@ -523,6 +1024,15 @@ function RegistryPanel({ title, rows = [], loading, error, onActivate, activatin
                     </div>
                   </td>
                   <td className="px-3 py-2">
+                    {guardReport ? (
+                      <GuardSummary guardReport={guardReport} compact />
+                    ) : promotionChecksLoading ? (
+                      <p className="text-[10px] text-slate-500">검증 중...</p>
+                    ) : (
+                      <p className="text-[10px] text-slate-500">검증 정보 없음</p>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
                     <button
                       type="button"
                       onClick={() => onActivate?.(row)}
@@ -540,11 +1050,13 @@ function RegistryPanel({ title, rows = [], loading, error, onActivate, activatin
                           : '서비스 반영'}
                     </button>
                   </td>
-                  <td className="px-3 py-2 break-all font-mono text-[10px] text-slate-500">
-                    {row.summary_path || row.metrics_path || '-'}
+                  <td className="px-3 py-2 font-mono text-[10px] text-slate-500">
+                    <div className="max-w-[200px] truncate block" title={row.summary_path || row.metrics_path}>
+                      {formatPath(row.summary_path || row.metrics_path)}
+                    </div>
                   </td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>
@@ -564,7 +1076,7 @@ function ReadinessItem({ label, status, detail }) {
           {status ? '준비 완료' : '확인 필요'}
         </span>
       </div>
-      <p className="mt-2 break-all whitespace-pre-line font-mono text-[10px] leading-5 text-slate-500">{detail}</p>
+      <p className="mt-2 break-all whitespace-pre-line font-mono text-[10px] leading-5 text-slate-500">{formatPathInText(detail)}</p>
     </div>
   )
 }
@@ -610,13 +1122,13 @@ function ReadinessPanel({ data, loading, error, onRefresh }) {
           />
           <ReadinessItem
             label="주식 원천 CSV"
-            status={data.datasets?.stock_raw?.exists}
-            detail={`${data.datasets?.stock_raw?.rows ?? 0} rows\n${data.datasets?.stock_raw?.path || '-'}`}
+            status={data.datasets?.stock_raw?.quality?.status === 'healthy'}
+            detail={buildQualityDetail(data.datasets?.stock_raw)}
           />
           <ReadinessItem
             label="코인 원천 CSV"
-            status={data.datasets?.crypto_raw?.exists}
-            detail={`${data.datasets?.crypto_raw?.rows ?? 0} rows\n${data.datasets?.crypto_raw?.path || '-'}`}
+            status={data.datasets?.crypto_raw?.quality?.status === 'healthy'}
+            detail={buildQualityDetail(data.datasets?.crypto_raw)}
           />
           <ReadinessItem
             label="매크로 지표"
@@ -733,7 +1245,9 @@ function ReportHistoryPanel({ reports = [], loading, error, onRefresh }) {
           {reports.map((report) => (
             <div key={report.path} className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
               <p className="break-all font-mono text-sm text-white">{report.name}</p>
-              <p className="mt-1 break-all font-mono text-[10px] text-slate-500">{report.path}</p>
+              <p className="mt-1 font-mono text-[10px] text-slate-500 truncate block" title={report.path}>
+                {formatPath(report.path)}
+              </p>
               <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-400">
                 <span>{report.updated_at}</span>
                 <span>{report.size_bytes} bytes</span>
@@ -842,17 +1356,17 @@ function VersionComparisonTable({ versions = [], selectedVersion, recommendedVer
 }
 
 function ModelResultCard({ title, result }) {
-  const versions = result?.versions || []
-  const [selectedVersion, setSelectedVersion] = useState(result?.selected_version || '')
-
-  useEffect(() => {
-    setSelectedVersion(result?.serving_version || result?.recommended_version || result?.selected_version || '')
-  }, [result?.serving_version, result?.recommended_version, result?.selected_version])
+  const versions = useMemo(() => result?.versions || [], [result?.versions])
+  const defaultSelectedVersion = result?.serving_version || result?.recommended_version || result?.selected_version || ''
+  const [selectedVersion, setSelectedVersion] = useState(defaultSelectedVersion)
+  const resolvedSelectedVersion = versions.some((item) => item.version === selectedVersion)
+    ? selectedVersion
+    : defaultSelectedVersion
 
   const activeResult = useMemo(() => {
     if (!versions.length) return result
-    return versions.find((item) => item.version === selectedVersion) || result
-  }, [result, selectedVersion, versions])
+    return versions.find((item) => item.version === resolvedSelectedVersion) || result
+  }, [result, resolvedSelectedVersion, versions])
 
   const metrics = activeResult?.metrics
   const riskMetrics = activeResult?.risk_metrics
@@ -1054,7 +1568,7 @@ function ModelResultCard({ title, result }) {
 
       <VersionComparisonTable
         versions={versions}
-        selectedVersion={selectedVersion}
+        selectedVersion={resolvedSelectedVersion}
         recommendedVersion={result?.recommended_version}
         latestVersion={result?.latest_version}
         servingVersion={result?.serving_version}
@@ -1140,10 +1654,15 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
   const [jobHistoryLoading, setJobHistoryLoading] = useState(false)
   const [jobHistoryError, setJobHistoryError] = useState('')
   const [registryRows, setRegistryRows] = useState({ stock: [], crypto: [] })
+  const [promotionChecks, setPromotionChecks] = useState({})
+  const [promotionChecksLoading, setPromotionChecksLoading] = useState(false)
   const [registryLoading, setRegistryLoading] = useState(false)
   const [registryError, setRegistryError] = useState('')
   const [registryMessage, setRegistryMessage] = useState('')
   const [activatingRegistryKey, setActivatingRegistryKey] = useState('')
+  const [servingAudit, setServingAudit] = useState(null)
+  const [servingAuditLoading, setServingAuditLoading] = useState(false)
+  const [servingAuditError, setServingAuditError] = useState('')
   const [readiness, setReadiness] = useState(null)
   const [readinessLoading, setReadinessLoading] = useState(false)
   const [readinessError, setReadinessError] = useState('')
@@ -1152,6 +1671,9 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
   const [reportHistory, setReportHistory] = useState([])
   const [reportHistoryLoading, setReportHistoryLoading] = useState(false)
   const [reportHistoryError, setReportHistoryError] = useState('')
+  const [activeSignals, setActiveSignals] = useState({ stock: null, crypto: null })
+  const [activeSignalsLoading, setActiveSignalsLoading] = useState({ stock: false, crypto: false })
+  const [activeSignalsError, setActiveSignalsError] = useState({ stock: '', crypto: '' })
   const [trainingLoadingKey, setTrainingLoadingKey] = useState('')
   const [trainingMessage, setTrainingMessage] = useState('')
   const [automationLoadingKey, setAutomationLoadingKey] = useState('')
@@ -1261,11 +1783,138 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
         setRegistryError(payload.message || '레지스트리 조회에 실패했습니다.')
         return
       }
-      setRegistryRows(payload.data || { stock: [], crypto: [] })
+      const nextRows = payload.data || { stock: [], crypto: [] }
+      setRegistryRows(nextRows)
+      await loadPromotionChecks(nextRows, session.access_token)
     } catch (requestError) {
       setRegistryError(`서버 통신 실패: ${requestError.message}`)
     } finally {
       setRegistryLoading(false)
+    }
+  }
+
+  const loadPromotionChecks = async (rowsByAsset, accessToken) => {
+    const allRows = [...(rowsByAsset?.stock || []), ...(rowsByAsset?.crypto || [])]
+    if (!allRows.length) {
+      setPromotionChecks({})
+      return
+    }
+
+    setPromotionChecksLoading(true)
+    try {
+      let token = accessToken
+      if (!token) {
+        const { data: { session } } = await supabase.auth.getSession()
+        token = session?.access_token
+      }
+
+      if (!token) {
+        setPromotionChecks({})
+        return
+      }
+
+      const entries = await Promise.all(
+        allRows.map(async (row) => {
+          try {
+            const params = new URLSearchParams({
+              asset_type: row.asset_type,
+              model_version: row.model_version,
+            })
+            const response = await fetch(`${API_BASE_URL}/api/ml/registry/promotion-check?${params.toString()}`, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+              },
+            })
+            const payload = await response.json()
+            if (!response.ok || !payload.success) {
+              return [`${row.asset_type}:${row.model_version}`, null]
+            }
+            return [`${row.asset_type}:${row.model_version}`, payload.data]
+          } catch {
+            return [`${row.asset_type}:${row.model_version}`, null]
+          }
+        }),
+      )
+
+      setPromotionChecks(Object.fromEntries(entries.filter((entry) => entry[1])))
+    } finally {
+      setPromotionChecksLoading(false)
+    }
+  }
+
+  const loadServingAudit = async () => {
+    if (!isLoggedIn) return
+
+    setServingAuditLoading(true)
+    setServingAuditError('')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        setServingAuditError('로그인 세션이 만료되었습니다.')
+        return
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/ml/serving-audit`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+      })
+      const payload = await response.json()
+      if (!response.ok || !payload.success) {
+        setServingAuditError(payload.message || '서빙 감사 조회에 실패했습니다.')
+        return
+      }
+      setServingAudit(payload.data)
+    } catch (requestError) {
+      setServingAuditError(`서버 통신 실패: ${requestError.message}`)
+    } finally {
+      setServingAuditLoading(false)
+    }
+  }
+
+  const loadActiveSignals = async (assetType) => {
+    if (!isLoggedIn) return
+
+    const assetKey = assetType === 'STOCK' ? 'stock' : 'crypto'
+    setActiveSignalsLoading((prev) => ({ ...prev, [assetKey]: true }))
+    setActiveSignalsError((prev) => ({ ...prev, [assetKey]: '' }))
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        setActiveSignalsError((prev) => ({ ...prev, [assetKey]: '로그인 세션이 만료되었습니다.' }))
+        return
+      }
+
+      const params = new URLSearchParams({
+        asset_type: assetType,
+        limit: '8',
+      })
+      const response = await fetch(`${API_BASE_URL}/api/ml/predictions/active?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+      })
+      const payload = await response.json()
+      if (!response.ok || !payload.success) {
+        setActiveSignals((prev) => ({ ...prev, [assetKey]: null }))
+        setActiveSignalsError((prev) => ({
+          ...prev,
+          [assetKey]: response.status === 404
+            ? '현재 안전 기준을 통과한 활성 신호가 없어 차단된 상태입니다.'
+            : (payload.message || '활성 신호 조회에 실패했습니다.'),
+        }))
+        return
+      }
+
+      setActiveSignals((prev) => ({ ...prev, [assetKey]: payload.data }))
+    } catch (requestError) {
+      setActiveSignalsError((prev) => ({ ...prev, [assetKey]: `서버 통신 실패: ${requestError.message}` }))
+    } finally {
+      setActiveSignalsLoading((prev) => ({ ...prev, [assetKey]: false }))
     }
   }
 
@@ -1384,7 +2033,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
         return
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/ml/registry/activate`, {
+      let response = await fetch(`${API_BASE_URL}/api/ml/registry/activate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1393,17 +2042,50 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
         body: JSON.stringify({
           asset_type: row.asset_type,
           model_version: row.model_version,
+          force: false,
         }),
       })
-      const payload = await response.json()
+      let payload = await response.json()
+
+      // 승격 기준 미달로 차단된 경우 (409)
+      if (response.status === 409 && payload.success === false) {
+        const failedSummary = summarizeFailedChecks(payload.data, 4)
+        const confirmMsg = `${payload.message || '승격 기준 미달로 차단되었습니다.'}\n\n[실패 항목]\n${failedSummary.join('\n')}\n\n⚠️ 위험을 인지하고 강제로 서비스에 반영하시겠습니까?`
+        
+        if (window.confirm(confirmMsg)) {
+          response = await fetch(`${API_BASE_URL}/api/ml/registry/activate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              asset_type: row.asset_type,
+              model_version: row.model_version,
+              force: true,
+            }),
+          })
+          payload = await response.json()
+        } else {
+          return
+        }
+      }
+
       if (!response.ok || !payload.success) {
-        setRegistryMessage(payload.message || '서비스 반영에 실패했습니다.')
+        const failedSummary = summarizeFailedChecks(payload.data, 4)
+        setRegistryMessage(
+          failedSummary.length
+            ? `${payload.message || '서비스 반영에 실패했습니다.'}\n${failedSummary.join('\n')}`
+            : (payload.message || '서비스 반영에 실패했습니다.')
+        )
         return
       }
 
       setRegistryMessage(payload.message || '서비스 반영이 완료되었습니다.')
       await loadRegistry()
       await loadModelResults()
+      await loadServingAudit()
+      await loadActiveSignals(row.asset_type)
       await loadReadiness()
     } catch (requestError) {
       setRegistryMessage(`서버 통신 실패: ${requestError.message}`)
@@ -1412,13 +2094,32 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
     }
   }
 
-  useEffect(() => {
+  const refreshAdminPanels = useEffectEvent(() => {
     loadModelResults()
     loadJobHistory()
     loadRegistry()
+    loadServingAudit()
     loadReadiness()
     loadReportHistory()
+    loadActiveSignals('STOCK')
+    loadActiveSignals('CRYPTO')
+  })
+
+  useEffect(() => {
+    if (!isLoggedIn) return
+    const timer = window.setTimeout(() => {
+      refreshAdminPanels()
+    }, 0)
+
+    return () => window.clearTimeout(timer)
   }, [isLoggedIn])
+
+  const stockActiveGuardReport = activeSignals.stock?.model_version
+    ? promotionChecks[`STOCK:${activeSignals.stock.model_version}`]
+    : null
+  const cryptoActiveGuardReport = activeSignals.crypto?.model_version
+    ? promotionChecks[`CRYPTO:${activeSignals.crypto.model_version}`]
+    : null
 
   const handleRunTraining = async (preset) => {
     if (!isLoggedIn) {
@@ -1458,12 +2159,14 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
       const reportPath = payload?.data?.report?.timestamped_output || payload?.data?.report?.latest_output
       setTrainingMessage(
         reportPath
-          ? `${preset.label} 작업이 완료되었습니다. 실험 리포트도 갱신되었습니다: ${reportPath}`
+          ? `${preset.label} 작업이 완료되었습니다. 실험 리포트도 갱신되었습니다: ${formatPath(reportPath)}`
           : `${preset.label} 작업이 완료되었습니다.`
       )
       await loadModelResults()
       await loadJobHistory()
       await loadRegistry()
+      await loadServingAudit()
+      await loadActiveSignals(preset.config.includes('crypto') ? 'CRYPTO' : 'STOCK')
       await loadReadiness()
       await loadReportHistory()
     } catch (requestError) {
@@ -1522,6 +2225,8 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
       setResult(payload)
       loadModelResults()
       loadRegistry()
+      loadServingAudit()
+      loadActiveSignals(form.assetType)
       loadReadiness()
     } catch (requestError) {
       setError(`서버 통신 실패: ${requestError.message}`)
@@ -1564,12 +2269,14 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
       const reportPath = payload?.data?.report?.timestamped_output || payload?.data?.report?.latest_output
       setAutomationMessage(
         reportPath
-          ? `${preset.label} 작업이 완료되었습니다. 실험 리포트도 갱신되었습니다: ${reportPath}`
+          ? `${preset.label} 작업이 완료되었습니다. 실험 리포트도 갱신되었습니다: ${formatPath(reportPath)}`
           : `${preset.label} 작업이 완료되었습니다.`
       )
       await loadModelResults()
       await loadJobHistory()
       await loadRegistry()
+      await loadServingAudit()
+      await loadActiveSignals(preset.key.includes('crypto') ? 'CRYPTO' : 'STOCK')
       await loadReadiness()
       await loadReportHistory()
     } catch (requestError) {
@@ -1621,6 +2328,8 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
       await loadModelResults()
       await loadJobHistory()
       await loadRegistry()
+      await loadServingAudit()
+      await loadActiveSignals(preset.config.includes('crypto') ? 'CRYPTO' : 'STOCK')
       await loadReadiness()
       await loadReportHistory()
     } catch (requestError) {
@@ -1846,13 +2555,13 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
             </div>
           ) : null}
 
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-6 grid-cols-1">
             <ModelResultCard title="주식 모델" result={modelResults?.stock} />
             <ModelResultCard title="코인 모델" result={modelResults?.crypto} />
           </div>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-2">
+        <section className="grid gap-6 grid-cols-1">
           <RegistryPanel
             title="주식 레지스트리 상태"
             rows={registryRows.stock}
@@ -1860,6 +2569,8 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
             error={registryError}
             onActivate={handleActivateRegistry}
             activatingKey={activatingRegistryKey}
+            promotionChecks={promotionChecks}
+            promotionChecksLoading={promotionChecksLoading}
           />
           <RegistryPanel
             title="코인 레지스트리 상태"
@@ -1868,14 +2579,42 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
             error={registryError}
             onActivate={handleActivateRegistry}
             activatingKey={activatingRegistryKey}
+            promotionChecks={promotionChecks}
+            promotionChecksLoading={promotionChecksLoading}
           />
         </section>
 
         {registryMessage ? (
-          <section className="rounded-lg border border-ai-cyan/30 bg-ai-cyan/5 p-4 text-sm text-ai-cyan">
+          <section className="rounded-lg border border-ai-cyan/30 bg-ai-cyan/5 p-4 text-sm whitespace-pre-line text-ai-cyan">
             {registryMessage}
           </section>
         ) : null}
+
+        <ServingAuditPanel
+          data={servingAudit}
+          loading={servingAuditLoading}
+          error={servingAuditError}
+          onRefresh={loadServingAudit}
+        />
+
+        <section className="grid gap-6 grid-cols-1">
+          <ActiveSignalPanel
+            title="주식 활성 신호"
+            data={activeSignals.stock}
+            loading={activeSignalsLoading.stock}
+            error={activeSignalsError.stock}
+            guardReport={stockActiveGuardReport}
+            onRefresh={() => loadActiveSignals('STOCK')}
+          />
+          <ActiveSignalPanel
+            title="코인 활성 신호"
+            data={activeSignals.crypto}
+            loading={activeSignalsLoading.crypto}
+            error={activeSignalsError.crypto}
+            guardReport={cryptoActiveGuardReport}
+            onRefresh={() => loadActiveSignals('CRYPTO')}
+          />
+        </section>
 
         <ReadinessPanel
           data={readiness}
@@ -1899,7 +2638,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
           onRefresh={loadReportHistory}
         />
 
-        <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <section className="grid gap-6 grid-cols-1">
           <div className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -1920,7 +2659,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
                   <p className="text-sm font-bold text-white">
                     {trainingLoadingKey === preset.key ? '실행 중...' : preset.label}
                   </p>
-                  <p className="mt-1 break-all font-mono text-[10px] text-slate-500">{preset.config}</p>
+                  <p className="mt-1 break-all font-mono text-[10px] text-slate-500">{formatPath(preset.config)}</p>
                 </button>
               ))}
             </div>
@@ -1945,10 +2684,20 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
                     type="button"
                     onClick={() => handleRunFullAutomation(preset)}
                     disabled={automationLoadingKey === preset.key || !isLoggedIn}
-                    className="rounded border border-slate-700 bg-[#0f172a] px-4 py-3 text-left transition hover:border-ai-cyan disabled:cursor-not-allowed disabled:opacity-50"
+                    className={[
+                      'rounded border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50',
+                      preset.isNew
+                        ? 'border-ai-cyan/40 bg-ai-cyan/5 hover:border-ai-cyan hover:bg-ai-cyan/10'
+                        : 'border-slate-700 bg-[#0f172a] hover:border-ai-cyan',
+                    ].join(' ')}
                   >
-                    <p className="text-sm font-bold text-white">
+                    <p className="flex items-center gap-2 text-sm font-bold text-white">
                       {automationLoadingKey === preset.key ? '실행 중...' : preset.label}
+                      {preset.isNew && (
+                        <span className="rounded bg-ai-cyan px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#0a0f1e]">
+                          NEW
+                        </span>
+                      )}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-slate-400">{preset.summary}</p>
                   </button>
@@ -2001,13 +2750,23 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout }) {
                     type="button"
                     onClick={() => handleRunTuning(preset)}
                     disabled={tuningLoadingKey === preset.key || !isLoggedIn}
-                    className="rounded border border-slate-700 bg-[#0f172a] px-4 py-3 text-left transition hover:border-ai-cyan disabled:cursor-not-allowed disabled:opacity-50"
+                    className={[
+                      'rounded border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50',
+                      preset.isNew
+                        ? 'border-ai-cyan/40 bg-ai-cyan/5 hover:border-ai-cyan hover:bg-ai-cyan/10'
+                        : 'border-slate-700 bg-[#0f172a] hover:border-ai-cyan',
+                    ].join(' ')}
                   >
-                    <p className="text-sm font-bold text-white">
+                    <p className="flex items-center gap-2 text-sm font-bold text-white">
                       {tuningLoadingKey === preset.key ? '튜닝 진행 중...' : preset.label}
+                      {preset.isNew && (
+                        <span className="rounded bg-ai-cyan px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#0a0f1e]">
+                          NEW
+                        </span>
+                      )}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-slate-400">{preset.summary}</p>
-                    <p className="mt-1 font-mono text-[9px] text-slate-500 break-all">{preset.config}</p>
+                    <p className="mt-1 font-mono text-[9px] text-slate-500 break-all">{formatPath(preset.config)}</p>
                   </button>
                 ))}
               </div>

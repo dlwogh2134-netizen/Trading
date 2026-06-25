@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { fetchNewsArticles, ensureNewsSummaries } from '../lib/supabaseClient.js'
 import { WATCHLIST_MOCK, WATCH_CHARTS_MOCK } from '../dashboardConstants.js'
 import { MiniSparkline, Rate, SectionHeader } from '../components/DashboardComponents.jsx'
@@ -14,6 +15,8 @@ export default function WatchlistTab() {
 
   const selectedItem = WATCHLIST_MOCK.find((item) => item.id === selectedId) || WATCHLIST_MOCK[0]
   const useSlider = WATCHLIST_MOCK.length >= 5
+
+  const assetType = selectedItem?.account?.includes('주식') ? 'STOCK' : 'CRYPTO'
 
   useEffect(() => {
     if (!selectedItem) return
@@ -122,7 +125,17 @@ export default function WatchlistTab() {
       </section>
 
       <section className="bg-slate-surface border border-slate-700/80 rounded-lg p-5">
-        <SectionHeader title="관심 종목의 차트" action={selectedItem?.id} />
+        <div className="flex justify-between items-center mb-3">
+          <SectionHeader title="관심 종목의 차트" action={selectedItem?.id} />
+          {selectedItem && (
+            <Link
+              to={`/asset/${assetType}/${selectedItem.id}`}
+              className="rounded bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3 py-1.5 transition active:scale-[0.98]"
+            >
+              수동 매매 터미널 이동 →
+            </Link>
+          )}
+        </div>
         <div className="rounded-lg border border-slate-800 bg-[#0f172a]/70 p-4">
           <MiniSparkline values={WATCH_CHARTS_MOCK[selectedItem?.id]} />
         </div>

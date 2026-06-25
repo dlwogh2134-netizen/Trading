@@ -19,6 +19,7 @@ from backend.routes.home import home_bp
 from backend.routes.keys import keys_bp
 from backend.routes.ml import ml_bp
 from backend.routes.news import news_bp
+from backend.routes.trade import trade_bp
 
 # 환경 변수 로드
 load_dotenv()
@@ -69,17 +70,19 @@ app.register_blueprint(home_bp)
 app.register_blueprint(keys_bp)
 app.register_blueprint(ml_bp)
 app.register_blueprint(news_bp)
+app.register_blueprint(trade_bp)
 
 if __name__ == "__main__":
-    # 백그라운드 스케줄러 시작
-    start_news_ingest_scheduler(
-        news_ingest_service=news_ingest_service,
-        news_ingest_enabled=NEWS_INGEST_ENABLED,
-        news_ingest_interval_seconds=NEWS_INGEST_INTERVAL_SECONDS
-    )
-    start_ml_automation_scheduler(
-        ml_automation_enabled=ML_AUTOMATION_ENABLED,
-        supabase_service_role_key=SUPABASE_SERVICE_ROLE_KEY
-    )
+    # Flask 디버그 모드 리로더에 의한 스케줄러 이중 기동 방지
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        start_news_ingest_scheduler(
+            news_ingest_service=news_ingest_service,
+            news_ingest_enabled=NEWS_INGEST_ENABLED,
+            news_ingest_interval_seconds=NEWS_INGEST_INTERVAL_SECONDS
+        )
+        start_ml_automation_scheduler(
+            ml_automation_enabled=ML_AUTOMATION_ENABLED,
+            supabase_service_role_key=SUPABASE_SERVICE_ROLE_KEY
+        )
     # Flask 서버 구동
     app.run(host="0.0.0.0", port=5050, debug=True)
