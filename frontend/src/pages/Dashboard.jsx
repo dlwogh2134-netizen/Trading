@@ -9,7 +9,7 @@ import WatchlistTab from './WatchlistTab.jsx'
 import AssetsTab from './AssetsTab.jsx'
 import TradeHistoryTab from './TradeHistoryTab.jsx'
 
-export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userProfile, setUserProfile }) {
+export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userProfile }) {
   const [inputs, setInputs] = useState({
     appkey: '',
     appsecret: '',
@@ -145,6 +145,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
       return [
         { id: 'domestic', label: '국내 주식', value: 0, color: 'bg-institutional-blue' },
         { id: 'overseas', label: '해외 주식', value: 0, color: 'bg-ai-cyan' },
+        { id: 'coin', label: '코인', value: 0, color: 'bg-amber-400' },
         { id: 'cash', label: '현금', value: 100, color: 'bg-slate-500' }
       ]
     }
@@ -154,18 +155,25 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
       return [
         { id: 'domestic', label: '국내 주식', value: 0, color: 'bg-institutional-blue' },
         { id: 'overseas', label: '해외 주식', value: 0, color: 'bg-ai-cyan' },
+        { id: 'coin', label: '코인', value: 0, color: 'bg-amber-400' },
         { id: 'cash', label: '현금', value: 100, color: 'bg-slate-500' }
       ]
     }
 
     let domesticValue = 0
     let overseasValue = 0
+    let coinValue = 0
 
     balance.holdings.forEach(stock => {
-      // 심볼에 영문 알파벳이 있으면 해외 주식으로 대략적 분류
+      const symbol = String(stock.symbol || '').toUpperCase()
+      const accountType = String(stock.account || stock.account_type || stock.asset_type || stock.exchange || '').toUpperCase()
+      const isCoin = /BTC|ETH|XRP|SOL|USDT|KRW|COINONE|BINANCE|CRYPTO|코인/.test(`${symbol} ${accountType}`)
       const isOverseas = /[a-zA-Z]/.test(stock.symbol)
       const stockEval = stock.current_price * stock.qty
-      if (isOverseas) {
+
+      if (isCoin) {
+        coinValue += stockEval
+      } else if (isOverseas) {
         overseasValue += stockEval
       } else {
         domesticValue += stockEval
@@ -174,11 +182,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
     const domesticPercent = Math.round((domesticValue / totalEval) * 100)
     const overseasPercent = Math.round((overseasValue / totalEval) * 100)
-    const cashPercent = 100 - domesticPercent - overseasPercent
+    const coinPercent = Math.round((coinValue / totalEval) * 100)
+    const cashPercent = 100 - domesticPercent - overseasPercent - coinPercent
 
     return [
       { id: 'domestic', label: '국내 주식', value: domesticPercent, color: 'bg-blue-600' },
       { id: 'overseas', label: '해외 주식', value: overseasPercent, color: 'bg-ai-cyan' },
+      { id: 'coin', label: '코인', value: coinPercent, color: 'bg-amber-400' },
       { id: 'cash', label: '현금', value: Math.max(0, cashPercent), color: 'bg-slate-500' }
     ]
   }
@@ -564,7 +574,6 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
               userEmail={userEmail}
               handleLogout={handleLogout}
               userProfile={userProfile}
-              setUserProfile={setUserProfile}
               hideHeader={true}
             />
           )}
