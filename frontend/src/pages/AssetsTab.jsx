@@ -3,23 +3,37 @@ import { ASSET_ACCOUNTS_MOCK, FALLBACK_HOLDINGS } from '../dashboardConstants.js
 import { Rate, SectionHeader } from '../components/DashboardComponents.jsx'
 
 export default function AssetsTab({ balance, allocation }) {
+  const formatCurrency = (value, currency) => {
+    const numeric = Number(value)
+    const val = Number.isFinite(numeric) ? numeric : 0
+    if (currency === 'USD' || currency === 'USDT') {
+      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    }
+    return `₩${Math.round(val).toLocaleString()}`
+  }
+
   const displayAccounts = ASSET_ACCOUNTS_MOCK.map((account) => {
     if (account.id !== 'krw-stock' || !balance) return account
 
+    const accCurrency = balance.currency || 'KRW'
     return {
       ...account,
-      balance: `₩${(balance.available_cash || 0).toLocaleString()}`,
+      balance: formatCurrency(balance.available_cash || 0, accCurrency),
     }
   })
   const holdings = balance?.holdings?.length
-    ? balance.holdings.map((stock) => ({
-      id: stock.symbol,
-      name: stock.name,
-      account: /[a-zA-Z]/.test(stock.symbol) ? '해외 주식' : '국내 주식',
-      quantity: `${stock.qty}`,
-      average: `₩${stock.avg_price.toLocaleString()}`,
-      returnRate: `${stock.profit_rate >= 0 ? '+' : ''}${stock.profit_rate.toFixed(2)}%`,
-    }))
+    ? balance.holdings.map((stock) => {
+      const isForeign = /[a-zA-Z]/.test(stock.symbol)
+      const stockCurrency = stock.currency || (isForeign ? 'USD' : 'KRW')
+      return {
+        id: stock.symbol,
+        name: stock.name,
+        account: isForeign ? '해외 주식' : '국내 주식',
+        quantity: `${stock.qty}`,
+        average: formatCurrency(stock.avg_price, stockCurrency),
+        returnRate: `${stock.profit_rate >= 0 ? '+' : ''}${stock.profit_rate.toFixed(2)}%`,
+      }
+    })
     : FALLBACK_HOLDINGS
 
   return (

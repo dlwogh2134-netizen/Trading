@@ -20,6 +20,14 @@ const toNumber = (value) => {
 
 const formatKrw = (value) => `₩${Math.round(toNumber(value)).toLocaleString()}`
 
+const formatCurrency = (value, currency) => {
+  const numeric = toNumber(value)
+  if (currency === 'USD' || currency === 'USDT') {
+    return `$${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
+  return `₩${Math.round(numeric).toLocaleString()}`
+}
+
 const formatSignedRate = (value) => {
   const numericValue = toNumber(value)
   return `${numericValue >= 0 ? '+' : ''}${numericValue.toFixed(2)}%`
@@ -482,16 +490,16 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
               {/* 자산 요약 카드 */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-slate-surface border border-slate-700/80 rounded-lg p-5">
-                  <span className="text-xs font-bold text-slate-400">총 평가 자산 (KRW)</span>
+                  <span className="text-xs font-bold text-slate-400">총 평가 자산 ({balance?.currency || 'KRW'})</span>
                   <div className="text-xl font-bold font-mono text-white mt-1">
-                    {balanceLoading ? '조회 중' : formatKrw(balance?.total_evaluation)}
+                    {balanceLoading ? '조회 중' : formatCurrency(balance?.total_evaluation, balance?.currency)}
                   </div>
                 </div>
 
                 <div className="bg-slate-surface border border-slate-700/80 rounded-lg p-5">
-                  <span className="text-xs font-bold text-slate-400">가용 예수금 (Cash)</span>
+                  <span className="text-xs font-bold text-slate-400">가용 예수금 ({balance?.currency || 'Cash'})</span>
                   <div className="text-xl font-bold font-mono text-white mt-1">
-                    {balanceLoading ? '조회 중' : formatKrw(balance?.available_cash)}
+                    {balanceLoading ? '조회 중' : formatCurrency(balance?.available_cash, balance?.currency)}
                   </div>
                 </div>
 
@@ -531,7 +539,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                   </div>
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <p className="text-2xl font-bold text-white font-mono">{balanceLoading ? '조회 중' : formatKrw(balance?.total_evaluation)}</p>
+                      <p className="text-2xl font-bold text-white font-mono">{balanceLoading ? '조회 중' : formatCurrency(balance?.total_evaluation, balance?.currency)}</p>
                       <p className="text-[11px] text-slate-400 mt-1">
                         {assetTrendSummary} <span className="text-emerald-400 font-bold font-mono">{assetTrendDelta}</span>
                       </p>

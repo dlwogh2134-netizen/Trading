@@ -202,6 +202,7 @@ class TossClient(ExchangeClient):
 
         # 총 평가금액: USD 기준 (해외주식은 krw=0이므로 usd 우선)
         total_eval = 0.0
+        usd_val = 0.0
         try:
             mv = result.get("marketValue", {}).get("amount", {})
             usd_val = float(mv.get("usd", 0) or 0)
@@ -253,6 +254,7 @@ class TossClient(ExchangeClient):
         return {
             "total_evaluation": total_eval,
             "available_cash": 0.0,  # holdings API에 예수금 미포함
+            "currency": "USD" if usd_val > 0.0 else "KRW",
             "holdings": holdings_list
         }
 
@@ -574,6 +576,38 @@ class TossClient(ExchangeClient):
                     self._clear_token_cache()
                     return self._get_candles_impl(symbol, interval=normalized_interval, count=count)
                 raise e
+
+    def _get_exchange_rate_impl(self) -> float:
+        token = self._get_cached_token()
+        url = f"{self.base_url}/api/v1/exchange-rate"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            data = res.json()
+            result = data.get("result", {})
+            rate = result.get("basePrice") or result.get("rate") or result.get("exchangeRate") or result.get("price")
+            if rate:
+                return float(rate)
+        return 1380.0
+
+    def get_exchange_rate(self) -> float:
+        """
+        실시간 환율 정보를 조회합니다. (토큰 만료 시 재시도 포함)
+        """
+        try:
+            return self._get_exchange_rate_impl()
+        except Exception as e:
+            err_str = str(e).lower()
+            if "invalid-token" in err_str or "invalid_token" in err_str or "unauthorized" in err_str or "401" in err_str:
+                self._clear_token_cache()
+                try:
+                    return self._get_exchange_rate_impl()
+                except Exception:
+                    pass
+            return 1380.0
 
         # 2. 토스 미지원 주기인 경우 자체 리샘플링
         # 2-A. 분봉/시간봉 리샘플링 (5m, 15m, 30m, 1h, 60m 등)

@@ -472,6 +472,7 @@ class KISClient(ExchangeClient):
         return {
             "total_evaluation": total_eval,
             "available_cash": available_cash,
+            "currency": "KRW",
             "holdings": holdings
         }
 

@@ -43,13 +43,21 @@ def calculate_portfolio_profit_rate(balance: dict) -> float:
     return (total_profit / invested_amount) * 100
 
 
-def save_portfolio_snapshot(auth_header: str, user_id: str, balance: dict):
+def save_portfolio_snapshot(auth_header: str, user_id: str, balance: dict, exchange_rate: float = 1380.0):
     snapshot_date = datetime.utcnow().date().isoformat()
+    total_eval = to_float(balance.get("total_evaluation"))
+    avail_cash = to_float(balance.get("available_cash"))
+
+    # 통화가 USD인 경우 환율을 적용하여 원화(KRW) 기준으로 환산 저장
+    if balance.get("currency") == "USD":
+        total_eval = total_eval * exchange_rate
+        avail_cash = avail_cash * exchange_rate
+
     payload = {
         "user_id": user_id,
         "snapshot_date": snapshot_date,
-        "total_evaluation": to_float(balance.get("total_evaluation")),
-        "available_cash": to_float(balance.get("available_cash")),
+        "total_evaluation": total_eval,
+        "available_cash": avail_cash,
         "portfolio_profit_rate": calculate_portfolio_profit_rate(balance),
         "updated_at": datetime.utcnow().isoformat(),
     }
@@ -393,8 +401,14 @@ def get_dashboard_balance():
             balance = client.get_balance()
         else:
             return jsonify({"success": False, "message": f"지원하지 않는 거래소: {exchange}"}), 400
+
+        # 통화가 USD인 경우 자산 누적 추이를 위한 환율 구하기
+        exchange_rate = 1380.0
+        if exchange == "TOSS" and hasattr(client, "get_exchange_rate"):
+            exchange_rate = client.get_exchange_rate()
+
         try:
-            save_portfolio_snapshot(auth_header, user_id, balance)
+            save_portfolio_snapshot(auth_header, user_id, balance, exchange_rate)
         except Exception:
             pass
 
