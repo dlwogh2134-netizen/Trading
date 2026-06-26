@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import Header from "../components/Header.jsx";
 
 const filters = {
@@ -158,29 +159,42 @@ function MarketTable({ rows, titleType = "stock", ranking = "거래대금" }) {
           <div className="px-4 py-10 text-center text-sm text-slate-500">
             표시할 데이터가 없습니다.
           </div>
-        ) : rows.map((row) => (
-          <div
-            key={`${row.rank}-${row.name}`}
-            className="grid min-h-[58px] grid-cols-[34px_42px_minmax(130px,1.7fr)_minmax(92px,1fr)_minmax(78px,0.8fr)_minmax(92px,1fr)] items-center gap-3 px-4 py-2 text-[14px] hover:bg-white/[0.04]"
-          >
-            <button type="button" className="text-[24px] leading-none text-slate-400 hover:text-ai-cyan" aria-label="관심 종목">
-              {isStock ? "♡" : "☆"}
-            </button>
-            <div className="text-center text-[16px] text-slate-100 tabular-nums">{row.rank}</div>
-            <div className="flex min-w-0 items-center gap-3">
-              <RankIcon label={row.symbol || row.code || row.name} />
-              <div className="min-w-0">
-                <div className="truncate text-[15px] font-semibold text-slate-100">{row.name}</div>
-                <div className="mt-0.5 truncate text-[12px] text-slate-500">{row.code || row.symbol}</div>
+        ) : rows.map((row) => {
+          const symbol = row.code || row.symbol;
+          const assetPath = `/asset/${isStock ? "stock" : "crypto"}/${symbol}`;
+          return (
+            <Link
+              key={`${row.rank}-${row.name}`}
+              to={assetPath}
+              className="grid min-h-[58px] grid-cols-[34px_42px_minmax(130px,1.7fr)_minmax(92px,1fr)_minmax(78px,0.8fr)_minmax(92px,1fr)] items-center gap-3 px-4 py-2 text-[14px] hover:bg-white/[0.04] active:bg-white/[0.08] cursor-pointer transition-colors text-inherit no-underline block"
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                className="text-[24px] leading-none text-slate-400 hover:text-ai-cyan"
+                aria-label="관심 종목"
+              >
+                {isStock ? "♡" : "☆"}
+              </button>
+              <div className="text-center text-[16px] text-slate-100 tabular-nums">{row.rank}</div>
+              <div className="flex min-w-0 items-center gap-3">
+                <RankIcon label={row.symbol || row.code || row.name} />
+                <div className="min-w-0">
+                  <div className="truncate text-[15px] font-semibold text-slate-100">{row.name}</div>
+                  <div className="mt-0.5 truncate text-[12px] text-slate-500">{row.code || row.symbol}</div>
+                </div>
               </div>
-            </div>
-            <div className="text-right text-[15px] tabular-nums text-slate-100">{formatPrice(row)}</div>
-            <div className={`text-right text-[15px] font-medium tabular-nums ${changeClass(formatChange(row))}`}>
-              {formatChange(row)}
-            </div>
-            <div className="text-right text-[15px] tabular-nums text-slate-200">{formatValue(row, valueKey)}</div>
-          </div>
-        ))}
+              <div className="text-right text-[15px] tabular-nums text-slate-100">{formatPrice(row)}</div>
+              <div className={`text-right text-[15px] font-medium tabular-nums ${changeClass(formatChange(row))}`}>
+                {formatChange(row)}
+              </div>
+              <div className="text-right text-[15px] tabular-nums text-slate-200">{formatValue(row, valueKey)}</div>
+            </Link>
+          );
+        })}
       </div>
       <div className="border-t border-slate-700/80 px-4 py-3 text-center text-sm font-medium text-slate-200 hover:bg-white/[0.03]">
         더보기 <span className="ml-3 text-xl text-slate-400">›</span>
@@ -197,35 +211,51 @@ function MobileMarketTable({ rows, titleType = "stock", ranking = "거래대금"
     <div className="divide-y divide-slate-700/70 overflow-hidden rounded-lg border border-slate-700 bg-[#061321]/90 md:hidden">
       {rows.length === 0 ? (
         <div className="px-4 py-8 text-center text-sm text-slate-500">표시할 데이터가 없습니다.</div>
-      ) : rows.map((row) => (
-        <div key={`${titleType}-${row.rank}-${row.name}`} className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-6 text-center text-slate-300">{row.rank}</div>
-            <RankIcon label={row.symbol || row.code || row.name} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-semibold text-slate-100">{row.name}</div>
-              <div className="mt-0.5 text-[11px] text-slate-500">{row.code || row.symbol}</div>
+      ) : rows.map((row) => {
+        const symbol = row.code || row.symbol;
+        const assetPath = `/asset/${titleType === "stock" ? "stock" : "crypto"}/${symbol}`;
+        return (
+          <Link
+            key={`${titleType}-${row.rank}-${row.name}`}
+            to={assetPath}
+            className="p-4 block text-inherit no-underline hover:bg-white/[0.02] active:bg-white/[0.04] cursor-pointer transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-6 text-center text-slate-300">{row.rank}</div>
+              <RankIcon label={row.symbol || row.code || row.name} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-semibold text-slate-100">{row.name}</div>
+                <div className="mt-0.5 text-[11px] text-slate-500">{row.code || row.symbol}</div>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                className="text-[22px] text-slate-400 hover:text-ai-cyan"
+                aria-label="관심 종목"
+              >
+                {titleType === "stock" ? "♡" : "☆"}
+              </button>
             </div>
-            <button type="button" className="text-[22px] text-slate-400" aria-label="관심 종목">
-              {titleType === "stock" ? "♡" : "☆"}
-            </button>
-          </div>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-right text-[13px]">
-            <div>
-              <div className="text-[10px] text-slate-500">현재가</div>
-              <div className="mt-1 text-slate-100">{formatPrice(row)}</div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-right text-[13px]">
+              <div>
+                <div className="text-[10px] text-slate-500">현재가</div>
+                <div className="mt-1 text-slate-100">{formatPrice(row)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500">등락률</div>
+                <div className={`mt-1 ${changeClass(formatChange(row))}`}>{formatChange(row)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500">{valueLabel}</div>
+                <div className="mt-1 text-slate-200">{formatValue(row, valueKey)}</div>
+              </div>
             </div>
-            <div>
-              <div className="text-[10px] text-slate-500">등락률</div>
-              <div className={`mt-1 ${changeClass(formatChange(row))}`}>{formatChange(row)}</div>
-            </div>
-            <div>
-              <div className="text-[10px] text-slate-500">{valueLabel}</div>
-              <div className="mt-1 text-slate-200">{formatValue(row, valueKey)}</div>
-            </div>
-          </div>
-        </div>
-      ))}
+          </Link>
+        );
+      })}
     </div>
   );
 }
