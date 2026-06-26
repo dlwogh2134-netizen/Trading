@@ -24,7 +24,11 @@ def classify_error(exchange: str, exception: Exception) -> str:
             return "FATAL"
             
     elif exchange == "KIS":
-        fatal_keywords = ["appkey", "appsecret", "인증", "유효하지 않은", "auth", "credential", "rt_cd"]
+        # rt_cd는 단순히 리턴 코드가 존재한다는 응답 문자열에 포함되므로 fatal로 판단해선 안 됩니다.
+        # KIS 레이트 리밋 관련 에러 코드 EGW00201 등은 TEMPORARY로 분류해야 함.
+        if "egw00201" in err_msg.lower() or "too many requests" in err_msg.lower():
+            return "TEMPORARY"
+        fatal_keywords = ["appkey", "appsecret", "인증", "유효하지 않은", "auth", "credential"]
         if any(kw in err_msg.lower() for kw in fatal_keywords):
             return "FATAL"
             

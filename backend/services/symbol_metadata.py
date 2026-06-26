@@ -125,6 +125,12 @@ SYMBOL_METADATA = {
         "market": "KR",
         "sector": "산업재",
     },
+    "461350": {
+        "display_name": "이노스페이스",
+        "asset_type": "STOCK",
+        "market": "KR",
+        "sector": "우주항공",
+    },
     "AAPL": {
         "display_name": "Apple",
         "asset_type": "STOCK",
@@ -278,12 +284,205 @@ SYMBOL_METADATA = {
 }
 
 
+import threading
+import time
+import requests
+
+# 주요 코인 한글명 매핑 사전 (바이낸스 매핑 보완용 및 폴백용)
+COIN_DISPLAY_NAMES = {
+    "BTC": "비트코인",
+    "ETH": "이더리움",
+    "XRP": "리플",
+    "SOL": "솔라나",
+    "USDT": "테더",
+    "USDC": "USD코인",
+    "DOGE": "도지코인",
+    "ADA": "에이다",
+    "TRX": "트론",
+    "XLM": "스텔라루멘",
+    "SUI": "수이",
+    "WLD": "월드코인",
+    "AVAX": "아발란체",
+    "LINK": "체인링크",
+    "DOT": "폴카닷",
+    "LTC": "라이트코인",
+    "BCH": "비트코인캐시",
+    "NEAR": "니어프로토콜",
+    "APT": "앱토스",
+    "TON": "톤",
+    "ETC": "이더리움클래식",
+    "HBAR": "헤더라",
+    "ATOM": "코스모스",
+    "ARB": "아비트럼",
+    "OP": "옵티미즘",
+    "INJ": "인젝티브",
+    "SEI": "세이",
+    "PEPE": "페페",
+    "SHIB": "시바이누",
+    "FIL": "파일코인",
+    "MKR": "메이커",
+    "AAVE": "에이브",
+    "UNI": "유니스왑",
+    "CRV": "커브",
+    "TIA": "셀레스티아",
+    "WIF": "도그위햇",
+    "BONK": "봉크",
+    "JUP": "주피터",
+    "PYTH": "피스네트워크",
+    "ENA": "에나",
+    "RENDER": "렌더토큰",
+    "FET": "인공지능수퍼얼라이언스",
+    "RUNE": "토르체인",
+    "GRT": "더그래프",
+    "ALGO": "알고랜드",
+    "SAND": "샌드박스",
+    "MANA": "디센트럴랜드",
+    "EOS": "이오스",
+    "KAS": "카스파",
+    "ICP": "인터넷컴퓨터",
+    "STX": "스택스",
+    "IMX": "이뮤터블엑스",
+}
+
+# 가상자산 목록 전역 캐시
+_crypto_cache = {
+    "coinone": [],  # 코인원 상장 코인 심볼 리스트 (예: ["BTC", "ETH", "XRP"])
+    "binance": [],  # 바이낸스 USDT 상장 코인 심볼 리스트 (예: ["BTCUSDT", "ETHUSDT"])
+    "last_updated": 0.0
+}
+_crypto_cache_lock = threading.Lock()
+CRYPTO_CACHE_TTL = 3600 * 24  # 24시간 캐시 유지
+
+
+def refresh_crypto_symbols_cache():
+    """
+    코인원 및 바이낸스의 실시간 상장 코인 목록을 긁어와 전역 캐시를 동기화합니다.
+    """
+    global _crypto_cache
+    
+    # 1. 코인원 상장 코인 목록 획득
+    coinone_symbols = []
+    try:
+        res = requests.get("https://api.coinone.co.kr/public/v2/currencies", timeout=8)
+        if res.status_code == 200:
+            data = res.json()
+            currencies = data.get("currencies", [])
+            for c in currencies:
+                sym = str(c.get("symbol", "")).upper()
+                if sym:
+                    coinone_symbols.append(sym)
+    except Exception:
+        pass
+
+    # 2. 바이낸스 USDT 상장 코인 목록 획득
+    binance_symbols = []
+    try:
+        res = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=8)
+        if res.status_code == 200:
+            data = res.json()
+            # USDT 마켓만 필터링
+            for item in data:
+                sym = str(item.get("symbol", "")).upper()
+                if sym.endswith("USDT"):
+                    binance_symbols.append(sym)
+    except Exception:
+        pass
+
+    # 캐시 갱신
+    with _crypto_cache_lock:
+        _crypto_cache["coinone"] = coinone_symbols or _crypto_cache["coinone"]
+        _crypto_cache["binance"] = binance_symbols or _crypto_cache["binance"]
+        _crypto_cache["last_updated"] = time.time()
+
+
+def get_cached_crypto_symbols() -> dict:
+    """
+    캐시 상태를 확인하고 만료 시 자동 갱신한 후 가상자산 전체 목록을 반환합니다.
+    """
+    now = time.time()
+    if now - _crypto_cache["last_updated"] > CRYPTO_CACHE_TTL or not _crypto_cache["coinone"]:
+        # 비동기 또는 동기 갱신 (첫 갱신은 동기적으로 대기)
+        if not _crypto_cache["coinone"]:
+            refresh_crypto_symbols_cache()
+        else:
+            threading.Thread(target=refresh_crypto_symbols_cache, daemon=True).start()
+            
+    return _crypto_cache
+
+
+def search_crypto_symbols(query: str, limit: int = 10) -> list[dict]:
+    """
+    캐시된 가상자산 목록에서 키워드(한글명, 심볼명) 부분일치 검색을 수행합니다.
+    """
+    query = query.strip().upper()
+    if not query:
+        return []
+
+    cache = get_cached_crypto_symbols()
+    results = []
+    seen = set()
+
+    # 1. 코인원 검색
+    for sym in cache["coinone"]:
+        korean_name = COIN_DISPLAY_NAMES.get(sym, "")
+        # 심볼 또는 한글명에 키워드가 포함되는지 체크
+        if query in sym or (korean_name and query in korean_name):
+            if sym not in seen:
+                seen.add(sym)
+                results.append({
+                    "symbol": sym,
+                    "display_name": korean_name or sym,
+                    "asset_type": "CRYPTO",
+                    "market": "KRW"
+                })
+
+    # 2. 바이낸스 검색
+    for sym in cache["binance"]:
+        # USDT 접미사를 제거한 기본 심볼 파악 (예: BTCUSDT -> BTC)
+        base_sym = sym[:-4] if sym.endswith("USDT") else sym
+        korean_name = COIN_DISPLAY_NAMES.get(base_sym, "")
+        
+        if query in sym or (korean_name and query in korean_name) or query in base_sym:
+            if sym not in seen:
+                seen.add(sym)
+                results.append({
+                    "symbol": sym,
+                    "display_name": korean_name or base_sym,
+                    "asset_type": "CRYPTO",
+                    "market": "USDT"
+                })
+
+    return results[:limit]
+
+
 def enrich_symbol(row: dict) -> dict:
     symbol = str(row.get("symbol", "")).upper()
-    metadata = SYMBOL_METADATA.get(symbol, {})
+    metadata = SYMBOL_METADATA.get(symbol)
+    
+    if metadata:
+        return {
+            **row,
+            "display_name": metadata.get("display_name", symbol),
+            "market": metadata.get("market") or row.get("market_country") or row.get("currency") or "",
+            "sector": metadata.get("sector", ""),
+        }
+        
+    # 하드코딩 사전에 없을 경우 동적 코인 한글명 매핑 보완 (바이낸스/코인원 대비)
+    base_symbol = symbol[:-4] if symbol.endswith("USDT") else symbol
+    korean_name = COIN_DISPLAY_NAMES.get(base_symbol)
+    
+    if korean_name:
+        return {
+            **row,
+            "display_name": korean_name,
+            "market": row.get("market_country") or row.get("currency") or ("USDT" if symbol.endswith("USDT") else ""),
+            "sector": "가상자산",
+        }
+
     return {
         **row,
-        "display_name": metadata.get("display_name", symbol),
-        "market": metadata.get("market") or row.get("market_country") or row.get("currency") or "",
-        "sector": metadata.get("sector", ""),
+        "display_name": symbol,
+        "market": row.get("market_country") or row.get("currency") or "",
+        "sector": "",
     }
+

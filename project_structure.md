@@ -77,7 +77,8 @@ teamproject/
 │   │   ├── home.py               # 대시보드, 홈/시장 현황, 잔고 및 종목 검색/자동완성 API 라우트 Blueprint
 │   │   ├── keys.py               # API 키 등록, 저장, 조회, 테스트 라우트 Blueprint
 │   │   ├── ml.py                 # ML 데이터셋 추출, 작업 상태, 학습/튜닝, 활성 모델, 리포트 라우트 Blueprint
-│   │   └── news.py               # 뉴스 피드 조회, 실시간 동기화, AI 요약 보장 라우트 Blueprint
+│   │   ├── news.py               # 뉴스 피드 조회, 실시간 동기화, AI 요약 보장 라우트 Blueprint
+│   │   └── trade.py              # 디테일 페이지 수동 주문, 주문 사전검증, 차트/호가/체결/심볼 매핑 라우트 Blueprint
 │   ├── services/                 # 비즈니스 로직 서비스 레이어
 │   │   ├── exchange_client.py    # 거래소/브로커 추상화 부모 클래스 (현재 구현됨)
 │   │   ├── toss_client.py        # Toss Open API 메인 주식 클라이언트 (현재 구현됨)
@@ -218,6 +219,14 @@ teamproject/
     * 요청 파라미터(`exchange`, `symbol`, `interval`)에 맞추어 각각의 거래소 클라이언트를 동적으로 스위칭 호출합니다.
     * 각 거래소마다 상이한 시간 및 가격 포맷을 융합하여 TradingView Lightweight Charts 규격(`time`, `open`, `high`, `low`, `close`)으로 변환(어댑터 패턴)하여 공통 규격의 JSON 배열로 반환합니다.
     * 빈번한 중복 호출로 인한 거래소 API 차단(Rate Limit)을 예방하기 위해 백엔드 레벨에서 정적 캐싱(Caching)을 수행합니다.
+    * 디테일 페이지는 응답 `meta.source` 값을 사용해 `LIVE / CACHE` 상태를 구분하며, 분봉/시간봉 시간값은 epoch seconds, 일/주/월 봉은 `YYYY-MM-DD` 규격으로 유지합니다.
+  * **수동 주문 사전검증 API (`POST /api/trade/precheck`)**:
+    * 디테일 페이지 수동 주문 패널이 제출 직전 금액, 기준 가격, 예수금, 보유 수량을 미리 점검하는 전용 라우트입니다.
+    * 지정가 주문은 입력 가격을, 시장가 주문은 서버가 직접 조회한 현재가를 기준으로 주문 예정 금액을 산출합니다.
+    * 실거래(`REAL`) 환경에서는 1회 주문 하드캡(10만 원), 예수금 초과, 보유 수량 초과 여부를 함께 반환하여 프론트가 버튼 비활성화와 경고 문구를 즉시 표시할 수 있게 합니다.
+  * **실시간 호가/체결 API (`GET /api/chart/orderbook`, `GET /api/chart/trades`)**:
+    * 디테일 페이지 WTS 영역의 호가창과 최근 체결 목록을 구성하는 라우트입니다.
+    * 실시간 거래소 응답이 가능할 때는 `meta.source=LIVE`를 반환하고, 장애 또는 장외 상황에서 시뮬레이션 데이터를 내려줄 때는 `meta.source=MOCK`, `meta.is_mock=true`를 명시하여 프론트가 상태 배지를 정확히 노출할 수 있게 합니다.
   * **종목 이름 자동완성 검색 API (`GET /api/symbol/search`)**:
     * 사용자가 대시보드 퀵 검색창에 한글 입력(예: "삼성")을 진행할 때, 입력 도중 실시간으로 매칭되는 종목명(삼성전자, 삼성전기 등)의 후보 리스트를 매핑 테이블(`symbol_metadata.py`)에서 필터링하여 프론트엔드 드롭다운 컴포넌트에 즉각 반환합니다.
   * **종목코드 매핑 API (`GET /api/symbol/lookup`)**:

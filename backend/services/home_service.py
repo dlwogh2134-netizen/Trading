@@ -64,6 +64,28 @@ def get_toss_env_credentials() -> dict:
     }
 
 
+def resolve_kis_credential_source(data: dict, env_credentials: dict) -> str:
+    """
+    KIS 인증 정보가 요청 본문인지 서버 환경변수인지 출처를 판별합니다.
+    """
+    request_fields = ("appkey", "appsecret", "cano")
+    if any(data.get(field) for field in request_fields):
+        return "REQUEST_BODY_KIS"
+    if env_credentials["appkey"] and env_credentials["appsecret"] and env_credentials["cano"]:
+        return "SERVER_ENV_KIS"
+    return "NONE"
+
+
+def resolve_toss_env_credential_source() -> str:
+    """
+    Toss 실시간 현재가 보강에 사용되는 인증 출처를 반환합니다.
+    """
+    toss = get_toss_env_credentials()
+    if toss["client_id"] and toss["client_secret"]:
+        return "SERVER_ENV_TOSS"
+    return "NONE"
+
+
 def to_float(value, default=0.0):
     try:
         if value is None or value == "":
@@ -409,6 +431,7 @@ def resolve_kis_credentials(data: dict) -> dict:
         "cano": data.get("cano") or env_credentials["cano"],
         "acnt_prdt_cd": data.get("acnt_prdt_cd") or env_credentials["acnt_prdt_cd"],
         "env": (data.get("env") or env_credentials["env"] or "MOCK").upper(),
+        "credential_source": resolve_kis_credential_source(data, env_credentials),
     }
 
 
@@ -488,6 +511,11 @@ def build_home_overview(data: dict) -> dict:
         "market_snapshot": {},
         "updated_at": datetime.utcnow().isoformat() + "Z",
         "message": "",
+        "sources": {
+            "stock_snapshot_credentials": "SERVER_ENV_KIS" if get_kis_env_credentials()["appkey"] and get_kis_env_credentials()["appsecret"] else "NONE",
+            "stock_live_price_credentials": resolve_toss_env_credential_source(),
+            "kis_balance_credentials": kis["credential_source"],
+        },
     }
 
     try:

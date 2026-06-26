@@ -36,13 +36,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
       const resData = await response.json()
       if (resData.success && resData.data) {
         const { symbol, asset_type } = resData.data
-        navigate(`/asset/${asset_type}/${symbol}`)
+        navigate(`/asset/${String(asset_type || searchAssetType).toUpperCase()}/${symbol}`)
       } else {
-        navigate(`/asset/${searchAssetType}/${query.toUpperCase()}`)
+        navigate(`/asset/${String(searchAssetType).toUpperCase()}/${query.toUpperCase()}`)
       }
     } catch (err) {
       console.error("종목 검색 매핑 실패:", err)
-      navigate(`/asset/${searchAssetType}/${query.toUpperCase()}`)
+      navigate(`/asset/${String(searchAssetType).toUpperCase()}/${query.toUpperCase()}`)
     }
   }
 
@@ -311,7 +311,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           <div
                             key={item.symbol}
                             onClick={() => {
-                              navigate(`/asset/${item.asset_type}/${item.symbol}`)
+                              navigate(`/asset/${String(item.asset_type || 'STOCK').toUpperCase()}/${item.symbol}`)
                               setSearchSymbol('')
                               setSuggestions([])
                               setShowSuggestions(false)

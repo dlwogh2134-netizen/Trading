@@ -10,9 +10,361 @@ from backend.services.kis_client import KISClient
 
 # 단기 인메모리 시세 캐시 정의 (Rate limit 방지용)
 CANDLE_CACHE = {}
+ORDERBOOK_CACHE = {}
+TRADES_CACHE = {}
 CACHE_TTL_SECONDS = 10  # 10초 유효
+LEVEL2_CACHE_TTL_SECONDS = 3
+REAL_ORDER_LIMIT_KRW = 100000.0
 
 trade_bp = Blueprint("trade", __name__)
+
+
+def _load_user_exchange_record(auth_header: str, user_id: str, exchange: str, broker_env: str) -> tuple[dict, str, str]:
+    """
+    사용자 거래소 크리덴셜을 로드하고 복호화합니다.
+    """
+    crypto_helper = current_app.crypto
+    params = {
+        "user_id": f"eq.{user_id}",
+        "exchange": f"eq.{exchange}",
+        "broker_env": f"eq.{broker_env}"
+    }
+    records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+    if not records:
+        raise ValueError(f"등록된 {exchange} ({broker_env}) API 크리덴셜 정보가 없습니다.")
+
+    record = records[0]
+    access_key = crypto_helper.decrypt(record.get("encrypted_access_key"))
+    secret_key = crypto_helper.decrypt(record.get("encrypted_secret_key"))
+    return record, access_key, secret_key
+
+
+def _query_user_exchange_records(auth_header: str, user_id: str, exchange: str, broker_env: str | None = None) -> list[dict]:
+    """
+    사용자 거래소 크리덴셜 레코드를 조회합니다.
+    broker_env가 없으면 해당 거래소의 전체 레코드를 반환합니다.
+    """
+    params = {
+        "user_id": f"eq.{user_id}",
+        "exchange": f"eq.{exchange}",
+    }
+    if broker_env:
+        params["broker_env"] = f"eq.{broker_env}"
+    return query_supabase(auth_header, "user_api_keys", "GET", params=params)
+
+
+def _get_quote_records_with_env_fallback(auth_header: str, user_id: str, exchange: str, broker_env: str) -> list[dict]:
+    """
+    시세/호가/체결 조회용으로 우선 요청 env를 찾고, 없으면 같은 거래소의 다른 env 레코드로 폴백합니다.
+    """
+    records = _query_user_exchange_records(auth_header, user_id, exchange, broker_env)
+    if records:
+        return records
+    return _query_user_exchange_records(auth_header, user_id, exchange)
+
+
+def _compact_degraded_reason(prefix: str, reasons: list[str]) -> str:
+    """
+    Mock 폴백 시 사용자에게 보여줄 축약 사유 문자열을 생성합니다.
+    """
+    filtered = [str(reason).strip() for reason in reasons if str(reason).strip()]
+    if not filtered:
+        return prefix
+    return f"{prefix}:{' | '.join(filtered[:3])}"
+
+
+def _get_cached_level2_snapshot(cache_store: dict, cache_key: tuple):
+    """
+    호가/체결 스냅샷 캐시를 반환합니다.
+    """
+    now = time.time()
+    cached = cache_store.get(cache_key)
+    if not cached:
+        return None
+    expire_time, payload = cached
+    if now >= expire_time:
+        return None
+    return payload
+
+
+def _set_cached_level2_snapshot(cache_store: dict, cache_key: tuple, data: dict | list):
+    """
+    호가/체결 스냅샷 캐시를 저장합니다.
+    """
+    cache_store[cache_key] = (time.time() + LEVEL2_CACHE_TTL_SECONDS, data)
+
+
+def _build_exchange_client(exchange: str, broker_env: str, record: dict, access_key: str, secret_key: str):
+    """
+    거래소별 클라이언트를 생성합니다.
+    """
+    if exchange == "TOSS":
+        return TossClient(
+            client_id=access_key,
+            client_secret=secret_key,
+            account_seq=record.get("toss_account_seq"),
+            env=broker_env,
+        )
+    if exchange == "KIS":
+        return KISClient(
+            appkey=access_key,
+            appsecret=secret_key,
+            cano=record.get("kis_account_no"),
+            acnt_prdt_cd=record.get("kis_account_code", "01"),
+            env=broker_env,
+        )
+    return None
+
+
+def _load_kis_client_from_records(records_kis: list[dict]):
+    """
+    KIS 레코드 목록이 있을 때 즉시 사용할 클라이언트를 생성합니다.
+    """
+    if not records_kis:
+        return None
+
+    crypto_helper = current_app.crypto
+    record = records_kis[0]
+    kis_access_key = crypto_helper.decrypt(record.get("encrypted_access_key"))
+    kis_secret_key = crypto_helper.decrypt(record.get("encrypted_secret_key"))
+    cano = record.get("kis_account_no")
+    acnt_prdt_cd = record.get("kis_account_code", "01")
+    kis_env = record.get("broker_env", "MOCK")
+    return KISClient(
+        appkey=kis_access_key,
+        appsecret=kis_secret_key,
+        cano=cano,
+        acnt_prdt_cd=acnt_prdt_cd,
+        env=kis_env,
+    )
+
+
+def _fetch_kis_candles_with_interval(client: KISClient, symbol: str, interval: str, count: int) -> list:
+    """
+    요청 interval을 KIS 호출 규격으로 매핑해 캔들을 조회합니다.
+    """
+    if interval in ("1d", "D"):
+        return client.get_candles(symbol, interval="D", count=count)
+    if interval in ("1w", "W"):
+        return client.get_candles(symbol, interval="W", count=count)
+    if interval in ("1M", "M"):
+        return client.get_candles(symbol, interval="M", count=count)
+    if interval == "1m":
+        return client.get_minute_candles(symbol, interval_minutes=1, count=count)
+    if interval == "5m":
+        return client.get_minute_candles(symbol, interval_minutes=5, count=count)
+    if interval == "15m":
+        return client.get_minute_candles(symbol, interval_minutes=15, count=count)
+    if interval == "30m":
+        return client.get_minute_candles(symbol, interval_minutes=30, count=count)
+    if interval in ("60m", "1h"):
+        return client.get_minute_candles(symbol, interval_minutes=60, count=count)
+    return client.get_candles(symbol, interval="D", count=count)
+
+
+def _resolve_reference_price(exchange: str, symbol: str, order_type: str, price, client) -> tuple[float, str]:
+    """
+    주문 검증 및 시장가 주문에 사용할 기준 가격을 계산합니다.
+    """
+    if order_type.upper() == "LIMIT":
+        if price is None:
+            raise ValueError("지정가 주문에는 단가(price)가 필수적입니다.")
+        try:
+            resolved_price = float(price)
+        except (TypeError, ValueError):
+            raise ValueError("올바르지 않은 단가 포맷입니다.")
+        if resolved_price <= 0:
+            raise ValueError("주문 단가는 0보다 커야 합니다.")
+        return resolved_price, "LIMIT_INPUT"
+
+    if exchange not in ("TOSS", "KIS") or client is None:
+        raise ValueError(f"{exchange} 거래소는 현재 시장가 조회가 지원되지 않습니다.")
+
+    price_info = client.get_price(symbol)
+    resolved_price = float(price_info.get("current_price", 0) or 0)
+    if resolved_price <= 0:
+        raise ValueError("시장가 검증을 위한 현재가를 확인할 수 없습니다.")
+    return resolved_price, "LIVE_PRICE"
+
+
+def _extract_balance_snapshot(client, symbol: str) -> dict:
+    """
+    잔고/보유 수량 기반 사전검증에 사용할 값을 정리합니다.
+    """
+    if client is None:
+        return {
+            "available_cash": None,
+            "holding_qty": None,
+            "holding_value": None,
+        }
+
+    try:
+        balance = client.get_balance() or {}
+    except Exception:
+        return {
+            "available_cash": None,
+            "holding_qty": None,
+            "holding_value": None,
+        }
+
+    available_cash = balance.get("available_cash")
+    try:
+        available_cash = float(available_cash) if available_cash is not None else None
+    except (TypeError, ValueError):
+        available_cash = None
+
+    holding_qty = None
+    holding_value = None
+    for item in balance.get("holdings", []) or []:
+        holding_symbol = str(item.get("symbol", "")).upper()
+        if holding_symbol != str(symbol).upper():
+            continue
+        try:
+            holding_qty = float(item.get("qty", 0))
+            current_price = float(item.get("current_price", 0))
+            holding_value = holding_qty * current_price if current_price > 0 else None
+        except (TypeError, ValueError):
+            holding_qty = None
+            holding_value = None
+        break
+
+    return {
+        "available_cash": available_cash,
+        "holding_qty": holding_qty,
+        "holding_value": holding_value,
+    }
+
+
+def _build_precheck_payload(
+    exchange: str,
+    symbol: str,
+    action: str,
+    order_type: str,
+    quantity,
+    price,
+    broker_env: str,
+    record: dict,
+    access_key: str,
+    secret_key: str,
+) -> dict:
+    """
+    주문 전 검증 결과를 공통 포맷으로 생성합니다.
+    """
+    try:
+        qty = float(quantity)
+    except (TypeError, ValueError):
+        raise ValueError("올바르지 않은 주문 수량 포맷입니다.")
+    if qty <= 0:
+        raise ValueError("주문 수량은 0보다 커야 합니다.")
+
+    client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
+    reference_price, price_source = _resolve_reference_price(exchange, symbol, order_type, price, client)
+    estimated_amount = reference_price * qty
+    estimated_amount_krw = estimated_amount * 1400.0 if exchange == "BINANCE" else estimated_amount
+    balance_snapshot = _extract_balance_snapshot(client, symbol)
+    available_cash = balance_snapshot["available_cash"]
+    holding_qty = balance_snapshot["holding_qty"]
+
+    exceeds_hard_cap = broker_env == "REAL" and estimated_amount_krw > REAL_ORDER_LIMIT_KRW
+    insufficient_cash = (
+        action.upper() == "BUY"
+        and broker_env == "REAL"
+        and available_cash is not None
+        and estimated_amount > available_cash
+    )
+    insufficient_holding = (
+        action.upper() == "SELL"
+        and broker_env == "REAL"
+        and holding_qty is not None
+        and qty > holding_qty
+    )
+
+    asset_type = "STOCK" if exchange in ("TOSS", "KIS") else "CRYPTO"
+    currency = "KRW" if exchange in ("TOSS", "KIS", "COINONE") else "USD"
+    warnings = []
+    if exceeds_hard_cap:
+        warnings.append("실거래 1회 주문 한도 10만원을 초과합니다.")
+    if insufficient_cash:
+        warnings.append("예수금 대비 주문 예정 금액이 큽니다.")
+    if insufficient_holding:
+        warnings.append("보유 수량보다 많은 매도 주문입니다.")
+
+    return {
+        "exchange": exchange,
+        "symbol": symbol,
+        "action": action.upper(),
+        "order_type": order_type.upper(),
+        "broker_env": broker_env,
+        "asset_type": asset_type,
+        "currency": currency,
+        "quantity": qty,
+        "reference_price": reference_price,
+        "price_source": price_source,
+        "estimated_amount": estimated_amount,
+        "estimated_amount_krw": estimated_amount_krw,
+        "real_order_limit_krw": REAL_ORDER_LIMIT_KRW,
+        "exceeds_real_order_limit": exceeds_hard_cap,
+        "available_cash": available_cash,
+        "holding_qty": holding_qty,
+        "holding_value": balance_snapshot["holding_value"],
+        "insufficient_cash": insufficient_cash,
+        "insufficient_holding": insufficient_holding,
+        "warnings": warnings,
+        "checked_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@trade_bp.route("/api/trade/precheck", methods=["POST"])
+def precheck_manual_order():
+    """
+    수동 주문 전 금액/잔고/보유 수량을 검증하여 프론트에 반환합니다.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        user_id, _ = get_user_id_from_header(auth_header)
+    except Exception as e:
+        return jsonify({"success": False, "message": f"인증 실패: {str(e)}"}), 401
+
+    data = request.json or {}
+    exchange = data.get("exchange")
+    symbol = data.get("symbol")
+    action = data.get("action")
+    order_type = data.get("order_type")
+    quantity = data.get("quantity")
+    price = data.get("price")
+    broker_env = data.get("broker_env", "REAL")
+
+    if not exchange or not symbol or not action or not order_type or quantity is None:
+        return jsonify({"success": False, "message": "필수 주문 파라미터가 누락되었습니다."}), 400
+    if exchange not in ("TOSS", "KIS", "COINONE", "BINANCE"):
+        return jsonify({"success": False, "message": "지원하지 않는 거래소입니다."}), 400
+    if action.upper() not in ("BUY", "SELL"):
+        return jsonify({"success": False, "message": "올바르지 않은 주문 방향(action)입니다."}), 400
+    if order_type.upper() not in ("LIMIT", "MARKET"):
+        return jsonify({"success": False, "message": "올바르지 않은 주문 유형(order_type)입니다."}), 400
+
+    try:
+        record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
+        payload = _build_precheck_payload(
+            exchange=exchange,
+            symbol=symbol,
+            action=action,
+            order_type=order_type,
+            quantity=quantity,
+            price=price,
+            broker_env=broker_env,
+            record=record,
+            access_key=access_key,
+            secret_key=secret_key,
+        )
+        return jsonify({"success": True, "data": payload})
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "message": f"주문 사전검증 실패: {str(e)}"}), 500
 
 @trade_bp.route("/api/trade/order", methods=["POST"])
 def place_manual_order():
@@ -59,76 +411,55 @@ def place_manual_order():
     except ValueError:
         return jsonify({"success": False, "message": "올바르지 않은 주문 수량 포맷입니다."}), 400
 
-    # 2. 거래소 API 크리덴셜 정보 가져오기 및 복호화
-    crypto_helper = current_app.crypto
     try:
-        params = {
-            "user_id": f"eq.{user_id}",
-            "exchange": f"eq.{exchange}",
-            "broker_env": f"eq.{broker_env}"
-        }
-        records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
-        if not records or len(records) == 0:
-            return jsonify({"success": False, "message": f"등록된 {exchange} ({broker_env}) API 크리덴셜 정보가 없습니다."}), 400
-        
-        record = records[0]
-        access_key = crypto_helper.decrypt(record.get("encrypted_access_key"))
-        secret_key = crypto_helper.decrypt(record.get("encrypted_secret_key"))
+        record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
         return jsonify({"success": False, "message": f"API 크리덴셜 로드 및 복호화 실패: {str(e)}"}), 500
 
-    # 3. 1회 주문 한도 10만원 이하 가드 캡 검증
-    order_price = 0.0
-    if order_type.upper() == "LIMIT":
-        if price is None:
-            return jsonify({"success": False, "message": "지정가 주문에는 단가(price)가 필수적입니다."}), 400
-        try:
-            order_price = float(price)
-        except ValueError:
-            return jsonify({"success": False, "message": "올바르지 않은 단가 포맷입니다."}), 400
-    else:
-        # 시장가 주문인 경우 실시간 현재가를 가져와 계산
-        try:
-            if exchange == "TOSS":
-                toss_account_seq = record.get("toss_account_seq")
-                client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
-                price_info = client.get_price(symbol)
-                order_price = price_info.get("current_price", 0.0)
-            elif exchange == "KIS":
-                cano = record.get("kis_account_no")
-                acnt_prdt_cd = record.get("kis_account_code", "01")
-                client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=broker_env)
-                price_info = client.get_price(symbol)
-                order_price = price_info.get("current_price", 0.0)
-            else:
-                return jsonify({"success": False, "message": f"{exchange} 거래소는 현재 시장가 조회가 지원되지 않습니다."}), 400
-        except Exception as e:
-            return jsonify({"success": False, "message": f"시장가 검증을 위한 시세 조회 실패: {str(e)}"}), 500
+    # 3. 공통 사전 검증
+    try:
+        precheck = _build_precheck_payload(
+            exchange=exchange,
+            symbol=symbol,
+            action=action,
+            order_type=order_type,
+            quantity=quantity,
+            price=price,
+            broker_env=broker_env,
+            record=record,
+            access_key=access_key,
+            secret_key=secret_key,
+        )
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "message": f"주문 사전검증 실패: {str(e)}"}), 500
 
-    total_amount = order_price * qty
-    limit_krw = 100000.0
-    if exchange == "BINANCE":
-        # 1달러 = 1400원 기준으로 가치 환산하여 10만원 한도 체크
-        total_amount_krw = total_amount * 1400.0
-    else:
-        total_amount_krw = total_amount
+    order_price = precheck["reference_price"]
+    total_amount = precheck["estimated_amount"]
+    total_amount_krw = precheck["estimated_amount_krw"]
 
-    if broker_env == "REAL" and total_amount_krw > limit_krw:
+    if precheck["exceeds_real_order_limit"]:
         return jsonify({
-            "success": False, 
+            "success": False,
             "message": f"실거래 1회 주문 한도(100,000원)를 초과할 수 없습니다. (신청 금액: {total_amount_krw:,.0f}원)"
         }), 400
+
+    if precheck["insufficient_cash"]:
+        return jsonify({"success": False, "message": "예수금보다 큰 주문입니다. 주문 수량 또는 단가를 조정해 주세요."}), 400
+
+    if precheck["insufficient_holding"]:
+        return jsonify({"success": False, "message": "보유 수량을 초과하는 매도 주문입니다."}), 400
 
     # 4. 주문 실행
     try:
         if exchange == "TOSS":
-            toss_account_seq = record.get("toss_account_seq")
-            client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
+            client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
             order_res = client.place_order(symbol=symbol, qty=qty, side=action, ord_type=order_type, price=order_price)
         elif exchange == "KIS":
-            cano = record.get("kis_account_no")
-            acnt_prdt_cd = record.get("kis_account_code", "01")
-            client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=broker_env)
+            client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
             order_res = client.place_order(symbol=symbol, qty=qty, side=action, ord_type=order_type, price=order_price)
         else:
             return jsonify({"success": False, "message": f"{exchange} 거래소는 현재 수동 주문 기능이 지원되지 않습니다."}), 400
@@ -228,7 +559,15 @@ def get_chart_candles():
     if cache_key in CANDLE_CACHE:
         expire_time, cached_data = CANDLE_CACHE[cache_key]
         if now < expire_time:
-            return jsonify({"success": True, "data": cached_data})
+            return jsonify({
+                "success": True,
+                "data": cached_data,
+                "meta": {
+                    "source": "CACHE",
+                    "is_mock": False,
+                    "cache_ttl_seconds": CACHE_TTL_SECONDS,
+                }
+            })
 
     try:
         # 1. TOSS 캔들
@@ -237,47 +576,26 @@ def get_chart_candles():
                 return jsonify({"success": False, "message": "인증 헤더가 필요합니다."}), 401
             user_id, token = get_user_id_from_header(auth_header)
             crypto_helper = current_app.crypto
-            params = {"user_id": f"eq.{user_id}", "exchange": "eq.TOSS", "broker_env": f"eq.{broker_env}"}
-            records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "TOSS", broker_env)
             
             # Toss 미지원 주기(5m, 15m, 30m, 60m, 1h, 1w, 1M 등)인 경우
             # KIS API Key가 등록되어 있다면 KIS API를 타서 리샘플링 및 풍부한 분봉 데이터를 안정적으로 제공받음
             is_native_toss = interval in ("1d", "D", "1m")
             
             # KIS API 키가 있는지 선체크 (Toss 키가 없거나, 혹은 Toss 미지원 주기인 경우 우회 사용 목적)
-            params_kis = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS"}
-            records_kis = query_supabase(auth_header, "user_api_keys", "GET", params=params_kis)
+            records_kis = _get_quote_records_with_env_fallback(auth_header, user_id, "KIS", broker_env)
             
             # 만약 Toss 키가 없거나, 혹은 미지원 주기인데 KIS 키가 있는 경우 KIS로 처리
             if (not records or not is_native_toss) and records_kis:
-                kis_access_key = crypto_helper.decrypt(records_kis[0].get("encrypted_access_key"))
-                kis_secret_key = crypto_helper.decrypt(records_kis[0].get("encrypted_secret_key"))
-                cano = records_kis[0].get("kis_account_no")
-                acnt_prdt_cd = records_kis[0].get("kis_account_code", "01")
-                kis_env = records_kis[0].get("broker_env", "MOCK")
-                
-                client = KISClient(appkey=kis_access_key, appsecret=kis_secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
-                if interval in ("1d", "D"):
-                    candles = client.get_candles(symbol, interval="D", count=count)
-                elif interval in ("1w", "W"):
-                    candles = client.get_candles(symbol, interval="W", count=count)
-                elif interval in ("1M", "M"):
-                    candles = client.get_candles(symbol, interval="M", count=count)
-                elif interval == "1m":
-                    candles = client.get_minute_candles(symbol, interval_minutes=1, count=count)
-                elif interval == "5m":
-                    candles = client.get_minute_candles(symbol, interval_minutes=5, count=count)
-                elif interval == "15m":
-                    candles = client.get_minute_candles(symbol, interval_minutes=15, count=count)
-                elif interval == "30m":
-                    candles = client.get_minute_candles(symbol, interval_minutes=30, count=count)
-                elif interval in ("60m", "1h"):
-                    candles = client.get_minute_candles(symbol, interval_minutes=60, count=count)
-                else:
-                    candles = client.get_candles(symbol, interval="D", count=count)
+                client = _load_kis_client_from_records(records_kis)
+                candles = _fetch_kis_candles_with_interval(client, symbol, interval, count)
                     
                 CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
-                return jsonify({"success": True, "data": candles})
+                return jsonify({
+                    "success": True,
+                    "data": candles,
+                    "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                })
             
             # Toss 키가 없는 경우 KIS 키도 없다면 에러 반환
             if not records:
@@ -289,9 +607,32 @@ def get_chart_candles():
             toss_account_seq = records[0].get("toss_account_seq")
             
             client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
-            candles = client.get_candles(symbol, interval=interval, count=count)
-            CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
-            return jsonify({"success": True, "data": candles})
+            try:
+                candles = client.get_candles(symbol, interval=interval, count=count)
+            except Exception as toss_error:
+                candles = []
+                current_app.logger.warning(f"Toss 캔들 조회 실패, KIS 폴백 시도: {str(toss_error)}")
+
+            if candles:
+                CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+                return jsonify({
+                    "success": True,
+                    "data": candles,
+                    "meta": {"source": "LIVE", "is_mock": False}
+                })
+
+            if records_kis:
+                client_kis = _load_kis_client_from_records(records_kis)
+                candles = _fetch_kis_candles_with_interval(client_kis, symbol, interval, count)
+                if candles:
+                    CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+                    return jsonify({
+                        "success": True,
+                        "data": candles,
+                        "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                    })
+
+            return jsonify({"success": False, "message": "Toss/KIS 차트 조회 결과가 비어 있습니다."}), 502
 
         # 2. KIS 캔들
         elif exchange == "KIS":
@@ -299,8 +640,7 @@ def get_chart_candles():
                 return jsonify({"success": False, "message": "인증 헤더가 필요합니다."}), 401
             user_id, token = get_user_id_from_header(auth_header)
             crypto_helper = current_app.crypto
-            params = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS", "broker_env": f"eq.{broker_env}"}
-            records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "KIS", broker_env)
             if not records:
                 return jsonify({"success": False, "message": "등록된 KIS API 키가 없습니다."}), 400
             access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
@@ -331,7 +671,11 @@ def get_chart_candles():
                 candles = client.get_candles(symbol, interval="D", count=count)
                 
             CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
-            return jsonify({"success": True, "data": candles})
+            return jsonify({
+                "success": True,
+                "data": candles,
+                "meta": {"source": "LIVE", "is_mock": False}
+            })
 
         # 3. COINONE 캔들
         elif exchange == "COINONE":
@@ -375,7 +719,11 @@ def get_chart_candles():
                     pass
             candles_subset = candles[-count:]
             CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles_subset)
-            return jsonify({"success": True, "data": candles_subset})
+            return jsonify({
+                "success": True,
+                "data": candles_subset,
+                "meta": {"source": "LIVE", "is_mock": False}
+            })
 
         # 4. BINANCE 캔들
         elif exchange == "BINANCE":
@@ -422,7 +770,11 @@ def get_chart_candles():
                 except (ValueError, TypeError, IndexError):
                     pass
             CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
-            return jsonify({"success": True, "data": candles})
+            return jsonify({
+                "success": True,
+                "data": candles,
+                "meta": {"source": "LIVE", "is_mock": False}
+            })
 
         else:
             return jsonify({"success": False, "message": f"지원하지 않는 거래소: {exchange}"}), 400
@@ -517,6 +869,19 @@ def get_orderbook_api():
         return jsonify({"success": False, "message": "exchange 및 symbol 파라미터가 필수적입니다."}), 400
 
     auth_header = request.headers.get("Authorization")
+    degraded_reasons = []
+    cache_key = (exchange, symbol, broker_env)
+    cached_orderbook = _get_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key)
+    if cached_orderbook is not None:
+        return jsonify({
+            "success": True,
+            "data": cached_orderbook,
+            "meta": {
+                "source": "CACHE",
+                "is_mock": False,
+                "cache_ttl_seconds": LEVEL2_CACHE_TTL_SECONDS,
+            }
+        })
     
     # 기본 Mock 기준 가격 조회 시도 (캐시된 캔들 종가가 존재한다면 동적으로 보정)
     base_price = 150000  # 디폴트
@@ -529,50 +894,8 @@ def get_orderbook_api():
     if cached_close is not None and cached_close > 0:
         base_price = cached_close
     else:
-        # 캐시가 없는 진입 극초기에는 동기식으로 시세를 직접 1회 조회하여 보정
-        try:
-            if exchange == "KIS" and auth_header:
-                user_id, token = get_user_id_from_header(auth_header)
-                crypto_helper = current_app.crypto
-                params_db = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS", "broker_env": f"eq.{broker_env}"}
-                records = query_supabase(auth_header, "user_api_keys", "GET", params=params_db)
-                if records:
-                    access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
-                    secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
-                    cano = records[0].get("kis_account_no")
-                    acnt_prdt_cd = records[0].get("kis_account_code", "01")
-                    kis_env = records[0].get("broker_env", "MOCK")
-                    client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
-                    price_info = client.get_price(symbol)
-                    if price_info and price_info.get("current_price"):
-                        base_price = price_info["current_price"]
-            elif exchange == "TOSS" and auth_header:
-                user_id, token = get_user_id_from_header(auth_header)
-                crypto_helper = current_app.crypto
-                params_db = {"user_id": f"eq.{user_id}", "exchange": "eq.TOSS", "broker_env": f"eq.{broker_env}"}
-                records = query_supabase(auth_header, "user_api_keys", "GET", params=params_db)
-                if records:
-                    access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
-                    secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
-                    toss_account_seq = records[0].get("toss_account_seq")
-                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
-                    price_info = client.get_price(symbol)
-                    if price_info and price_info.get("current_price"):
-                        base_price = price_info["current_price"]
-            elif exchange == "COINONE":
-                res_c = requests.get(f"https://api.coinone.co.kr/public/v2/ticker/KRW/{symbol.upper()}", timeout=3)
-                if res_c.status_code == 200:
-                    ticker_data = res_c.json().get("ticker")
-                    if ticker_data and ticker_data.get("last"):
-                        base_price = float(ticker_data["last"])
-            elif exchange == "BINANCE":
-                res_b = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol.upper()}, timeout=3)
-                if res_b.status_code == 200:
-                    price_data = res_b.json()
-                    if price_data and price_data.get("price"):
-                        base_price = float(price_data["price"])
-        except Exception as price_err:
-            current_app.logger.warning(f"진입 초기 base_price 실시간 획득 실패: {str(price_err)}")
+        # 캐시가 없는 진입 극초기라도 API 호출 제한(EGW00201) 방지를 위해 동기식 시세 추가 조회는 생략합니다.
+        pass
     
     try:
         # 1. COINONE 호가 조회
@@ -592,16 +915,19 @@ def get_orderbook_api():
                     asks.sort(key=lambda x: x["price"])
                     bids.sort(key=lambda x: x["price"], reverse=True)
                     
+                    payload = {
+                        "symbol": symbol,
+                        "timestamp": int(time.time()),
+                        "total_ask_size": sum(x["size"] for x in asks),
+                        "total_bid_size": sum(x["size"] for x in bids),
+                        "asks": asks[:10],
+                        "bids": bids[:10]
+                    }
+                    _set_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key, payload)
                     return jsonify({
                         "success": True,
-                        "data": {
-                            "symbol": symbol,
-                            "timestamp": int(time.time()),
-                            "total_ask_size": sum(x["size"] for x in asks),
-                            "total_bid_size": sum(x["size"] for x in bids),
-                            "asks": asks[:10],
-                            "bids": bids[:10]
-                        }
+                        "data": payload,
+                        "meta": {"source": "LIVE", "is_mock": False}
                     })
 
         # 2. BINANCE 호가 조회
@@ -612,24 +938,26 @@ def get_orderbook_api():
                 data = res.json()
                 asks = [{"price": float(x[0]), "size": float(x[1])} for x in data.get("asks", [])]
                 bids = [{"price": float(x[0]), "size": float(x[1])} for x in data.get("bids", [])]
+                payload = {
+                    "symbol": symbol,
+                    "timestamp": int(time.time()),
+                    "total_ask_size": sum(x["size"] for x in asks),
+                    "total_bid_size": sum(x["size"] for x in bids),
+                    "asks": asks,
+                    "bids": bids
+                }
+                _set_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key, payload)
                 return jsonify({
                     "success": True,
-                    "data": {
-                        "symbol": symbol,
-                        "timestamp": int(time.time()),
-                        "total_ask_size": sum(x["size"] for x in asks),
-                        "total_bid_size": sum(x["size"] for x in bids),
-                        "asks": asks,
-                        "bids": bids
-                    }
+                    "data": payload,
+                    "meta": {"source": "LIVE", "is_mock": False}
                 })
 
         # 3. KIS 호가 조회
         elif exchange == "KIS" and auth_header:
             user_id, token = get_user_id_from_header(auth_header)
             crypto_helper = current_app.crypto
-            params = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS", "broker_env": f"eq.{broker_env}"}
-            records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "KIS", broker_env)
             if records:
                 access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
                 secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
@@ -639,7 +967,7 @@ def get_orderbook_api():
                 
                 client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
                 kis_data = client.get_orderbook(symbol)
-                output = kis_data.get("output", {})
+                output = kis_data.get("output1", {})
                 
                 asks = []
                 bids = []
@@ -659,39 +987,38 @@ def get_orderbook_api():
                 base_price = float(output.get("askp1", base_price))
                 
                 if asks or bids:
+                    payload = {
+                        "symbol": symbol,
+                        "timestamp": int(time.time()),
+                        "total_ask_size": float(output.get("tot_ask_rsqn", 0)),
+                        "total_bid_size": float(output.get("tot_bid_rsqn", 0)),
+                        "asks": asks,
+                        "bids": bids
+                    }
+                    _set_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key, payload)
                     return jsonify({
                         "success": True,
-                        "data": {
-                            "symbol": symbol,
-                            "timestamp": int(time.time()),
-                            "total_ask_size": float(output.get("tot_ask_rsqn", 0)),
-                            "total_bid_size": float(output.get("tot_bid_rsqn", 0)),
-                            "asks": asks,
-                            "bids": bids
-                        }
+                        "data": payload,
+                        "meta": {"source": "LIVE", "is_mock": False}
                     })
+                degraded_reasons.append(f"KIS_EMPTY_ORDERBOOK({records[0].get('broker_env', broker_env)})")
+            else:
+                degraded_reasons.append(f"KIS_KEYS_MISSING({broker_env})")
 
         # 4. TOSS 호가 조회
         elif exchange == "TOSS" and auth_header:
             user_id, token = get_user_id_from_header(auth_header)
             crypto_helper = current_app.crypto
-            params = {"user_id": f"eq.{user_id}", "exchange": "eq.TOSS", "broker_env": f"eq.{broker_env}"}
-            records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "TOSS", broker_env)
+            records_kis = _query_user_exchange_records(auth_header, user_id, "KIS")
             
             # Toss 키가 없을 때 KIS로 우회
             if not records:
-                params_kis = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS"}
-                records_kis = query_supabase(auth_header, "user_api_keys", "GET", params=params_kis)
+                degraded_reasons.append(f"TOSS_KEYS_MISSING({broker_env})")
                 if records_kis:
-                    kis_access_key = crypto_helper.decrypt(records_kis[0].get("encrypted_access_key"))
-                    kis_secret_key = crypto_helper.decrypt(records_kis[0].get("encrypted_secret_key"))
-                    cano = records_kis[0].get("kis_account_no")
-                    acnt_prdt_cd = records_kis[0].get("kis_account_code", "01")
-                    kis_env = records_kis[0].get("broker_env", "MOCK")
-                    
-                    client = KISClient(appkey=kis_access_key, appsecret=kis_secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
+                    client = _load_kis_client_from_records(records_kis)
                     kis_data = client.get_orderbook(symbol)
-                    output = kis_data.get("output", {})
+                    output = kis_data.get("output1", {})
                     asks = []
                     bids = []
                     for i in range(1, 11):
@@ -708,53 +1035,55 @@ def get_orderbook_api():
                     
                     base_price = float(output.get("askp1", base_price))
                     
+                    payload = {
+                        "symbol": symbol,
+                        "timestamp": int(time.time()),
+                        "total_ask_size": float(output.get("tot_ask_rsqn", 0)),
+                        "total_bid_size": float(output.get("tot_bid_rsqn", 0)),
+                        "asks": asks,
+                        "bids": bids
+                    }
+                    _set_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key, payload)
                     return jsonify({
                         "success": True,
-                        "data": {
-                            "symbol": symbol,
-                            "timestamp": int(time.time()),
-                            "total_ask_size": float(output.get("tot_ask_rsqn", 0)),
-                            "total_bid_size": float(output.get("tot_bid_rsqn", 0)),
-                            "asks": asks,
-                            "bids": bids
-                        }
+                        "data": payload,
+                        "meta": {"source": "KIS_FALLBACK", "is_mock": False}
                     })
+                degraded_reasons.append("KIS_FALLBACK_KEYS_MISSING")
             else:
                 access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
                 secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
                 toss_account_seq = records[0].get("toss_account_seq")
                 
-                client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
-                toss_data = client.get_orderbook(symbol)
-                
-                result = {}
-                if isinstance(toss_data, dict):
-                    result = toss_data.get("result", {})
-                elif isinstance(toss_data, list) and len(toss_data) > 0:
-                    result = toss_data[0] if isinstance(toss_data[0], dict) else {}
-                
-                # Toss 호가 스키마에 부합하게 데이터 매핑
                 asks = []
                 bids = []
-                for i in range(1, 11):
-                    ask_p = float(result.get(f"askPrice{i}", 0))
-                    ask_s = float(result.get(f"askSize{i}", 0))
-                    bid_p = float(result.get(f"bidPrice{i}", 0))
-                    bid_s = float(result.get(f"bidSize{i}", 0))
-                    if ask_p > 0:
-                        asks.append({"price": ask_p, "size": ask_s})
-                    if bid_p > 0:
-                        bids.append({"price": bid_p, "size": bid_s})
-                
-                asks.sort(key=lambda x: x["price"])
-                bids.sort(key=lambda x: x["price"], reverse=True)
-                
-                base_price = float(result.get("askPrice1", base_price))
-                
-                if asks or bids:
-                    return jsonify({
-                        "success": True,
-                        "data": {
+                try:
+                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
+                    toss_data = client.get_orderbook(symbol)
+                    
+                    result = {}
+                    if isinstance(toss_data, dict):
+                        result = toss_data.get("result", {})
+                    elif isinstance(toss_data, list) and len(toss_data) > 0:
+                        result = toss_data[0] if isinstance(toss_data[0], dict) else {}
+                    
+                    # Toss 호가 스키마에 부합하게 데이터 매핑
+                    for i in range(1, 11):
+                        ask_p = float(result.get(f"askPrice{i}", 0))
+                        ask_s = float(result.get(f"askSize{i}", 0))
+                        bid_p = float(result.get(f"bidPrice{i}", 0))
+                        bid_s = float(result.get(f"bidSize{i}", 0))
+                        if ask_p > 0:
+                            asks.append({"price": ask_p, "size": ask_s})
+                        if bid_p > 0:
+                            bids.append({"price": bid_p, "size": bid_s})
+
+                    asks.sort(key=lambda x: x["price"])
+                    bids.sort(key=lambda x: x["price"], reverse=True)
+                    base_price = float(result.get("askPrice1", base_price))
+                    
+                    if asks or bids:
+                        payload = {
                             "symbol": symbol,
                             "timestamp": int(time.time()),
                             "total_ask_size": float(result.get("totalAskSize", 0)),
@@ -762,14 +1091,74 @@ def get_orderbook_api():
                             "asks": asks,
                             "bids": bids
                         }
-                    })
+                        _set_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key, payload)
+                        return jsonify({
+                            "success": True,
+                            "data": payload,
+                            "meta": {"source": "LIVE", "is_mock": False}
+                        })
+                except Exception as toss_error:
+                    current_app.logger.warning(f"Toss 호가 조회 실패, KIS 폴백 시도: {str(toss_error)}")
+                    degraded_reasons.append(f"TOSS_ORDERBOOK_FAILED({str(toss_error)[:80]})")
+
+                if records_kis:
+                    try:
+                        client_kis = _load_kis_client_from_records(records_kis)
+                        kis_data = client_kis.get_orderbook(symbol)
+                        output = kis_data.get("output1", {})
+                        asks = []
+                        bids = []
+                        for i in range(1, 11):
+                            ask_p = float(output.get(f"askp{i}", 0))
+                            ask_s = float(output.get(f"askp_rsqn{i}", 0))
+                            bid_p = float(output.get(f"bidp{i}", 0))
+                            bid_s = float(output.get(f"bidp_rsqn{i}", 0))
+                            if ask_p > 0:
+                                asks.append({"price": ask_p, "size": ask_s})
+                            if bid_p > 0:
+                                bids.append({"price": bid_p, "size": bid_s})
+                        asks.sort(key=lambda x: x["price"])
+                        bids.sort(key=lambda x: x["price"], reverse=True)
+                        base_price = float(output.get("askp1", base_price))
+                        if asks or bids:
+                            payload = {
+                                "symbol": symbol,
+                                "timestamp": int(time.time()),
+                                "total_ask_size": float(output.get("tot_ask_rsqn", 0)),
+                                "total_bid_size": float(output.get("tot_bid_rsqn", 0)),
+                                "asks": asks,
+                                "bids": bids
+                            }
+                            _set_cached_level2_snapshot(ORDERBOOK_CACHE, cache_key, payload)
+                            return jsonify({
+                                "success": True,
+                                "data": payload,
+                                "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                            })
+                        degraded_reasons.append(f"KIS_FALLBACK_EMPTY_ORDERBOOK({records_kis[0].get('broker_env', 'UNKNOWN')})")
+                    except Exception as kis_fallback_error:
+                        degraded_reasons.append(f"KIS_FALLBACK_ORDERBOOK_FAILED({str(kis_fallback_error)[:80]})")
+                else:
+                    degraded_reasons.append("KIS_FALLBACK_KEYS_MISSING")
+        elif exchange in ("KIS", "TOSS") and not auth_header:
+            degraded_reasons.append("AUTH_HEADER_MISSING")
 
     except Exception as e:
         current_app.logger.warning(f"실시간 호가 API 조회 실패로 인한 Mock 활성화: {str(e)}")
+        degraded_reasons.append(f"ORDERBOOK_ROUTE_EXCEPTION({str(e)[:80]})")
 
     # 5. 모든 조회 실패 또는 장외 시간 시 시뮬레이션 Mock 반환
     mock_data = generate_mock_orderbook(symbol, base_price=base_price)
-    return jsonify({"success": True, "data": mock_data, "is_mock": True})
+    return jsonify({
+        "success": True,
+        "data": mock_data,
+        "is_mock": True,
+        "meta": {
+            "source": "MOCK",
+            "is_mock": True,
+            "degraded_reason": _compact_degraded_reason("LIVE_ORDERBOOK_UNAVAILABLE", degraded_reasons),
+        }
+    })
 
 
 @trade_bp.route("/api/chart/trades", methods=["GET"])
@@ -786,6 +1175,21 @@ def get_trades_api():
         return jsonify({"success": False, "message": "exchange 및 symbol 파라미터가 필수적입니다."}), 400
 
     auth_header = request.headers.get("Authorization")
+    degraded_reasons = []
+    
+    cache_key = (exchange, symbol, broker_env)
+    cached_trades = _get_cached_level2_snapshot(TRADES_CACHE, cache_key)
+    if cached_trades is not None:
+        return jsonify({
+            "success": True,
+            "data": cached_trades,
+            "meta": {
+                "source": "CACHE",
+                "is_mock": False,
+                "cache_ttl_seconds": LEVEL2_CACHE_TTL_SECONDS,
+            }
+        })
+
     # 기본 Mock 기준 가격 조회 시도 (캐시된 캔들 종가가 존재한다면 동적으로 보정)
     base_price = 150000
     cached_close = None
@@ -797,50 +1201,8 @@ def get_trades_api():
     if cached_close is not None and cached_close > 0:
         base_price = cached_close
     else:
-        # 캐시가 없는 진입 극초기에는 동기식으로 시세를 직접 1회 조회하여 보정
-        try:
-            if exchange == "KIS" and auth_header:
-                user_id, token = get_user_id_from_header(auth_header)
-                crypto_helper = current_app.crypto
-                params_db = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS", "broker_env": f"eq.{broker_env}"}
-                records = query_supabase(auth_header, "user_api_keys", "GET", params=params_db)
-                if records:
-                    access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
-                    secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
-                    cano = records[0].get("kis_account_no")
-                    acnt_prdt_cd = records[0].get("kis_account_code", "01")
-                    kis_env = records[0].get("broker_env", "MOCK")
-                    client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
-                    price_info = client.get_price(symbol)
-                    if price_info and price_info.get("current_price"):
-                        base_price = price_info["current_price"]
-            elif exchange == "TOSS" and auth_header:
-                user_id, token = get_user_id_from_header(auth_header)
-                crypto_helper = current_app.crypto
-                params_db = {"user_id": f"eq.{user_id}", "exchange": "eq.TOSS", "broker_env": f"eq.{broker_env}"}
-                records = query_supabase(auth_header, "user_api_keys", "GET", params=params_db)
-                if records:
-                    access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
-                    secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
-                    toss_account_seq = records[0].get("toss_account_seq")
-                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
-                    price_info = client.get_price(symbol)
-                    if price_info and price_info.get("current_price"):
-                        base_price = price_info["current_price"]
-            elif exchange == "COINONE":
-                res_c = requests.get(f"https://api.coinone.co.kr/public/v2/ticker/KRW/{symbol.upper()}", timeout=3)
-                if res_c.status_code == 200:
-                    ticker_data = res_c.json().get("ticker")
-                    if ticker_data and ticker_data.get("last"):
-                        base_price = float(ticker_data["last"])
-            elif exchange == "BINANCE":
-                res_b = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": symbol.upper()}, timeout=3)
-                if res_b.status_code == 200:
-                    price_data = res_b.json()
-                    if price_data and price_data.get("price"):
-                        base_price = float(price_data["price"])
-        except Exception as price_err:
-            current_app.logger.warning(f"진입 초기 base_price 실시간 획득 실패: {str(price_err)}")
+        # 캐시가 없는 진입 극초기라도 API 호출 제한(EGW00201) 방지를 위해 동기식 시세 추가 조회는 생략합니다.
+        pass
     
     try:
         # 1. COINONE 체결 조회
@@ -863,7 +1225,12 @@ def get_trades_api():
                             "side": side,
                             "change_rate": 0.0
                         })
-                    return jsonify({"success": True, "data": trades})
+                    _set_cached_level2_snapshot(TRADES_CACHE, cache_key, trades)
+                    return jsonify({
+                        "success": True,
+                        "data": trades,
+                        "meta": {"source": "LIVE", "is_mock": False}
+                    })
 
         # 2. BINANCE 체결 조회
         elif exchange == "BINANCE":
@@ -884,14 +1251,18 @@ def get_trades_api():
                         "side": side,
                         "change_rate": 0.0
                     })
-                return jsonify({"success": True, "data": trades})
+                _set_cached_level2_snapshot(TRADES_CACHE, cache_key, trades)
+                return jsonify({
+                    "success": True,
+                    "data": trades,
+                    "meta": {"source": "LIVE", "is_mock": False}
+                })
 
         # 3. KIS 체결 조회
         elif exchange == "KIS" and auth_header:
             user_id, token = get_user_id_from_header(auth_header)
             crypto_helper = current_app.crypto
-            params = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS", "broker_env": f"eq.{broker_env}"}
-            records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "KIS", broker_env)
             if records:
                 access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
                 secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
@@ -901,7 +1272,7 @@ def get_trades_api():
                 
                 client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
                 kis_data = client.get_trades(symbol)
-                output2 = kis_data.get("output2", [])
+                output2 = kis_data.get("output", [])
                 
                 trades = []
                 for item in output2[:20]:
@@ -928,29 +1299,30 @@ def get_trades_api():
                 
                 if output2:
                     base_price = float(output2[0].get("stck_prpr", base_price))
-                    return jsonify({"success": True, "data": trades})
+                    _set_cached_level2_snapshot(TRADES_CACHE, cache_key, trades)
+                    return jsonify({
+                        "success": True,
+                        "data": trades,
+                        "meta": {"source": "LIVE", "is_mock": False}
+                    })
+                degraded_reasons.append(f"KIS_EMPTY_TRADES({records[0].get('broker_env', broker_env)})")
+            else:
+                degraded_reasons.append(f"KIS_KEYS_MISSING({broker_env})")
 
         # 4. TOSS 체결 조회
         elif exchange == "TOSS" and auth_header:
             user_id, token = get_user_id_from_header(auth_header)
             crypto_helper = current_app.crypto
-            params = {"user_id": f"eq.{user_id}", "exchange": "eq.TOSS", "broker_env": f"eq.{broker_env}"}
-            records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "TOSS", broker_env)
+            records_kis = _query_user_exchange_records(auth_header, user_id, "KIS")
             
             # Toss 키가 없을 때 KIS로 우회
             if not records:
-                params_kis = {"user_id": f"eq.{user_id}", "exchange": "eq.KIS"}
-                records_kis = query_supabase(auth_header, "user_api_keys", "GET", params=params_kis)
+                degraded_reasons.append(f"TOSS_KEYS_MISSING({broker_env})")
                 if records_kis:
-                    kis_access_key = crypto_helper.decrypt(records_kis[0].get("encrypted_access_key"))
-                    kis_secret_key = crypto_helper.decrypt(records_kis[0].get("encrypted_secret_key"))
-                    cano = records_kis[0].get("kis_account_no")
-                    acnt_prdt_cd = records_kis[0].get("kis_account_code", "01")
-                    kis_env = records_kis[0].get("broker_env", "MOCK")
-                    
-                    client = KISClient(appkey=kis_access_key, appsecret=kis_secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
+                    client = _load_kis_client_from_records(records_kis)
                     kis_data = client.get_trades(symbol)
-                    output2 = kis_data.get("output2", [])
+                    output2 = kis_data.get("output", [])
                     trades = []
                     for item in output2[:20]:
                         t_str = item.get("stck_cntg_hour")
@@ -969,48 +1341,110 @@ def get_trades_api():
                     
                     if output2:
                         base_price = float(output2[0].get("stck_prpr", base_price))
-                    return jsonify({"success": True, "data": trades})
+                    _set_cached_level2_snapshot(TRADES_CACHE, cache_key, trades)
+                    return jsonify({
+                        "success": True,
+                        "data": trades,
+                        "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                    })
+                degraded_reasons.append("KIS_FALLBACK_KEYS_MISSING")
             else:
                 access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
                 secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
                 toss_account_seq = records[0].get("toss_account_seq")
                 
-                client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
-                toss_data = client.get_trades(symbol)
-                
-                raw_trades = []
-                if isinstance(toss_data, list):
-                    raw_trades = toss_data
-                elif isinstance(toss_data, dict):
-                    result = toss_data.get("result", {})
-                    if isinstance(result, list):
-                        raw_trades = result
-                    elif isinstance(result, dict):
-                        raw_trades = result.get("trades", [])
-                
                 trades = []
-                for item in raw_trades[:20]:
-                    trades.append({
-                        "time": item.get("timestamp", "").split(" ")[1] if " " in item.get("timestamp", "") else item.get("timestamp"),
-                        "timestamp": int(time.time()),
-                        "price": float(item.get("price", 0)),
-                        "qty": float(item.get("quantity", 0)),
-                        "side": item.get("side", "BUY").upper(),
-                        "change_rate": float(item.get("changeRate", 0))
-                    })
-                
-                if raw_trades:
-                    base_price = float(raw_trades[0].get("price", base_price))
+                try:
+                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
+                    toss_data = client.get_trades(symbol)
                     
-                if trades:
-                    return jsonify({"success": True, "data": trades})
+                    raw_trades = []
+                    if isinstance(toss_data, list):
+                        raw_trades = toss_data
+                    elif isinstance(toss_data, dict):
+                        result = toss_data.get("result", {})
+                        if isinstance(result, list):
+                            raw_trades = result
+                        elif isinstance(result, dict):
+                            raw_trades = result.get("trades", [])
+                    
+                    for item in raw_trades[:20]:
+                        trades.append({
+                            "time": item.get("timestamp", "").split(" ")[1] if " " in item.get("timestamp", "") else item.get("timestamp"),
+                            "timestamp": int(time.time()),
+                            "price": float(item.get("price", 0)),
+                            "qty": float(item.get("quantity", 0)),
+                            "side": item.get("side", "BUY").upper(),
+                            "change_rate": float(item.get("changeRate", 0))
+                        })
+                    
+                    if raw_trades:
+                        base_price = float(raw_trades[0].get("price", base_price))
+                        
+                    if trades:
+                        _set_cached_level2_snapshot(TRADES_CACHE, cache_key, trades)
+                        return jsonify({
+                            "success": True,
+                            "data": trades,
+                            "meta": {"source": "LIVE", "is_mock": False}
+                        })
+                except Exception as toss_error:
+                    current_app.logger.warning(f"Toss 체결 조회 실패, KIS 폴백 시도: {str(toss_error)}")
+                    degraded_reasons.append(f"TOSS_TRADES_FAILED({str(toss_error)[:80]})")
+
+                if records_kis:
+                    try:
+                        client_kis = _load_kis_client_from_records(records_kis)
+                        kis_data = client_kis.get_trades(symbol)
+                        output2 = kis_data.get("output", [])
+                        trades = []
+                        for item in output2[:20]:
+                            t_str = item.get("stck_cntg_hour")
+                            try:
+                                time_str = f"{t_str[0:2]}:{t_str[2:4]}:{t_str[4:6]}"
+                            except IndexError:
+                                time_str = t_str
+                            trades.append({
+                                "time": time_str,
+                                "timestamp": int(time.time()),
+                                "price": float(item.get("stck_prpr", 0)),
+                                "qty": float(item.get("cntg_vol", 0)),
+                                "side": "SELL" if item.get("tday_ccld_xe_yn") == "5" else "BUY",
+                                "change_rate": float(item.get("prdy_ctrt", 0.0))
+                            })
+                        if output2:
+                            base_price = float(output2[0].get("stck_prpr", base_price))
+                        if trades:
+                            _set_cached_level2_snapshot(TRADES_CACHE, cache_key, trades)
+                            return jsonify({
+                                "success": True,
+                                "data": trades,
+                                "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                            })
+                        degraded_reasons.append(f"KIS_FALLBACK_EMPTY_TRADES({records_kis[0].get('broker_env', 'UNKNOWN')})")
+                    except Exception as kis_fallback_error:
+                        degraded_reasons.append(f"KIS_FALLBACK_TRADES_FAILED({str(kis_fallback_error)[:80]})")
+                else:
+                    degraded_reasons.append("KIS_FALLBACK_KEYS_MISSING")
+        elif exchange in ("KIS", "TOSS") and not auth_header:
+            degraded_reasons.append("AUTH_HEADER_MISSING")
 
     except Exception as e:
         current_app.logger.warning(f"실시간 체결 API 조회 실패로 인한 Mock 활성화: {str(e)}")
+        degraded_reasons.append(f"TRADES_ROUTE_EXCEPTION({str(e)[:80]})")
 
     # 5. 모든 조회 실패 또는 장외 시간 시 시뮬레이션 Mock 반환
     mock_data = generate_mock_trades(symbol, base_price=base_price)
-    return jsonify({"success": True, "data": mock_data, "is_mock": True})
+    return jsonify({
+        "success": True,
+        "data": mock_data,
+        "is_mock": True,
+        "meta": {
+            "source": "MOCK",
+            "is_mock": True,
+            "degraded_reason": _compact_degraded_reason("LIVE_TRADES_UNAVAILABLE", degraded_reasons),
+        }
+    })
 
 
 @trade_bp.route("/api/symbol/lookup", methods=["GET"])
@@ -1023,9 +1457,11 @@ def lookup_symbol():
     if not query:
         return jsonify({"success": False, "message": "query 파라미터가 필수적입니다."}), 400
 
-    from backend.services.symbol_metadata import SYMBOL_METADATA
+    import re
+    from backend.services.symbol_metadata import SYMBOL_METADATA, search_crypto_symbols, COIN_DISPLAY_NAMES
+    from backend.services.market_repository import MarketRepository
 
-    # 1. 완전 일치 매칭 (종목코드 또는 display_name)
+    # 1. 완전 일치 매칭 (하드코딩 SYMBOL_METADATA)
     for sym, meta in SYMBOL_METADATA.items():
         if sym.upper() == query or meta.get("display_name", "").upper() == query:
             return jsonify({
@@ -1038,7 +1474,38 @@ def lookup_symbol():
                 }
             })
 
-    # 2. 부분 일치 매칭
+    # 2. 가상자산 정밀 매칭 (한글명 맵 또는 코인 캐시 기반)
+    for base_sym, name in COIN_DISPLAY_NAMES.items():
+        if name.upper() == query or base_sym == query:
+            symbol_to_use = f"{base_sym}USDT"
+            return jsonify({
+                "success": True,
+                "data": {
+                    "symbol": symbol_to_use,
+                    "display_name": name,
+                    "asset_type": "CRYPTO",
+                    "market": "USDT"
+                }
+            })
+
+    # 3. 주식 마스터 DB 정밀 매칭
+    repo = MarketRepository()
+    db_results = repo.search_stock_master(query, limit=5)
+    
+    for row in db_results:
+        clean_name = re.sub(r"^KR\d{10}", "", row["name"]).strip()
+        if row["symbol"] == query or clean_name.upper() == query or row["name"].upper() == query:
+            return jsonify({
+                "success": True,
+                "data": {
+                    "symbol": row["symbol"],
+                    "display_name": clean_name,
+                    "asset_type": "STOCK",
+                    "market": "KR"
+                }
+            })
+
+    # 4. 부분 일치 매칭 (SYMBOL_METADATA)
     for sym, meta in SYMBOL_METADATA.items():
         if query in meta.get("display_name", "").upper() or query in sym:
             return jsonify({
@@ -1051,7 +1518,21 @@ def lookup_symbol():
                 }
             })
 
-    # 3. 매칭 실패 시 기본값 반환 (Toss 등 신규 등록 주식/코인 대비)
+    # 5. 주식 DB 부분 일치 매칭 폴백
+    if db_results:
+        best_match = db_results[0]
+        clean_name = re.sub(r"^KR\d{10}", "", best_match["name"]).strip()
+        return jsonify({
+            "success": True,
+            "data": {
+                "symbol": best_match["symbol"],
+                "display_name": clean_name,
+                "asset_type": "STOCK",
+                "market": "KR"
+            }
+        })
+
+    # 6. 매칭 실패 시 기본값 반환 (Toss 등 신규 등록 주식/코인 대비)
     return jsonify({
         "success": True,
         "data": {
@@ -1072,18 +1553,47 @@ def search_symbols():
     if not query:
         return jsonify({"success": True, "data": []})
 
-    from backend.services.symbol_metadata import SYMBOL_METADATA
+    import re
+    from backend.services.symbol_metadata import SYMBOL_METADATA, search_crypto_symbols
+    from backend.services.market_repository import MarketRepository
+    
     results = []
+    seen = set()
 
+    # 1. 하드코딩 SYMBOL_METADATA 검색
     for sym, meta in SYMBOL_METADATA.items():
         display_name = meta.get("display_name", "")
-        # 종목코드 또는 display_name에 입력어가 포함되어 있는지 체크
         if query in sym or query in display_name.upper():
+            if sym not in seen:
+                seen.add(sym)
+                results.append({
+                    "symbol": sym,
+                    "display_name": display_name,
+                    "asset_type": meta.get("asset_type"),
+                    "market": meta.get("market")
+                })
+
+    # 2. 가상자산 캐시 기반 검색
+    crypto_results = search_crypto_symbols(query, limit=10)
+    for c in crypto_results:
+        sym = c["symbol"]
+        if sym not in seen:
+            seen.add(sym)
+            results.append(c)
+
+    # 3. 주식 마스터 DB 기반 검색
+    repo = MarketRepository()
+    db_results = repo.search_stock_master(query, limit=10)
+    for row in db_results:
+        sym = row["symbol"]
+        if sym not in seen:
+            seen.add(sym)
+            clean_name = re.sub(r"^KR\d{10}", "", row["name"]).strip()
             results.append({
                 "symbol": sym,
-                "display_name": display_name,
-                "asset_type": meta.get("asset_type"),
-                "market": meta.get("market")
+                "display_name": clean_name,
+                "asset_type": "STOCK",
+                "market": "KR"
             })
 
     # 가독성을 위해 코드 길이 순 및 사전 순 정렬

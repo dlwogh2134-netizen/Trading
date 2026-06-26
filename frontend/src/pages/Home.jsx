@@ -161,7 +161,7 @@ function MarketTable({ rows, titleType = "stock", ranking = "거래대금" }) {
           </div>
         ) : rows.map((row) => {
           const symbol = row.code || row.symbol;
-          const assetPath = `/asset/${isStock ? "stock" : "crypto"}/${symbol}`;
+          const assetPath = `/asset/${isStock ? "STOCK" : "CRYPTO"}/${symbol}`;
           return (
             <Link
               key={`${row.rank}-${row.name}`}
@@ -213,7 +213,7 @@ function MobileMarketTable({ rows, titleType = "stock", ranking = "거래대금"
         <div className="px-4 py-8 text-center text-sm text-slate-500">표시할 데이터가 없습니다.</div>
       ) : rows.map((row) => {
         const symbol = row.code || row.symbol;
-        const assetPath = `/asset/${titleType === "stock" ? "stock" : "crypto"}/${symbol}`;
+        const assetPath = `/asset/${titleType === "stock" ? "STOCK" : "CRYPTO"}/${symbol}`;
         return (
           <Link
             key={`${titleType}-${row.rank}-${row.name}`}

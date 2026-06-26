@@ -31,6 +31,10 @@ def get_home_market():
     try:
         data = request.json or {}
         overview = build_home_overview(data)
+        overview["route_meta"] = {
+            "auth_mode": "PUBLIC_MARKET_OVERVIEW",
+            "user_api_keys_used": False,
+        }
         return jsonify({
             "success": True,
             "data": overview
@@ -276,7 +280,13 @@ def get_dashboard_balance():
             
         return jsonify({
             "success": True,
-            "data": balance
+            "data": balance,
+            "meta": {
+                "credential_source": "USER_API_KEYS_DB",
+                "exchange": exchange,
+                "broker_env": broker_env,
+                "user_id": user_id,
+            }
         })
     except Exception as e:
         return jsonify({

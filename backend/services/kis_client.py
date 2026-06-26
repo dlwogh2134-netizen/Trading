@@ -1,13 +1,18 @@
 import os
 import json
 import time
+import threading
 import requests
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from backend.services.exchange_client import ExchangeClient
 
 KST = timezone(timedelta(hours=9))
 
-TOKEN_CACHE_FILE = ".kis_token_cache.json"
+# 스케줄러와 웹 요청 스레드 간의 토큰 파일 경로 공유 및 중복 획득 제한
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+TOKEN_CACHE_FILE = str(PROJECT_ROOT / ".kis_token_cache.json")
+TOKEN_LOCK = threading.Lock()
 
 class KISClient(ExchangeClient):
     def __init__(self, appkey: str, appsecret: str, cano: str, acnt_prdt_cd: str = "01", env: str = "MOCK"):
@@ -18,7 +23,7 @@ class KISClient(ExchangeClient):
         self.env = env.upper()
         
         if self.env == "REAL":
-            self.base_url = "https://openapi.koreainvestment.com:17207"
+            self.base_url = "https://openapi.koreainvestment.com:9443"
             self.balance_tr_id = "TTTC8434R"
             self.buy_tr_id = "TTTC0802U"
             self.sell_tr_id = "TTTC0801U"
@@ -33,44 +38,45 @@ class KISClient(ExchangeClient):
         로컬 JSON 캐시에서 Access Token을 가져옵니다.
         만료되었거나 캐시가 존재하지 않으면 새로 발급을 요청하고 캐시를 갱신합니다.
         """
-        cache = {}
-        if os.path.exists(TOKEN_CACHE_FILE):
+        with TOKEN_LOCK:
+            cache = {}
+            if os.path.exists(TOKEN_CACHE_FILE):
+                try:
+                    with open(TOKEN_CACHE_FILE, "r") as f:
+                        cache = json.load(f)
+                except Exception:
+                    pass
+                    
+            key_cache = cache.get(self.appkey, {})
+            token = key_cache.get("access_token")
+            expired_at_str = key_cache.get("expired_at")
+            
+            if token and expired_at_str:
+                try:
+                    expired_at = datetime.strptime(expired_at_str, "%Y-%m-%d %H:%M:%S")
+                    if (expired_at - datetime.now()).total_seconds() > 300:
+                        return token
+                except Exception:
+                    pass
+                    
+            token_data = self._request_new_token()
+            new_token = token_data["access_token"]
+            
+            expired_at_raw = token_data.get("access_token_token_expired")
+            if not expired_at_raw:
+                expired_at_raw = datetime.fromtimestamp(time.time() + 86400).strftime("%Y-%m-%d %H:%M:%S")
+                
+            cache[self.appkey] = {
+                "access_token": new_token,
+                "expired_at": expired_at_raw
+            }
             try:
-                with open(TOKEN_CACHE_FILE, "r") as f:
-                    cache = json.load(f)
+                with open(TOKEN_CACHE_FILE, "w") as f:
+                    json.dump(cache, f, indent=2)
             except Exception:
                 pass
                 
-        key_cache = cache.get(self.appkey, {})
-        token = key_cache.get("access_token")
-        expired_at_str = key_cache.get("expired_at")
-        
-        if token and expired_at_str:
-            try:
-                expired_at = datetime.strptime(expired_at_str, "%Y-%m-%d %H:%M:%S")
-                if (expired_at - datetime.now()).total_seconds() > 300:
-                    return token
-            except Exception:
-                pass
-                
-        token_data = self._request_new_token()
-        new_token = token_data["access_token"]
-        
-        expired_at_raw = token_data.get("access_token_token_expired")
-        if not expired_at_raw:
-            expired_at_raw = datetime.fromtimestamp(time.time() + 86400).strftime("%Y-%m-%d %H:%M:%S")
-            
-        cache[self.appkey] = {
-            "access_token": new_token,
-            "expired_at": expired_at_raw
-        }
-        try:
-            with open(TOKEN_CACHE_FILE, "w") as f:
-                json.dump(cache, f, indent=2)
-        except Exception:
-            pass
-            
-        return new_token
+            return new_token
 
     def _request_new_token(self) -> dict:
         url = f"{self.base_url}/oauth2/tokenP"
@@ -82,7 +88,7 @@ class KISClient(ExchangeClient):
         headers = {
             "content-type": "application/json"
         }
-        res = requests.post(url, json=payload, headers=headers)
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS Token issuance failed: {res.text}")
         return res.json()
@@ -100,7 +106,7 @@ class KISClient(ExchangeClient):
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": symbol
         }
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS get_price failed: {res.text}")
             
@@ -158,7 +164,7 @@ class KISClient(ExchangeClient):
             "FID_VOL_CNT": "",
             "FID_INPUT_DATE_1": "",
         }
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS turnover ranking failed: {res.text}")
 
@@ -230,7 +236,7 @@ class KISClient(ExchangeClient):
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": ""
         }
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS get_balance failed: {res.text}")
             
@@ -328,7 +334,7 @@ class KISClient(ExchangeClient):
             "ORD_UNPR": str(order_price)
         }
         
-        res = requests.post(url, json=payload, headers=headers)
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS place_order failed: {res.text}")
             
@@ -384,7 +390,7 @@ class KISClient(ExchangeClient):
             "FID_ORG_ADJ_PRC": "0"
         }
         
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS get_candles failed: {res.text}")
             
@@ -466,7 +472,7 @@ class KISClient(ExchangeClient):
                 "FID_ETC_CLS_CODE": ""
             }
             
-            res = requests.get(url, headers=headers, params=params)
+            res = requests.get(url, headers=headers, params=params, timeout=10)
             if res.status_code != 200:
                 break
                 
@@ -568,7 +574,7 @@ class KISClient(ExchangeClient):
         """
         국내주식 호가 조회를 수행합니다. 매도/매수 10단계 호가 및 잔량을 리턴합니다.
         """
-        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-askprice"
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
         token = self._get_cached_token()
         headers = {
             "content-type": "application/json; charset=utf-8",
@@ -581,7 +587,7 @@ class KISClient(ExchangeClient):
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": symbol
         }
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS 호가 조회 실패: {res.text}")
             
@@ -595,7 +601,7 @@ class KISClient(ExchangeClient):
         """
         국내주식 실시간 체결 조회를 수행합니다. (최근 체결 30건 등)
         """
-        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-ccld"
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemconclusion"
         token = self._get_cached_token()
         headers = {
             "content-type": "application/json; charset=utf-8",
@@ -608,7 +614,7 @@ class KISClient(ExchangeClient):
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": symbol
         }
-        res = requests.get(url, headers=headers, params=params)
+        res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code != 200:
             raise Exception(f"KIS 체결 조회 실패: {res.text}")
             

@@ -4,17 +4,21 @@ import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { supabase } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
+
 export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userProfile }) {
   const { assetType, symbol } = useParams()
   const navigate = useNavigate()
+  const normalizedRouteAssetType = String(assetType || '').toUpperCase() === 'STOCK' ? 'STOCK' : 'CRYPTO'
+  const [resolvedAssetType, setResolvedAssetType] = useState(normalizedRouteAssetType)
 
   // 1. 거래소 기본값 세팅 (주식은 KIS 모의투자를 기본값으로, 코인은 COINONE)
-  const defaultExchange = assetType === 'STOCK' ? 'KIS' : 'COINONE'
+  const defaultExchange = normalizedRouteAssetType === 'STOCK' ? 'KIS' : 'COINONE'
   const [exchange, setExchange] = useState(defaultExchange)
   
   // 2. 환경 세팅 (KIS 모의투자를 위해 MOCK 기본값)
-  const [brokerEnv, setBrokerEnv] = useState(assetType === 'STOCK' && defaultExchange === 'KIS' ? 'MOCK' : 'REAL')
-  const [chartInterval, setChartInterval] = useState(assetType === 'STOCK' ? '1d' : '1h')
+  const [brokerEnv, setBrokerEnv] = useState(normalizedRouteAssetType === 'STOCK' && defaultExchange === 'KIS' ? 'MOCK' : 'REAL')
+  const [chartInterval, setChartInterval] = useState(normalizedRouteAssetType === 'STOCK' ? '1d' : '1h')
   
   // 3. 차트 및 시세 데이터 상태
   const [candleData, setCandleData] = useState([])
@@ -43,11 +47,25 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [newsList, setNewsList] = useState([])
   const [loadingNews, setLoadingNews] = useState(false)
   const [displayName, setDisplayName] = useState(symbol)
+  const [marketFeeds, setMarketFeeds] = useState({
+    candles: { source: 'IDLE', isMock: false, degradedReason: '' },
+    orderbook: { source: 'IDLE', isMock: false, degradedReason: '' },
+    trades: { source: 'IDLE', isMock: false, degradedReason: '' },
+  })
+  const [orderPrecheck, setOrderPrecheck] = useState(null)
+  const [precheckLoading, setPrecheckLoading] = useState(false)
+  const [precheckMessage, setPrecheckMessage] = useState('')
+  const [brokerAvailability, setBrokerAvailability] = useState(null)
 
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
   const candleSeriesRef = useRef(null)
   const abortControllerRef = useRef(null)
+  const lastCandleSignatureRef = useRef('')
+
+  const isIntradayInterval = !['1d', '1w', '1M'].includes(chartInterval)
+  const effectiveOrderPrice = orderType === 'LIMIT' ? Number(price || 0) : currentPrice
+  const totalEstimatedAmount = effectiveOrderPrice * Number(quantity || 0)
 
   // 세션 토큰 헤더 획득 헬퍼
   const getAuthHeader = async () => {
@@ -56,19 +74,81 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     return `Bearer ${session.access_token}`
   }
 
+  const pickPreferredStockBroker = (statusMap) => {
+    if (!statusMap) return null
+
+    const candidates = [
+      { exchange: 'TOSS', brokerEnv: 'REAL' },
+      { exchange: 'KIS', brokerEnv: 'REAL' },
+      { exchange: 'KIS', brokerEnv: 'MOCK' },
+    ]
+
+    for (const candidate of candidates) {
+      if (candidate.exchange === 'KIS') {
+        const key = `KIS_${candidate.brokerEnv}`
+        if (statusMap[key]?.registered) {
+          return candidate
+        }
+      } else {
+        const status = statusMap[candidate.exchange]
+        if (status?.registered) {
+          return candidate
+        }
+      }
+    }
+
+    return null
+  }
+
+  const isRegisteredStockBroker = (statusMap, targetExchange, targetEnv) => {
+    if (!statusMap) return false
+    if (targetExchange === 'KIS') {
+      const key = `KIS_${targetEnv}`
+      return !!statusMap[key]?.registered
+    }
+    const status = statusMap[targetExchange]
+    return !!status?.registered
+  }
+
+  const loadBrokerAvailability = async () => {
+    const authHeader = await getAuthHeader()
+    if (!authHeader) {
+      setBrokerAvailability(null)
+      return
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/keys/status`, {
+        headers: {
+          Authorization: authHeader,
+        },
+      })
+      const resData = await response.json()
+      if (resData.success && resData.data) {
+        setBrokerAvailability(resData.data)
+      }
+    } catch (error) {
+      console.error('브로커 등록 상태 로드 실패:', error)
+    }
+  }
+
   // 종목 메타데이터(한글명 등) 조회
   const fetchSymbolMetadata = async () => {
     try {
-      const response = await fetch(`http://localhost:5050/api/symbol/lookup?query=${symbol}`)
+      const response = await fetch(`${API_BASE_URL}/api/symbol/lookup?query=${symbol}`)
       const resData = await response.json()
       if (resData.success && resData.data && resData.data.display_name) {
         setDisplayName(resData.data.display_name)
+        const mappedAssetType = String(resData.data.asset_type || '').toUpperCase() === 'STOCK' ? 'STOCK' : 'CRYPTO'
+        setResolvedAssetType(mappedAssetType)
       } else {
         setDisplayName(symbol)
+        setResolvedAssetType(normalizedRouteAssetType)
       }
     } catch (e) {
       console.error("종목명 로드 실패:", e)
       setDisplayName(symbol)
+      setResolvedAssetType(normalizedRouteAssetType)
     }
   }
 
@@ -76,7 +156,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const fetchNewsList = async () => {
     setLoadingNews(true)
     try {
-      const response = await fetch(`http://localhost:5050/api/news?symbol=${symbol}&limit=6`)
+      const response = await fetch(`${API_BASE_URL}/api/news?symbol=${symbol}&limit=6`)
       const resData = await response.json()
       if (resData.success && resData.data && resData.data.items) {
         setNewsList(resData.data.items)
@@ -106,21 +186,87 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
   }
 
+  const formatTimestamp = (value) => {
+    if (!value) return '-'
+    const date = typeof value === 'number'
+      ? new Date(value > 1_000_000_000_000 ? value : value * 1000)
+      : new Date(value)
+    if (Number.isNaN(date.getTime())) return '-'
+    return date.toLocaleString('ko-KR', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+  }
+
+  const normalizeCandleTime = (rawTime) => {
+    if (typeof rawTime === 'number' && !Number.isNaN(rawTime)) {
+      return rawTime
+    }
+
+    if (typeof rawTime !== 'string' || !rawTime.trim()) {
+      return null
+    }
+
+    const value = rawTime.trim()
+    if (/^\d+$/.test(value)) {
+      return Number.parseInt(value, 10)
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value
+    }
+
+    const parsed = new Date(value.replace(' ', 'T'))
+    if (!Number.isNaN(parsed.getTime())) {
+      return Math.floor(parsed.getTime() / 1000)
+    }
+
+    return null
+  }
+
+  const buildCandleSignature = (items) => {
+    if (!items.length) return ''
+    const lastItem = items[items.length - 1]
+    return `${items.length}:${lastItem.time}:${lastItem.close}:${lastItem.volume}`
+  }
+
+  const getOverallFeedStatus = () => {
+    const sources = Object.values(marketFeeds)
+    if (sources.some((item) => item.isMock || item.source === 'MOCK')) {
+      return { label: 'MOCK', tone: 'text-amber-300 bg-amber-950/40 border-amber-800/60' }
+    }
+    if (sources.some((item) => item.source === 'CACHE')) {
+      return { label: 'DELAYED', tone: 'text-sky-300 bg-sky-950/40 border-sky-800/60' }
+    }
+    return { label: 'LIVE', tone: 'text-emerald-300 bg-emerald-950/40 border-emerald-800/60' }
+  }
+
+  const feedReasonSummary = [marketFeeds.candles, marketFeeds.orderbook, marketFeeds.trades]
+    .filter((item) => item.isMock && item.degradedReason)
+    .map((item) => item.degradedReason)
+    .join(' · ')
+
   // 1. 시세 캔들 로드
-  const fetchCandles = async () => {
+  const fetchCandles = async ({ silent = false } = {}) => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
     }
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    setLoadingChart(true)
+    if (!silent) {
+      setLoadingChart(true)
+    }
     const authHeader = await getAuthHeader()
     
     try {
-      const chartEx = assetType === 'STOCK' ? 'TOSS' : exchange;
-      const chartEnv = assetType === 'STOCK' ? 'REAL' : brokerEnv;
-      const url = `http://localhost:5050/api/chart/candles?exchange=${chartEx}&symbol=${symbol}&interval=${chartInterval}&broker_env=${chartEnv}&count=300`
+      const chartEx = exchange;
+      const chartEnv = brokerEnv;
+      const url = `${API_BASE_URL}/api/chart/candles?exchange=${chartEx}&symbol=${symbol}&interval=${chartInterval}&broker_env=${chartEnv}&count=300`
       const headers = {}
       if (authHeader) {
         headers['Authorization'] = authHeader
@@ -135,23 +281,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       if (resData.success && resData.data && resData.data.length > 0) {
         const rawFormatted = resData.data
           .map(item => {
-            const originTime = item.time;
-            let finalTime = originTime;
-            
-            if (typeof originTime === 'string') {
-              if (originTime.includes('T')) {
-                finalTime = originTime.split('T')[0];
-              } else if (originTime.includes(' ')) {
-                finalTime = originTime.split(' ')[0];
-              }
-            }
-            
-            if (typeof finalTime === 'number' || (typeof finalTime === 'string' && /^\d+$/.test(finalTime))) {
-              finalTime = parseInt(finalTime, 10);
-            } else {
-              finalTime = finalTime ? finalTime.toString() : '';
-            }
-            
+            const finalTime = normalizeCandleTime(item.time)
             return {
               time: finalTime,
               open: parseFloat(item.open),
@@ -162,13 +292,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
             };
           })
           .filter(item => {
-            const isValidTime = (typeof item.time === 'number' && !isNaN(item.time)) || 
-                               (typeof item.time === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.time));
+            const isValidTime = (typeof item.time === 'number' && !Number.isNaN(item.time)) || 
+              (typeof item.time === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.time));
             return isValidTime && 
-                   !isNaN(item.open) && 
-                   !isNaN(item.high) && 
-                   !isNaN(item.low) && 
-                   !isNaN(item.close);
+              !Number.isNaN(item.open) && 
+              !Number.isNaN(item.high) && 
+              !Number.isNaN(item.low) && 
+              !Number.isNaN(item.close);
           });
 
         if (rawFormatted.length === 0) {
@@ -205,8 +335,20 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           return;
         }
 
-        setCandleData(uniqueFormatted);
-        window.__debug_candle_data = uniqueFormatted;
+        const signature = buildCandleSignature(uniqueFormatted)
+        if (signature !== lastCandleSignatureRef.current) {
+          lastCandleSignatureRef.current = signature
+          setCandleData(uniqueFormatted)
+        }
+        setMarketFeeds(prev => ({
+          ...prev,
+          candles: {
+            source: resData.meta?.source || 'LIVE',
+            isMock: Boolean(resData.meta?.is_mock),
+            degradedReason: resData.meta?.degraded_reason || '',
+            checkedAt: Date.now(),
+          },
+        }))
         
         const lastCandle = uniqueFormatted[uniqueFormatted.length - 1];
         setCurrentPrice(lastCandle.close);
@@ -238,8 +380,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   // 2. 실시간 호가/체결 데이터 로드 (폴링)
   const fetchOrderbookAndTrades = async () => {
     try {
-      const chartEx = assetType === 'STOCK' ? 'TOSS' : exchange;
-      const chartEnv = assetType === 'STOCK' ? 'REAL' : brokerEnv;
+      const chartEx = exchange;
+      const chartEnv = brokerEnv;
       const authHeader = await getAuthHeader()
       
       const headers = {}
@@ -248,19 +390,40 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       }
 
       // 호가 조회
-      const obUrl = `http://localhost:5050/api/chart/orderbook?exchange=${chartEx}&symbol=${symbol}&broker_env=${chartEnv}`;
+      const obUrl = `${API_BASE_URL}/api/chart/orderbook?exchange=${chartEx}&symbol=${symbol}&broker_env=${chartEnv}`;
       const obRes = await fetch(obUrl, { headers });
       const obData = await obRes.json();
       if (obData.success) {
         setOrderbook(obData.data);
+        setMarketFeeds(prev => ({
+          ...prev,
+          orderbook: {
+            source: obData.meta?.source || (obData.is_mock ? 'MOCK' : 'LIVE'),
+            isMock: Boolean(obData.meta?.is_mock ?? obData.is_mock),
+            degradedReason: obData.meta?.degraded_reason || '',
+            checkedAt: Date.now(),
+          },
+        }))
       }
       
       // 체결 조회
-      const trUrl = `http://localhost:5050/api/chart/trades?exchange=${chartEx}&symbol=${symbol}&broker_env=${chartEnv}`;
+      const trUrl = `${API_BASE_URL}/api/chart/trades?exchange=${chartEx}&symbol=${symbol}&broker_env=${chartEnv}`;
       const trRes = await fetch(trUrl, { headers });
       const trData = await trRes.json();
       if (trData.success) {
         setTrades(trData.data);
+        setMarketFeeds(prev => ({
+          ...prev,
+          trades: {
+            source: trData.meta?.source || (trData.is_mock ? 'MOCK' : 'LIVE'),
+            isMock: Boolean(trData.meta?.is_mock ?? trData.is_mock),
+            degradedReason: trData.meta?.degraded_reason || '',
+            checkedAt: Date.now(),
+          },
+        }))
+        if (Array.isArray(trData.data) && trData.data.length > 0) {
+          setCurrentPrice(prevPrice => trData.data[0].price || prevPrice)
+        }
       }
     } catch (e) {
       console.error("실시간 호가/체결 갱신 오류:", e);
@@ -277,7 +440,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         exchange: exchange,
         env: brokerEnv
       }
-      const response = await fetch('http://localhost:5050/api/dashboard/balance', {
+      const response = await fetch(`${API_BASE_URL}/api/dashboard/balance`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -294,14 +457,65 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
   }
 
-  // 거래소 토글 시 환경값 변경
-  const handleExchangeChange = (newEx) => {
-    setExchange(newEx)
-    if (newEx === 'KIS') {
-      setBrokerEnv('MOCK')
-    } else {
-      setBrokerEnv('REAL')
+  const fetchOrderPrecheck = async () => {
+    const authHeader = await getAuthHeader()
+    if (!authHeader) {
+      setOrderPrecheck(null)
+      setPrecheckMessage('')
+      return
     }
+
+    if (!quantity || Number(quantity) <= 0) {
+      setOrderPrecheck(null)
+      setPrecheckMessage('')
+      return
+    }
+
+    if (orderType === 'LIMIT' && (!price || Number(price) <= 0)) {
+      setOrderPrecheck(null)
+      setPrecheckMessage('지정가를 입력하면 주문 가능 금액을 미리 계산합니다.')
+      return
+    }
+
+    setPrecheckLoading(true)
+    setPrecheckMessage('')
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/trade/precheck`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+        },
+        body: JSON.stringify({
+          exchange,
+          symbol,
+          action: side,
+          order_type: orderType,
+          quantity: Number(quantity),
+          price: orderType === 'LIMIT' ? Number(price) : null,
+          broker_env: brokerEnv,
+        }),
+      })
+      const resData = await response.json()
+      if (resData.success) {
+        setOrderPrecheck(resData.data)
+      } else {
+        setOrderPrecheck(null)
+        setPrecheckMessage(resData.message || '주문 사전검증에 실패했습니다.')
+      }
+    } catch (error) {
+      setOrderPrecheck(null)
+      setPrecheckMessage(`주문 사전검증 오류: ${error.message}`)
+    } finally {
+      setPrecheckLoading(false)
+    }
+  }
+
+  // 거래소 토글 시 환경값 변경
+  const handleExchangeChange = (newEx, newEnv = 'REAL') => {
+    setExchange(newEx)
+    setBrokerEnv(newEnv)
     setPrice('')
     setQuantity('')
   }
@@ -321,10 +535,66 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   }, [exchange, symbol, chartInterval, brokerEnv])
 
   useEffect(() => {
+    loadBrokerAvailability()
+  }, [symbol])
+
+  useEffect(() => {
+    if (resolvedAssetType === 'STOCK') {
+      const preferredBroker = pickPreferredStockBroker(brokerAvailability)
+      const currentBrokerValid = isRegisteredStockBroker(brokerAvailability, exchange, brokerEnv)
+      if (preferredBroker && !currentBrokerValid) {
+        setExchange(preferredBroker.exchange)
+        setBrokerEnv(preferredBroker.brokerEnv)
+        return
+      }
+      if (!preferredBroker) {
+        if (!['TOSS', 'KIS'].includes(exchange)) {
+          setExchange('KIS')
+        }
+        if (brokerEnv !== 'MOCK' && exchange === 'KIS') {
+          setBrokerEnv('MOCK')
+        }
+      }
+      if (!['1m', '5m', '15m', '30m', '1h', '1d', '1w', '1M'].includes(chartInterval)) {
+        setChartInterval('1d')
+      }
+      return
+    }
+
+    if (!['COINONE', 'BINANCE'].includes(exchange)) {
+      setExchange('COINONE')
+    }
+    if (brokerEnv !== 'REAL') {
+      setBrokerEnv('REAL')
+    }
+    if (!['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M'].includes(chartInterval)) {
+      setChartInterval('1h')
+    }
+  }, [resolvedAssetType, exchange, brokerEnv, chartInterval, brokerAvailability])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchCandles({ silent: true })
+      }
+    }, isIntradayInterval ? 5000 : 15000)
+
+    return () => window.clearInterval(intervalId)
+  }, [exchange, symbol, chartInterval, brokerEnv, isIntradayInterval])
+
+  useEffect(() => {
     fetchOrderbookAndTrades();
     const intervalId = setInterval(fetchOrderbookAndTrades, 2000); // 2초마다 갱신
     return () => clearInterval(intervalId);
   }, [exchange, symbol, brokerEnv]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      fetchOrderPrecheck()
+    }, 250)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [exchange, symbol, side, orderType, price, quantity, brokerEnv])
 
   // 3. TradingView Lightweight Charts 차트 드로잉 및 리사이즈 대응
   useEffect(() => {
@@ -450,6 +720,24 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return
     }
 
+    if (brokerEnv === 'REAL' && orderPrecheck?.exceeds_real_order_limit) {
+      setTradeMessage({ text: '실거래 1회 주문 한도를 초과했습니다. 수량 또는 단가를 조정해 주세요.', isError: true })
+      setSubmitting(false)
+      return
+    }
+
+    if (brokerEnv === 'REAL' && orderPrecheck?.insufficient_cash) {
+      setTradeMessage({ text: '예수금보다 큰 주문입니다. 수량 또는 단가를 조정해 주세요.', isError: true })
+      setSubmitting(false)
+      return
+    }
+
+    if (brokerEnv === 'REAL' && orderPrecheck?.insufficient_holding) {
+      setTradeMessage({ text: '보유 수량을 초과하는 매도 주문입니다.', isError: true })
+      setSubmitting(false)
+      return
+    }
+
     try {
       const payload = {
         exchange,
@@ -464,7 +752,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         stop_loss_rate: autoExit ? parseFloat(stopLossRate) : null
       }
 
-      const response = await fetch('http://localhost:5050/api/trade/order', {
+      const response = await fetch(`${API_BASE_URL}/api/trade/order`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -498,12 +786,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
   }
 
-  // 총액 계산
-  const targetPrice = orderType === 'LIMIT' ? parseFloat(price || 0) : currentPrice
-  const totalEstimatedAmount = targetPrice * parseFloat(quantity || 0)
-
   // 보유 주식 필터링
   const myHolding = userBalance?.holdings?.find(h => h.symbol.toUpperCase() === symbol.toUpperCase() || symbol.toUpperCase().includes(h.symbol.toUpperCase()));
+  const overallFeedStatus = getOverallFeedStatus()
+  const isOrderBlocked = brokerEnv === 'REAL' && (
+    orderPrecheck?.exceeds_real_order_limit ||
+    orderPrecheck?.insufficient_cash ||
+    orderPrecheck?.insufficient_holding
+  )
 
   return (
     <div className="min-h-screen bg-[#070b19] text-[#e2e2ec] font-inter">
@@ -527,12 +817,23 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[9px] font-bold text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-900/60 uppercase tracking-widest font-mono">
-                {assetType} · {exchange} ({brokerEnv})
+                {resolvedAssetType} · {exchange} ({brokerEnv})
+              </span>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase tracking-widest font-mono ${overallFeedStatus.tone}`}>
+                {overallFeedStatus.label}
               </span>
             </div>
             <h1 className="text-xl font-bold font-mono text-white mt-1.5 flex items-center gap-2">
-              {displayName !== symbol ? `${displayName} (${symbol})` : symbol} <span className="text-xs text-slate-400 font-normal">({assetType === 'STOCK' ? '주식' : '가상자산'})</span>
+              {displayName !== symbol ? `${displayName} (${symbol})` : symbol} <span className="text-xs text-slate-400 font-normal">({resolvedAssetType === 'STOCK' ? '주식' : '가상자산'})</span>
             </h1>
+            <p className="mt-2 text-[10px] text-slate-500 font-mono">
+              차트 {marketFeeds.candles.source} · 호가 {marketFeeds.orderbook.source} · 체결 {marketFeeds.trades.source}
+            </p>
+            {feedReasonSummary ? (
+              <p className="mt-1 text-[10px] text-amber-300/80 font-mono">
+                원인 {feedReasonSummary}
+              </p>
+            ) : null}
           </div>
           
           <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
@@ -540,7 +841,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
             <div className="flex flex-col">
               <span className="text-[10px] text-slate-400 font-bold">현재가</span>
               <span className="text-lg font-bold font-mono text-white mt-0.5">
-                {assetType === 'STOCK' ? `₩${currentPrice.toLocaleString()}` : `$${currentPrice.toLocaleString()}`}
+                {resolvedAssetType === 'STOCK' ? `₩${currentPrice.toLocaleString()}` : `$${currentPrice.toLocaleString()}`}
               </span>
             </div>
 
@@ -571,7 +872,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
             <div className="flex flex-col text-right">
               <span className="text-[10px] text-slate-400 font-bold">체결강도</span>
               <span className="text-sm font-mono text-emerald-400 font-bold mt-0.5">
-                {orderbook?.is_mock ? '112.4%' : '124.93%'}
+                {marketFeeds.orderbook.isMock ? '112.4%' : '124.93%'}
               </span>
             </div>
           </div>
@@ -585,15 +886,20 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
             
             {/* 차트 카드 */}
             <div className="bg-[#0e1529]/90 border border-[#1f2945] rounded-xl p-4 flex flex-col gap-4 backdrop-blur-md">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
-                  <span className="text-xs font-bold text-white">실시간 통합 차트</span>
+              <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
+                    <span className="text-xs font-bold text-white">실시간 통합 차트</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-mono">
+                    마지막 차트 확인 {formatTimestamp(marketFeeds.candles.checkedAt)}
+                  </p>
                 </div>
                 
                 {/* 캔들 주기 변경 탭 */}
                 <div className="flex flex-wrap gap-1 bg-[#1b253b] p-0.5 rounded border border-[#2b395b] max-w-[70%] sm:max-w-none justify-end">
-                  {assetType === 'STOCK' ? (
+                  {resolvedAssetType === 'STOCK' ? (
                     <>
                       {[
                         { label: '1분', val: '1m' },
@@ -868,7 +1174,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               <form onSubmit={handlePlaceOrder} className="flex flex-col gap-4">
                 {/* 1. 가격 입력 */}
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-[10px] text-slate-400 font-bold">주문 단가 ({assetType === 'STOCK' ? 'KRW' : 'USD'})</span>
+                  <span className="text-[10px] text-slate-400 font-bold">주문 단가 ({resolvedAssetType === 'STOCK' ? 'KRW' : 'USD'})</span>
                   <input
                     type="number"
                     disabled={orderType === 'MARKET'}
@@ -896,53 +1202,111 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 {/* 3. 거래 계좌 스위처 토글 */}
                 <div className="flex flex-col gap-1.5">
                   <span className="text-[10px] text-slate-400 font-bold">주문 거래소 계좌</span>
-                  <div className="grid grid-cols-2 gap-1 bg-[#070b19] p-0.5 rounded border border-[#1f2945]">
-                    {assetType === 'STOCK' ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleExchangeChange('KIS')}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'KIS' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          한투 모의
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleExchangeChange('TOSS')}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'TOSS' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          토스 실거래
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleExchangeChange('COINONE')}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'COINONE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          코인원
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleExchangeChange('BINANCE')}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'BINANCE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          바이낸스
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  {resolvedAssetType === 'STOCK' ? (
+                    <div className="grid grid-cols-3 gap-1 bg-[#070b19] p-0.5 rounded border border-[#1f2945]">
+                      <button
+                        type="button"
+                        onClick={() => handleExchangeChange('KIS', 'MOCK')}
+                        className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'KIS' && brokerEnv === 'MOCK' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        한투 모의
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExchangeChange('KIS', 'REAL')}
+                        className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'KIS' && brokerEnv === 'REAL' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        한투 실거래
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExchangeChange('TOSS', 'REAL')}
+                        className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'TOSS' && brokerEnv === 'REAL' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        토스 실거래
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-1 bg-[#070b19] p-0.5 rounded border border-[#1f2945]">
+                      <button
+                        type="button"
+                        onClick={() => handleExchangeChange('COINONE', 'REAL')}
+                        className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'COINONE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        코인원
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleExchangeChange('BINANCE', 'REAL')}
+                        className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'BINANCE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                      >
+                        바이낸스
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* 4. 총 주문 예정 금액 */}
                 <div className="bg-[#070b19] border border-[#1f2945] rounded p-3 flex justify-between items-center text-xs">
                   <span className="text-slate-400 font-bold">예정 금액</span>
                   <span className="font-mono font-bold text-white">
-                    {assetType === 'STOCK'
+                    {resolvedAssetType === 'STOCK'
                       ? `₩${totalEstimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
                       : `$${totalEstimatedAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}`}
                   </span>
+                </div>
+
+                <div className="bg-[#070b19] border border-[#1f2945] rounded p-3 flex flex-col gap-2 text-[10px] font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400 font-bold">주문 사전검증</span>
+                    <span className={`font-bold ${precheckLoading ? 'text-cyan-400' : 'text-slate-500'}`}>
+                      {precheckLoading ? '검증 중...' : '대기'}
+                    </span>
+                  </div>
+                  {orderPrecheck && (
+                    <>
+                      <div className="flex justify-between text-slate-300">
+                        <span>기준가</span>
+                        <span className="text-white">
+                          {resolvedAssetType === 'STOCK'
+                            ? `₩${Number(orderPrecheck.reference_price || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                            : `$${Number(orderPrecheck.reference_price || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}`}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-slate-300">
+                        <span>금액 산정 기준</span>
+                        <span className="text-white">{orderPrecheck.price_source}</span>
+                      </div>
+                      {orderPrecheck.available_cash != null && (
+                        <div className="flex justify-between text-slate-300">
+                          <span>주문 가능 현금</span>
+                          <span className="text-white">
+                            ₩{Number(orderPrecheck.available_cash).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      )}
+                      {orderPrecheck.holding_qty != null && (
+                        <div className="flex justify-between text-slate-300">
+                          <span>보유 수량</span>
+                          <span className="text-white">{Number(orderPrecheck.holding_qty).toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div className={`rounded border px-2 py-1 leading-relaxed ${
+                        isOrderBlocked
+                          ? 'border-red-900/60 bg-red-950/30 text-red-300'
+                          : 'border-emerald-900/60 bg-emerald-950/20 text-emerald-300'
+                      }`}>
+                        {isOrderBlocked
+                          ? (orderPrecheck.warnings?.join(' ') || '실거래 주문 조건을 다시 확인해 주세요.')
+                          : '현재 입력값 기준으로 즉시 주문 가능 범위를 확인했습니다.'}
+                      </div>
+                    </>
+                  )}
+                  {!orderPrecheck && precheckMessage && (
+                    <div className="rounded border border-amber-900/60 bg-amber-950/20 px-2 py-1 leading-relaxed text-amber-300">
+                      {precheckMessage}
+                    </div>
+                  )}
                 </div>
 
                 {/* 5. 자동 감시 조건 체크박스 */}
@@ -1006,7 +1370,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 {/* 주문 제출 버튼 */}
                 <button
                   type="submit"
-                  disabled={submitting}
+                  disabled={submitting || precheckLoading || isOrderBlocked}
                   className={`w-full py-2.5 rounded font-black text-[#070b19] text-xs tracking-wider transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50 ${side === 'BUY' ? 'bg-[#ef4444] text-white hover:bg-red-600' : 'bg-[#3b82f6] text-white hover:bg-blue-600'}`}
                 >
                   {submitting ? '주문 전송 중...' : `${side === 'BUY' ? '구매' : '판매'}하기`}
@@ -1030,13 +1394,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                   <div className="flex justify-between border-b border-[#1f2945]/30 py-1">
                     <span className="text-slate-400">평균 단가</span>
                     <span className="text-white font-bold">
-                      {assetType === 'STOCK' ? `₩${myHolding.avg_price.toLocaleString(undefined, {maximumFractionDigits:0})}` : `$${myHolding.avg_price.toLocaleString(undefined, {maximumFractionDigits:4})}`}
+                      {resolvedAssetType === 'STOCK' ? `₩${myHolding.avg_price.toLocaleString(undefined, {maximumFractionDigits:0})}` : `$${myHolding.avg_price.toLocaleString(undefined, {maximumFractionDigits:4})}`}
                     </span>
                   </div>
                   <div className="flex justify-between border-b border-[#1f2945]/30 py-1">
                     <span className="text-slate-400">현재 평가금</span>
                     <span className="text-white font-bold">
-                      {assetType === 'STOCK' ? `₩${(myHolding.current_price * myHolding.qty).toLocaleString(undefined, {maximumFractionDigits:0})}` : `$${(myHolding.current_price * myHolding.qty).toLocaleString(undefined, {maximumFractionDigits:4})}`}
+                      {resolvedAssetType === 'STOCK' ? `₩${(myHolding.current_price * myHolding.qty).toLocaleString(undefined, {maximumFractionDigits:0})}` : `$${(myHolding.current_price * myHolding.qty).toLocaleString(undefined, {maximumFractionDigits:4})}`}
                     </span>
                   </div>
                   <div className="flex justify-between py-1 font-bold">

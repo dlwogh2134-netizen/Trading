@@ -8,6 +8,8 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
   const [status, setStatus] = useState({
     TOSS: { registered: false },
     KIS: { registered: false },
+    KIS_MOCK: { registered: false },
+    KIS_REAL: { registered: false },
     COINONE: { registered: false },
     BINANCE: { registered: false }
   })
@@ -28,13 +30,25 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
   const [tossAccounts, setTossAccounts] = useState([]) // 계좌 목록 상태
   const [tossAccLoading, setTossAccLoading] = useState(false)
 
-  // KIS 폼 상태
-  const [kisForm, setKisForm] = useState({
+  // KIS 서브 탭 상태
+  const [kisSubTab, setKisSubTab] = useState('MOCK') // MOCK | REAL
+
+  // KIS MOCK 폼 상태
+  const [kisMockForm, setKisMockForm] = useState({
     appkey: '',
     appsecret: '',
     cano: '',
     acnt_prdt_cd: '01',
     broker_env: 'MOCK'
+  })
+
+  // KIS REAL 폼 상태
+  const [kisRealForm, setKisRealForm] = useState({
+    appkey: '',
+    appsecret: '',
+    cano: '',
+    acnt_prdt_cd: '01',
+    broker_env: 'REAL'
   })
 
   // Coinone 폼 상태
@@ -114,13 +128,14 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
         broker_env: tossForm.broker_env
       }
     } else if (exchange === 'KIS') {
+      const form = kisSubTab === 'MOCK' ? kisMockForm : kisRealForm
       payload = {
         ...payload,
-        appkey: kisForm.appkey,
-        appsecret: kisForm.appsecret,
-        cano: kisForm.cano,
-        acnt_prdt_cd: kisForm.acnt_prdt_cd,
-        broker_env: kisForm.broker_env
+        appkey: form.appkey,
+        appsecret: form.appsecret,
+        cano: form.cano,
+        acnt_prdt_cd: form.acnt_prdt_cd,
+        broker_env: form.broker_env
       }
     } else if (exchange === 'COINONE') {
       payload = {
@@ -220,26 +235,27 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
         broker_env: tossForm.broker_env
       }
     } else if (exchange === 'KIS') {
-      if (!kisForm.appkey || !kisForm.appsecret || !kisForm.cano) {
-        setMessage({ text: 'KIS AppKey, Secret, 계좌번호를 모두 입력해 주세요.', isError: true })
+      const form = kisSubTab === 'MOCK' ? kisMockForm : kisRealForm
+      if (!form.appkey || !form.appsecret || !form.cano) {
+        setMessage({ text: `KIS ${kisSubTab} AppKey, Secret, 계좌번호를 모두 입력해 주세요.`, isError: true })
         setLoading(false)
         return
       }
       payload = {
         ...payload,
-        appkey: kisForm.appkey,
-        appsecret: kisForm.appsecret,
-        cano: kisForm.cano,
-        acnt_prdt_cd: kisForm.acnt_prdt_cd,
-        broker_env: kisForm.broker_env
+        appkey: form.appkey,
+        appsecret: form.appsecret,
+        cano: form.cano,
+        acnt_prdt_cd: form.acnt_prdt_cd,
+        broker_env: form.broker_env
       }
       testPayload = {
         exchange,
-        appkey: kisForm.appkey,
-        appsecret: kisForm.appsecret,
-        cano: kisForm.cano,
-        acnt_prdt_cd: kisForm.acnt_prdt_cd,
-        broker_env: kisForm.broker_env
+        appkey: form.appkey,
+        appsecret: form.appsecret,
+        cano: form.cano,
+        acnt_prdt_cd: form.acnt_prdt_cd,
+        broker_env: form.broker_env
       }
     } else if (exchange === 'COINONE') {
       if (!coinoneForm.access_token || !coinoneForm.secret_key) {
@@ -388,7 +404,7 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
             <span className="w-2.5 h-2.5 rounded-full bg-ai-cyan" />
             API Key Connection Status (브로커 인증 연동 현황)
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 
             {/* Toss 현황 */}
             <div className={`p-4 rounded border transition-all ${status.TOSS.registered ? 'bg-[#0f1b2b]/50 border-blue-900/60' : 'bg-[#0e0f14]/80 border-slate-800'}`}>
@@ -405,19 +421,34 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
                 </div>
               )}
             </div>
-
-            {/* KIS 현황 */}
-            <div className={`p-4 rounded border transition-all ${status.KIS.registered ? 'bg-[#0e211e]/50 border-emerald-900/60' : 'bg-[#0e0f14]/80 border-slate-800'}`}>
+            {/* KIS 모의 현황 */}
+            <div className={`p-4 rounded border transition-all ${status.KIS_MOCK?.registered ? 'bg-[#0e211e]/50 border-emerald-900/60' : 'bg-[#0e0f14]/80 border-slate-800'}`}>
               <div className="flex justify-between items-center mb-2">
-                <span className="text-sm font-bold text-white font-mono">KIS (한국투자)</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded font-extrabold ${status.KIS.registered ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/80' : 'bg-slate-900 text-slate-500 border border-slate-800'}`}>
-                  {status.KIS.registered ? `등록됨 (${status.KIS.broker_env})` : '미등록'}
+                <span className="text-sm font-bold text-white font-mono">KIS (한투 모의)</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-extrabold ${status.KIS_MOCK?.registered ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/80' : 'bg-slate-900 text-slate-500 border border-slate-800'}`}>
+                  {status.KIS_MOCK?.registered ? '등록됨' : '미등록'}
                 </span>
               </div>
-              {status.KIS.registered && (
+              {status.KIS_MOCK?.registered && (
                 <div className="text-[11px] font-mono text-slate-400 flex flex-col gap-1">
-                  <div><span className="text-ai-cyan font-bold">appkey:</span> {status.KIS.access_key}</div>
-                  <div><span className="text-ai-cyan font-bold">계좌번호:</span> {status.KIS.kis_account_no || '미등록'}</div>
+                  <div><span className="text-ai-cyan font-bold">appkey:</span> {status.KIS_MOCK.access_key}</div>
+                  <div><span className="text-ai-cyan font-bold">계좌번호:</span> {status.KIS_MOCK.kis_account_no || '미등록'}</div>
+                </div>
+              )}
+            </div>
+
+            {/* KIS 실전 현황 */}
+            <div className={`p-4 rounded border transition-all ${status.KIS_REAL?.registered ? 'bg-[#0e211e]/50 border-emerald-900/60' : 'bg-[#0e0f14]/80 border-slate-800'}`}>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-bold text-white font-mono">KIS (한투 실전)</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-extrabold ${status.KIS_REAL?.registered ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/80' : 'bg-slate-900 text-slate-500 border border-slate-800'}`}>
+                  {status.KIS_REAL?.registered ? '등록됨' : '미등록'}
+                </span>
+              </div>
+              {status.KIS_REAL?.registered && (
+                <div className="text-[11px] font-mono text-slate-400 flex flex-col gap-1">
+                  <div><span className="text-ai-cyan font-bold">appkey:</span> {status.KIS_REAL.access_key}</div>
+                  <div><span className="text-ai-cyan font-bold">계좌번호:</span> {status.KIS_REAL.kis_account_no || '미등록'}</div>
                 </div>
               )}
             </div>
@@ -567,59 +598,96 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
           {/* KIS 설정 탭 */}
           {activeTab === 'KIS' && (
             <div className="flex flex-col gap-4">
+              {/* KIS 서브 탭 스위처 */}
+              <div className="flex border-b border-[#1f2945] gap-2 mb-2">
+                {['MOCK', 'REAL'].map((sub) => (
+                  <button
+                    key={sub}
+                    onClick={() => {
+                      setKisSubTab(sub)
+                      setMessage({ text: '', isError: false })
+                    }}
+                    className={`px-4 py-1.5 text-[10px] font-extrabold tracking-widest transition-all cursor-pointer border-b-2 ${kisSubTab === sub
+                        ? 'border-ai-cyan text-ai-cyan bg-ai-cyan/5'
+                        : 'border-transparent text-slate-500 hover:text-white'
+                      }`}
+                    type="button"
+                  >
+                    {sub === 'MOCK' ? 'MOCK (모의투자)' : 'REAL (실전거래)'}
+                  </button>
+                ))}
+              </div>
+
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 mb-1">APP KEY</label>
+                <label className="block text-[10px] font-bold text-slate-400 mb-1">APP KEY ({kisSubTab})</label>
                 <input
                   type="text"
-                  value={kisForm.appkey}
-                  onChange={(e) => setKisForm(prev => ({ ...prev, appkey: e.target.value }))}
-                  placeholder="KIS AppKey 입력"
+                  value={kisSubTab === 'MOCK' ? kisMockForm.appkey : kisRealForm.appkey}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (kisSubTab === 'MOCK') {
+                      setKisMockForm(prev => ({ ...prev, appkey: val }));
+                    } else {
+                      setKisRealForm(prev => ({ ...prev, appkey: val }));
+                    }
+                  }}
+                  placeholder={`KIS ${kisSubTab} AppKey 입력`}
                   className="w-full bg-[#0F172A] border border-slate-700 rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-ai-cyan"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 mb-1">APP SECRET</label>
+                <label className="block text-[10px] font-bold text-slate-400 mb-1">APP SECRET ({kisSubTab})</label>
                 <input
                   type="password"
-                  value={kisForm.appsecret}
-                  onChange={(e) => setKisForm(prev => ({ ...prev, appsecret: e.target.value }))}
-                  placeholder="KIS AppSecret 입력"
+                  value={kisSubTab === 'MOCK' ? kisMockForm.appsecret : kisRealForm.appsecret}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (kisSubTab === 'MOCK') {
+                      setKisMockForm(prev => ({ ...prev, appsecret: val }));
+                    } else {
+                      setKisRealForm(prev => ({ ...prev, appsecret: val }));
+                    }
+                  }}
+                  placeholder={`KIS ${kisSubTab} AppSecret 입력`}
                   className="w-full bg-[#0F172A] border border-slate-700 rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-ai-cyan"
                 />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">CANO (계좌번호)</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">CANO (계좌번호) ({kisSubTab})</label>
                   <input
                     type="text"
-                    value={kisForm.cano}
-                    onChange={(e) => setKisForm(prev => ({ ...prev, cano: e.target.value }))}
+                    value={kisSubTab === 'MOCK' ? kisMockForm.cano : kisRealForm.cano}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (kisSubTab === 'MOCK') {
+                        setKisMockForm(prev => ({ ...prev, cano: val }));
+                      } else {
+                        setKisRealForm(prev => ({ ...prev, cano: val }));
+                      }
+                    }}
                     placeholder="8자리 계좌번호"
                     className="w-full bg-[#0F172A] border border-slate-700 rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-ai-cyan"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">계좌코드</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">계좌코드 ({kisSubTab})</label>
                   <input
                     type="text"
-                    value={kisForm.acnt_prdt_cd}
-                    onChange={(e) => setKisForm(prev => ({ ...prev, acnt_prdt_cd: e.target.value }))}
+                    value={kisSubTab === 'MOCK' ? kisMockForm.acnt_prdt_cd : kisRealForm.acnt_prdt_cd}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (kisSubTab === 'MOCK') {
+                        setKisMockForm(prev => ({ ...prev, acnt_prdt_cd: val }));
+                      } else {
+                        setKisRealForm(prev => ({ ...prev, acnt_prdt_cd: val }));
+                      }
+                    }}
                     placeholder="기본값 01"
                     className="w-full bg-[#0F172A] border border-slate-700 rounded px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-ai-cyan"
                   />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">ENVIRONMENT</label>
-                  <select
-                    value={kisForm.broker_env}
-                    onChange={(e) => setKisForm(prev => ({ ...prev, broker_env: e.target.value }))}
-                    className="w-full bg-[#0F172A] border border-slate-700 rounded px-3 py-2 text-sm font-bold text-white focus:outline-none focus:border-ai-cyan cursor-pointer"
-                  >
-                    <option value="MOCK">MOCK (모의)</option>
-                    <option value="REAL">REAL (실전)</option>
-                  </select>
                 </div>
               </div>
 
