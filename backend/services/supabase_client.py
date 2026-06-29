@@ -2,9 +2,13 @@ import os
 import json
 import requests
 from pathlib import Path
+from dotenv import load_dotenv
 from backend.services.auth_service import get_user_id_from_header
 
 PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# supabase_client 로딩 시 .env 환경변수 강제 보장
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")

@@ -223,7 +223,7 @@ def apply_optional_features(features: pd.DataFrame, config: dict) -> pd.DataFram
     return features
 
 
-def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
+def build_features(candles: pd.DataFrame, config: dict, include_unlabeled: bool = False) -> pd.DataFrame:
     required_columns = {"symbol", "date", "open", "high", "low", "close", "volume"}
     missing_columns = required_columns - set(candles.columns)
     if missing_columns:
@@ -492,7 +492,10 @@ def build_features(candles: pd.DataFrame, config: dict) -> pd.DataFrame:
         *feature_columns,
     ]
     output_columns = [column for column in output_columns if column in features.columns]
-    features = features[output_columns].dropna(subset=["future_return"]).reset_index(drop=True)
+    features = features[output_columns]
+    if not include_unlabeled:
+        features = features.dropna(subset=["future_return"])
+    features = features.reset_index(drop=True)
     features["date"] = pd.to_datetime(features["date"]).dt.strftime("%Y-%m-%d %H:%M:%S")
     return features
 

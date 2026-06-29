@@ -162,6 +162,10 @@ const automationPresets = [
   },
 ]
 
+const operationalAutomationPresets = automationPresets.filter((preset) => preset.version === 'v8')
+const legacyAutomationPresets = automationPresets.filter((preset) => preset.version !== 'v8')
+const v8TuningPresets = tuningPresets.filter((preset) => preset.version === 'v8')
+
 function StatusPanel({ result, error, loading }) {
   if (loading) {
     return (
@@ -505,6 +509,29 @@ function getHealthLabel(status) {
   return '확인 필요'
 }
 
+function getSignalGradeLabel(grade) {
+  if (grade === 'STRONG_BUY_CANDIDATE') return '강한 후보'
+  if (grade === 'WATCH') return '관찰'
+  if (grade === 'RISKY') return '위험'
+  if (grade === 'NO_SIGNAL') return '신호 없음'
+  return grade || '미분류'
+}
+
+function getSignalGradeTone(grade) {
+  if (grade === 'STRONG_BUY_CANDIDATE') return 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+  if (grade === 'WATCH') return 'border-ai-cyan/50 bg-ai-cyan/10 text-ai-cyan'
+  if (grade === 'RISKY') return 'border-rose-500/50 bg-rose-950/40 text-rose-300'
+  return 'border-slate-700 bg-slate-900/60 text-slate-400'
+}
+
+function formatStaleness(minutes) {
+  if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return '-'
+  const numericMinutes = Number(minutes)
+  if (numericMinutes < 60) return `${numericMinutes}분 전`
+  if (numericMinutes < 1440) return `${Math.floor(numericMinutes / 60)}시간 전`
+  return `${Math.floor(numericMinutes / 1440)}일 전`
+}
+
 function getCheckLabel(name) {
   return PROMOTION_CHECK_LABELS[name] || name
 }
@@ -598,11 +625,239 @@ function GuardSummary({ guardReport, compact = false }) {
   )
 }
 
+function findGuardCheck(guardReport, name) {
+  return (guardReport?.checks || []).find((check) => check.name === name)
+}
+
+function formatTrustValue(check) {
+  if (!check) return '-'
+  const value = check.actual
+  if (value === null || value === undefined || value === '') return '-'
+  if (typeof value === 'object') return JSON.stringify(value)
+  const numeric = Number(value)
+  if (Number.isNaN(numeric)) return String(value)
+
+  if (
+    check.name?.includes('precision')
+    || check.name?.includes('return')
+    || check.name?.includes('drawdown')
+    || check.name?.includes('drop')
+  ) {
+    return formatReturnPercent(numeric)
+  }
+
+  return formatMetric(numeric)
+}
+
+function TrustMetric({ label, check, hint }) {
+  const status = check?.passed ? 'healthy' : 'warning'
+  return (
+    <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-bold text-white">{label}</p>
+        <AuditBadge status={status}>{check?.passed ? '통과' : '확인'}</AuditBadge>
+      </div>
+      <p className="mt-2 font-mono text-lg font-bold text-ai-cyan">{formatTrustValue(check)}</p>
+      <p className="mt-1 text-[10px] leading-4 text-slate-500">{hint}</p>
+    </div>
+  )
+}
+
+function OperationalTrustPanel({ data, loading, error }) {
+  const assets = data?.assets || {}
+
+  return (
+    <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
+      <div className="mb-4">
+        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Operational Trust</p>
+        <h2 className="mt-1 text-xl font-bold text-white">운영 신뢰도 검증</h2>
+        <p className="mt-2 text-xs leading-5 text-slate-400">
+          모델 정확도만 보지 않고 데이터 품질, 시계열 검증, 상위 후보 품질, 비용 반영 초과수익, 최대 낙폭을 함께 확인합니다.
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+          운영 신뢰도 정보를 불러오는 중입니다.
+        </div>
+      ) : error ? (
+        <div className="rounded-lg border border-red-800 bg-red-950/30 p-4 text-sm leading-6 text-red-300">
+          {error}
+        </div>
+      ) : !data ? (
+        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
+          아직 운영 신뢰도 정보가 없습니다.
+        </div>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-2">
+          {Object.entries(assets).map(([assetKey, report]) => {
+            const guard = report.current_guard || report.recommended_guard
+            const failedCount = guard?.failed_checks?.length ?? 0
+            const totalCount = guard?.checks?.length ?? 0
+            const passedCount = Math.max(0, totalCount - failedCount)
+            const status = guard?.passed ? 'healthy' : 'warning'
+            const failedLines = summarizeFailedChecks(guard, 3)
+
+            return (
+              <div key={assetKey} className="rounded-lg border border-slate-800 bg-black/10 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-bold text-white">{report.asset_type === 'STOCK' ? '주식 모델' : '코인 모델'}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-400">
+                      {guard?.passed
+                        ? '참고 신호 운영 기준을 통과했습니다. 그래도 주문 실행은 사용자 승인 흐름을 유지합니다.'
+                        : '일부 기준이 부족합니다. 참고 신호 노출은 가능하지만 승격/자동화 판단은 보류해야 합니다.'}
+                    </p>
+                  </div>
+                  <AuditBadge status={status}>{guard?.passed ? '참고 신호 가능' : '보강 필요'}</AuditBadge>
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+                  <span className="rounded border border-slate-700 px-2 py-1 font-bold text-slate-300">
+                    통과 {passedCount}/{totalCount || '-'}
+                  </span>
+                  <span className="rounded border border-fuchsia-500/30 px-2 py-1 font-bold text-fuchsia-300">
+                    SERVING {report.serving_version || '-'}
+                  </span>
+                  <span className="rounded border border-emerald-500/30 px-2 py-1 font-bold text-emerald-300">
+                    PICK {report.recommended_version || '-'}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <TrustMetric
+                    label="데이터 품질"
+                    check={findGuardCheck(guard, 'dataset_quality')}
+                    hint="중복, 결측, 이상치, 최신성 기준"
+                  />
+                  <TrustMetric
+                    label="시계열 CV"
+                    check={findGuardCheck(guard, 'cv_roc_auc')}
+                    hint="기간을 나눠도 구분력이 유지되는지"
+                  />
+                  <TrustMetric
+                    label="상위 후보 적중"
+                    check={findGuardCheck(guard, 'precision_at_top_10pct')}
+                    hint="모델이 자신 있는 후보의 품질"
+                  />
+                  <TrustMetric
+                    label="비용 반영 초과수익"
+                    check={findGuardCheck(guard, 'composite_excess_return_net')}
+                    hint="수수료/슬리피지 반영 후 시장 대비 우위"
+                  />
+                  <TrustMetric
+                    label="최대 낙폭"
+                    check={findGuardCheck(guard, 'max_drawdown_net')}
+                    hint="운영 중 감당해야 하는 최대 손실 구간"
+                  />
+                  <TrustMetric
+                    label="하락 위험 모델"
+                    check={findGuardCheck(guard, 'risk_cv_roc_auc')}
+                    hint="위험 신호를 분리해서 볼 수 있는지"
+                  />
+                </div>
+
+                {failedLines.length ? (
+                  <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-950/10 p-3">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">보강 필요 항목</p>
+                    <div className="mt-2 space-y-1">
+                      {failedLines.map((line) => (
+                        <p key={line} className="break-all text-[10px] leading-5 text-amber-100">{line}</p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function V8OptunaPanel({
+  presets,
+  trials,
+  updateConfig,
+  loadingKey,
+  message,
+  isLoggedIn,
+  onTrialsChange,
+  onUpdateConfigChange,
+  onRun,
+}) {
+  return (
+    <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Optuna HPO</p>
+          <h2 className="mt-1 text-xl font-bold text-white">v8 하이퍼파라미터 튜닝</h2>
+          <p className="mt-2 text-xs leading-5 text-slate-400">
+            v8 Optuna는 이미 구성되어 있습니다. 실행 전 피처를 자동 생성한 뒤 LightGBM 파라미터를 탐색합니다.
+          </p>
+        </div>
+        <span className="w-fit rounded border border-emerald-500/40 bg-emerald-950/20 px-2 py-1 text-[10px] font-bold text-emerald-300">
+          V8 READY
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <label className="flex flex-col gap-1.5 text-xs">
+          <span className="font-bold text-slate-400">탐색 시도 횟수</span>
+          <input
+            type="number"
+            min="5"
+            max="100"
+            value={trials}
+            onChange={(event) => onTrialsChange(Number(event.target.value))}
+            className="rounded border border-slate-700 bg-[#0f172a] px-3 py-2 font-mono text-white outline-none focus:border-ai-cyan"
+          />
+        </label>
+        <label className="flex items-center gap-2 rounded border border-slate-800 bg-[#0f172a]/70 px-3 py-2">
+          <input
+            type="checkbox"
+            checked={updateConfig}
+            onChange={(event) => onUpdateConfigChange(event.target.checked)}
+            className="h-4 w-4 accent-ai-cyan"
+          />
+          <span className="font-bold text-slate-300">최적 파라미터 YAML 자동 저장</span>
+        </label>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {presets.map((preset) => (
+          <button
+            key={preset.key}
+            type="button"
+            onClick={() => onRun(preset)}
+            disabled={loadingKey === preset.key || !isLoggedIn}
+            className="rounded border border-ai-cyan/40 bg-ai-cyan/5 px-4 py-3 text-left transition hover:border-ai-cyan hover:bg-ai-cyan/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <p className="text-sm font-bold text-white">
+              {loadingKey === preset.key ? '튜닝 진행 중...' : preset.label}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-slate-400">{preset.summary}</p>
+            <p className="mt-1 break-all font-mono text-[10px] text-slate-500">{formatPath(preset.config)}</p>
+          </button>
+        ))}
+      </div>
+
+      {message ? (
+        <div className="mt-4 rounded-lg border border-ai-cyan/30 bg-ai-cyan/5 p-4 text-sm text-ai-cyan">
+          {message}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
 function ActiveSignalPanel({ title, data, loading, error, guardReport, onRefresh }) {
   const overview = data?.overview
   const filteredOverview = data?.filtered_overview
   const performance = data?.performance
   const predictions = data?.predictions || []
+  const gradeCounts = filteredOverview?.grade_counts || overview?.grade_counts || {}
 
   return (
     <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
@@ -684,6 +939,25 @@ function ActiveSignalPanel({ title, data, loading, error, guardReport, onRefresh
             </div>
           </div>
 
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3">
+              <p className="text-[10px] text-emerald-300">강한 후보</p>
+              <p className="mt-1 font-mono text-lg font-bold text-white">{gradeCounts.strong_buy_candidate ?? 0}</p>
+            </div>
+            <div className="rounded-lg border border-ai-cyan/20 bg-ai-cyan/5 p-3">
+              <p className="text-[10px] text-ai-cyan">관찰</p>
+              <p className="mt-1 font-mono text-lg font-bold text-white">{gradeCounts.watch ?? 0}</p>
+            </div>
+            <div className="rounded-lg border border-rose-500/20 bg-rose-950/10 p-3">
+              <p className="text-[10px] text-rose-300">위험</p>
+              <p className="mt-1 font-mono text-lg font-bold text-white">{gradeCounts.risky ?? 0}</p>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
+              <p className="text-[10px] text-slate-500">신호 없음</p>
+              <p className="mt-1 font-mono text-lg font-bold text-white">{gradeCounts.no_signal ?? 0}</p>
+            </div>
+          </div>
+
           <div className="grid gap-3 xl:grid-cols-2">
             <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">성능 스냅샷</p>
@@ -729,6 +1003,9 @@ function ActiveSignalPanel({ title, data, loading, error, guardReport, onRefresh
                           {row.position}
                         </span>
                       ) : null}
+                      <span className={`rounded border px-1.5 py-0.5 text-[9px] font-black tracking-widest ${getSignalGradeTone(row.signal_grade)}`}>
+                        {getSignalGradeLabel(row.signal_grade)}
+                      </span>
                     </div>
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       <span className="rounded border border-slate-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
@@ -740,7 +1017,12 @@ function ActiveSignalPanel({ title, data, loading, error, guardReport, onRefresh
                         </span>
                       ) : null}
                     </div>
-                    <p className="mt-1 break-words text-xs text-slate-500">{row.date}</p>
+                    <p className="mt-1 break-words text-xs text-slate-500">
+                      {row.reason_summary || row.date}
+                    </p>
+                    <p className="mt-1 font-mono text-[10px] text-slate-600">
+                      예측 {formatStaleness(row.staleness_minutes)} · {row.predicted_at || row.date || '-'}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">상승 확률</p>
@@ -1683,6 +1965,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
   const [tuningLoadingKey, setTuningLoadingKey] = useState('')
   const [tuningMessage, setTuningMessage] = useState('')
   const [selectedLogJob, setSelectedLogJob] = useState(null)
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false)
 
   const selectedPreset = useMemo(() => presets[mode], [mode])
 
@@ -2349,13 +2632,120 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
         <section className="ai-glass rounded-lg p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Admin ML Data</p>
-              <h2 className="mt-2 text-2xl font-bold text-white">학습 데이터 수집 관리</h2>
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">ML Operations</p>
+              <h2 className="mt-2 text-2xl font-bold text-white">ML 운영 콘솔</h2>
               <p className="mt-2 text-sm leading-6 text-slate-400">
-                로그인한 사용자의 저장된 API Key를 백엔드에서만 복호화해 학습용 캔들 CSV를 생성합니다.
+                기본 화면은 운영 상태, 서빙 감사, 활성 신호, v8 자동화 실행, 최근 작업 이력만 표시합니다.
               </p>
             </div>
 
+            <button
+              type="button"
+              onClick={() => setShowAdvancedTools((prev) => !prev)}
+              className="w-full rounded border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white sm:w-auto"
+            >
+              {showAdvancedTools ? '고급 도구 접기' : '고급 도구 열기'}
+            </button>
+          </div>
+        </section>
+
+        <ReadinessPanel
+          data={readiness}
+          loading={readinessLoading}
+          error={readinessError}
+          onRefresh={loadReadiness}
+        />
+
+        <ServingAuditPanel
+          data={servingAudit}
+          loading={servingAuditLoading}
+          error={servingAuditError}
+          onRefresh={loadServingAudit}
+        />
+
+        <OperationalTrustPanel
+          data={servingAudit}
+          loading={servingAuditLoading}
+          error={servingAuditError}
+        />
+
+        <section className="grid gap-6 grid-cols-1">
+          <ActiveSignalPanel
+            title="주식 활성 신호"
+            data={activeSignals.stock}
+            loading={activeSignalsLoading.stock}
+            error={activeSignalsError.stock}
+            guardReport={stockActiveGuardReport}
+            onRefresh={() => loadActiveSignals('STOCK')}
+          />
+          <ActiveSignalPanel
+            title="코인 활성 신호"
+            data={activeSignals.crypto}
+            loading={activeSignalsLoading.crypto}
+            error={activeSignalsError.crypto}
+            guardReport={cryptoActiveGuardReport}
+            onRefresh={() => loadActiveSignals('CRYPTO')}
+          />
+        </section>
+
+        <section className="rounded-lg border border-ai-cyan/30 bg-ai-cyan/5 p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Full Automation</p>
+              <h2 className="mt-1 text-xl font-bold text-white">v8 자동 수집 + 학습</h2>
+              <p className="mt-2 text-xs leading-5 text-slate-400">
+                운영 기본 버튼은 현재 서빙 후보인 v8 파이프라인만 노출합니다. v7 이하와 HPO는 고급 도구에서 실행합니다.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {operationalAutomationPresets.map((preset) => (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => handleRunFullAutomation(preset)}
+                disabled={automationLoadingKey === preset.key || !isLoggedIn}
+                className="rounded border border-ai-cyan/40 bg-[#0f172a] px-4 py-3 text-left transition hover:border-ai-cyan hover:bg-ai-cyan/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <p className="flex items-center gap-2 text-sm font-bold text-white">
+                  {automationLoadingKey === preset.key ? '실행 중...' : preset.label}
+                  <span className="rounded bg-ai-cyan px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#0a0f1e]">
+                    V8
+                  </span>
+                </p>
+                <p className="mt-1 text-xs leading-5 text-slate-400">{preset.summary}</p>
+              </button>
+            ))}
+          </div>
+
+          {automationMessage ? (
+            <div className="mt-4 rounded-lg border border-ai-cyan/30 bg-ai-cyan/5 p-4 text-sm text-ai-cyan">
+              {automationMessage}
+            </div>
+          ) : null}
+        </section>
+
+        <V8OptunaPanel
+          presets={v8TuningPresets}
+          trials={tuneTrials}
+          updateConfig={tuneUpdateConfig}
+          loadingKey={tuningLoadingKey}
+          message={tuningMessage}
+          isLoggedIn={isLoggedIn}
+          onTrialsChange={setTuneTrials}
+          onUpdateConfigChange={setTuneUpdateConfig}
+          onRun={handleRunTuning}
+        />
+
+        {showAdvancedTools ? (
+        <>
+        <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Advanced Data Tools</p>
+              <h2 className="mt-1 text-lg font-bold text-white">학습 데이터 수동 수집</h2>
+            </div>
             <div className="flex rounded-lg border border-slate-700 bg-[#0f172a] p-1">
               {Object.entries(presets).map(([key, preset]) => (
                 <button
@@ -2534,7 +2924,10 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             <StatusPanel result={result} error={error} loading={loading} />
           </div>
         </section>
+        </>
+        ) : null}
 
+        {showAdvancedTools ? (
         <section className="flex flex-col gap-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -2562,6 +2955,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             <ModelResultCard title="코인 모델" result={modelResults?.crypto} />
           </div>
         </section>
+        ) : null}
 
         <section className="grid gap-6 grid-cols-1">
           <RegistryPanel
@@ -2592,55 +2986,27 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
           </section>
         ) : null}
 
-        <ServingAuditPanel
-          data={servingAudit}
-          loading={servingAuditLoading}
-          error={servingAuditError}
-          onRefresh={loadServingAudit}
-        />
+        {showAdvancedTools ? <ExecutionChecklistPanel /> : null}
 
-        <section className="grid gap-6 grid-cols-1">
-          <ActiveSignalPanel
-            title="주식 활성 신호"
-            data={activeSignals.stock}
-            loading={activeSignalsLoading.stock}
-            error={activeSignalsError.stock}
-            guardReport={stockActiveGuardReport}
-            onRefresh={() => loadActiveSignals('STOCK')}
-          />
-          <ActiveSignalPanel
-            title="코인 활성 신호"
-            data={activeSignals.crypto}
-            loading={activeSignalsLoading.crypto}
-            error={activeSignalsError.crypto}
-            guardReport={cryptoActiveGuardReport}
-            onRefresh={() => loadActiveSignals('CRYPTO')}
-          />
-        </section>
-
-        <ReadinessPanel
-          data={readiness}
-          loading={readinessLoading}
-          error={readinessError}
-          onRefresh={loadReadiness}
-        />
-
-        <ExecutionChecklistPanel />
-
+        {showAdvancedTools ? (
         <ReportPanel
           loading={reportLoading}
           message={reportMessage}
           onGenerate={handleGenerateReport}
         />
+        ) : null}
 
+        {showAdvancedTools ? (
         <ReportHistoryPanel
           reports={reportHistory}
           loading={reportHistoryLoading}
           error={reportHistoryError}
           onRefresh={loadReportHistory}
         />
+        ) : null}
 
         <section className="grid gap-6 grid-cols-1">
+          {showAdvancedTools ? (
           <div className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -2680,7 +3046,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Full Automation</p>
               <h3 className="mt-1 text-sm font-bold text-white">백엔드 자동 수집 + 학습</h3>
               <div className="mt-4 grid gap-3">
-                {automationPresets.map((preset) => (
+                {legacyAutomationPresets.map((preset) => (
                   <button
                     key={preset.key}
                     type="button"
@@ -2780,6 +3146,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
               ) : null}
             </div>
           </div>
+          ) : null}
 
           <div className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

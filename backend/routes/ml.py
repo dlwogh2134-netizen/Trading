@@ -102,7 +102,8 @@ def export_ml_candles():
         if include_macro:
             macro_rows = fetch_macro_indices(count)
             macro_output = os.path.join(project_root_path, "ml", "data", "raw", "macro_indices.csv")
-            write_rows(macro_output, macro_rows, append=append)
+            if macro_rows:
+                write_rows(macro_output, macro_rows, append=append)
 
         if exchange == "TOSS" and asset_type == "STOCK":
             rows, failures = fetch_toss_candles(
@@ -443,7 +444,8 @@ def run_ml_full_pipeline_job():
         if dataset_config.get("include_macro"):
             macro_rows = fetch_macro_indices(int(dataset_config["count"]))
             macro_output = os.path.join(project_root_path, "ml", "data", "raw", "macro_indices.csv")
-            write_rows(macro_output, macro_rows, append=bool(dataset_config.get("append", True)))
+            if macro_rows:
+                write_rows(macro_output, macro_rows, append=bool(dataset_config.get("append", True)))
 
         if dataset_config["exchange"] == "TOSS" and dataset_config["asset_type"] == "STOCK":
             rows, failures = fetch_toss_candles(

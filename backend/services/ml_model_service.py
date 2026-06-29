@@ -336,7 +336,7 @@ def evaluate_promotion_candidate(
 ) -> dict:
     """후보 모델 단일 건을 절대 기준과 serving 대비 상대 기준으로 평가합니다."""
     thresholds = PROMOTION_THRESHOLDS[asset_key]
-    dataset_quality = dataset_quality or build_dataset_quality_report(asset_key)
+    dataset_quality = dataset_quality or build_dataset_quality_report(asset_key, candidate.get("config_path"))
 
     candidate_metrics = candidate.get("metrics") or {}
     candidate_risk_metrics = candidate.get("risk_metrics") or {}
@@ -613,6 +613,70 @@ def load_prediction_rows(path: Path) -> list[dict]:
             rows.append(enrich_symbol(normalized))
     return rows
 
+def calculate_prediction_staleness_minutes(row: dict) -> int | None:
+    """예측 기준 시각이 현재 시점에서 얼마나 지났는지 분 단위로 계산합니다."""
+    date_text = str(row.get("date") or row.get("predicted_at") or "").strip()
+    if not date_text:
+        return None
+
+    try:
+        parsed_dt = datetime.fromisoformat(date_text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed_dt = datetime.strptime(date_text, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    parsed_utc = parsed_dt.astimezone(timezone.utc) if parsed_dt.tzinfo else parsed_dt.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - parsed_utc).total_seconds() // 60))
+
+def classify_signal_grade(row: dict) -> str:
+    """확률과 복합 점수를 운영 UI에서 바로 읽을 수 있는 등급으로 변환합니다."""
+    position = str(row.get("position") or "").upper()
+    signal_score = coerce_float(row.get("signal_score"))
+    up_probability = coerce_float(row.get("up_probability"))
+    risk_probability = coerce_float(row.get("risk_probability"))
+
+    if risk_probability is not None and risk_probability >= 0.65:
+        return "RISKY"
+    if position == "LONG" and signal_score is not None and signal_score >= 30 and (up_probability or 0) >= 0.58 and (risk_probability or 0) <= 0.45:
+        return "STRONG_BUY_CANDIDATE"
+    if position == "LONG" and signal_score is not None and signal_score >= 10:
+        return "WATCH"
+    if position == "SHORT":
+        return "RISKY"
+    return "NO_SIGNAL"
+
+def build_signal_reason_summary(row: dict) -> str:
+    """신호 등급을 사람에게 설명하기 위한 짧은 요약 문장을 생성합니다."""
+    grade = row.get("signal_grade") or classify_signal_grade(row)
+    signal_score = coerce_float(row.get("signal_score"))
+    up_probability = coerce_float(row.get("up_probability"))
+    risk_probability = coerce_float(row.get("risk_probability"))
+    position = str(row.get("position") or "HOLD").upper()
+
+    score_text = "-" if signal_score is None else f"{signal_score:.2f}"
+    up_text = "-" if up_probability is None else f"{up_probability * 100:.1f}%"
+    risk_text = "-" if risk_probability is None else f"{risk_probability * 100:.1f}%"
+
+    if grade == "STRONG_BUY_CANDIDATE":
+        return f"상승 후보입니다. 상승 확률 {up_text}, 하락 위험 {risk_text}, 복합 점수 {score_text}입니다."
+    if grade == "WATCH":
+        return f"관찰 후보입니다. 포지션 {position}, 복합 점수 {score_text} 기준으로 추가 확인이 필요합니다."
+    if grade == "RISKY":
+        return f"리스크 우선 확인 대상입니다. 하락 위험 {risk_text}, 복합 점수 {score_text}입니다."
+    return f"뚜렷한 매수 신호는 아닙니다. 포지션 {position}, 복합 점수 {score_text}입니다."
+
+def enrich_prediction_signal_row(row: dict, model_version: str | None = None) -> dict:
+    """개별 예측 행에 운영용 등급, 요약, 최신성 정보를 추가합니다."""
+    enriched = dict(row)
+    enriched["predicted_at"] = row.get("date") or row.get("predicted_at")
+    enriched["model_version"] = model_version
+    enriched["staleness_minutes"] = calculate_prediction_staleness_minutes(row)
+    enriched["signal_grade"] = classify_signal_grade(enriched)
+    enriched["reason_summary"] = build_signal_reason_summary(enriched)
+    return enriched
+
 def build_prediction_performance_snapshot(active_result: dict) -> dict:
     """활성 모델의 검증 지표와 백테스트 핵심 수치를 챗봇 친화적인 구조로 요약합니다."""
     metrics = active_result.get("metrics") or {}
@@ -623,6 +687,14 @@ def build_prediction_performance_snapshot(active_result: dict) -> dict:
     risk_metrics_cv = risk_metrics.get("time_series_cv_average") or {}
 
     return {
+        "roc_auc": metrics.get("roc_auc"),
+        "cv_roc_auc": metrics_cv.get("roc_auc"),
+        "precision_at_top_10pct": metrics_cv.get("precision_at_top_10pct") or metrics.get("precision_at_top_10pct"),
+        "risk_cv_roc_auc": risk_metrics_cv.get("roc_auc") or risk_metrics.get("roc_auc"),
+        "composite_excess_return_net": composite_backtest.get("excess_return_net"),
+        "composite_precision_at_top_n": composite_backtest.get("precision_at_top_n"),
+        "composite_max_drawdown_net": composite_backtest.get("max_drawdown_net"),
+        "up_only_excess_return_net": up_only_backtest.get("excess_return_net"),
         "validation": {
             "accuracy": metrics.get("accuracy"),
             "roc_auc": metrics.get("roc_auc"),
@@ -676,6 +748,7 @@ def build_prediction_overview(rows: list[dict]) -> dict:
             "max_signal_score": None,
             "min_signal_score": None,
             "latest_prediction_time": None,
+            "grade_counts": {},
         }
 
     def average(values: list[float | None]) -> float | None:
@@ -692,6 +765,12 @@ def build_prediction_overview(rows: list[dict]) -> dict:
         "long_count": sum(1 for row in rows if str(row.get("position") or "").upper() == "LONG"),
         "hold_count": sum(1 for row in rows if str(row.get("position") or "").upper() == "HOLD"),
         "short_count": sum(1 for row in rows if str(row.get("position") or "").upper() == "SHORT"),
+        "grade_counts": {
+            "strong_buy_candidate": sum(1 for row in rows if row.get("signal_grade") == "STRONG_BUY_CANDIDATE"),
+            "watch": sum(1 for row in rows if row.get("signal_grade") == "WATCH"),
+            "risky": sum(1 for row in rows if row.get("signal_grade") == "RISKY"),
+            "no_signal": sum(1 for row in rows if row.get("signal_grade") == "NO_SIGNAL"),
+        },
         "avg_up_probability": average([coerce_float(row.get("up_probability")) for row in rows]),
         "avg_risk_probability": average([coerce_float(row.get("risk_probability")) for row in rows]),
         "avg_signal_score": average(signal_scores),
@@ -700,9 +779,36 @@ def build_prediction_overview(rows: list[dict]) -> dict:
         "latest_prediction_time": latest_prediction_time,
     }
 
-def build_dataset_quality_report(asset_key: str) -> dict:
+def resolve_dataset_path_from_config(asset_key: str, config_path: str | None = None) -> Path:
+    """모델 설정의 raw_candles_path를 우선 사용해 데이터 품질 점검 대상을 결정합니다."""
+    resolved_config_path = Path(str(config_path)) if config_path else None
+    if resolved_config_path and not resolved_config_path.is_absolute():
+        resolved_config_path = PROJECT_ROOT / resolved_config_path
+
+    if resolved_config_path is None or not resolved_config_path.exists():
+        config_dir = PROJECT_ROOT / "ml" / "configs"
+        config_paths = sorted(
+            config_dir.glob(f"lgbm_{asset_key}_v*.yaml"),
+            key=extract_version_number,
+            reverse=True,
+        )
+        resolved_config_path = config_paths[0] if config_paths else None
+
+    if resolved_config_path and resolved_config_path.exists():
+        try:
+            config = yaml.safe_load(resolved_config_path.read_text(encoding="utf-8")) or {}
+            raw_path_text = str((config.get("data") or {}).get("raw_candles_path") or "").strip()
+            if raw_path_text:
+                raw_path = Path(raw_path_text)
+                return raw_path if raw_path.is_absolute() else PROJECT_ROOT / "ml" / raw_path
+        except Exception:
+            pass
+
+    return PROJECT_ROOT / "ml" / "data" / "raw" / f"{asset_key}_candles.csv"
+
+def build_dataset_quality_report(asset_key: str, config_path: str | None = None) -> dict:
     """원천 캔들 CSV 기준으로 중복, 결측, 최신성, 가격 이상치를 점검합니다."""
-    dataset_path = PROJECT_ROOT / "ml" / "data" / "raw" / f"{asset_key}_candles.csv"
+    dataset_path = resolve_dataset_path_from_config(asset_key, config_path)
     required_columns = ["exchange", "asset_type", "symbol", "date", "open", "high", "low", "close", "volume"]
     report = {
         "asset_type": "STOCK" if asset_key == "stock" else "CRYPTO",
@@ -994,7 +1100,12 @@ def build_active_signal_payload(
     if not predictions_path.exists():
         return None
 
-    all_rows = load_prediction_rows(predictions_path)
+    metrics = active_result.get("metrics") or {}
+    model_version = metrics.get("model_version")
+    all_rows = [
+        enrich_prediction_signal_row(row, model_version=model_version)
+        for row in load_prediction_rows(predictions_path)
+    ]
     symbol_set = {symbol.upper() for symbol in (symbols or []) if symbol}
     normalized_position = str(position or "").upper().strip() or None
 
@@ -1018,7 +1129,6 @@ def build_active_signal_payload(
     )
     limited_rows = filtered_rows[:limit]
 
-    metrics = active_result.get("metrics") or {}
     summary_path = (((active_result.get("registry") or {}).get("summary_path")) or "")
 
     return {

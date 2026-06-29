@@ -178,6 +178,16 @@ signal_score        = 최종 복합 점수 = (up_probability - risk_probability)
 scoring_strategy    = up_only 또는 composite
 ```
 
+`GET /api/ml/predictions/active` 응답은 CSV 컬럼에 운영 UI용 필드를 추가해 반환합니다.
+
+```text
+signal_grade        = STRONG_BUY_CANDIDATE / WATCH / RISKY / NO_SIGNAL
+reason_summary      = 상승 확률, 하락 위험, 복합 점수를 바탕으로 한 한글 요약
+predicted_at        = 예측 기준 시각
+staleness_minutes   = 예측 기준 시각으로부터 경과한 분
+model_version       = 해당 예측을 만든 활성 모델 버전
+```
+
 백테스트 JSON 주요 필드는 다음 의미를 가집니다.
 
 ```text

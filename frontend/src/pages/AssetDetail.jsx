@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { supabase } from '../supabaseClient'
@@ -12,12 +12,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const normalizedRouteAssetType = String(assetType || '').toUpperCase() === 'STOCK' ? 'STOCK' : 'CRYPTO'
   const [resolvedAssetType, setResolvedAssetType] = useState(normalizedRouteAssetType)
 
-  // 1. 거래소 기본값 세팅 (주식은 KIS 모의투자를 기본값으로, 코인은 COINONE)
-  const defaultExchange = normalizedRouteAssetType === 'STOCK' ? 'KIS' : 'COINONE'
+  // 1. 거래소 기본값 세팅 (주식은 TOSS 실거래를 기본값으로, 코인은 COINONE)
+  const defaultExchange = normalizedRouteAssetType === 'STOCK' ? 'TOSS' : 'COINONE'
   const [exchange, setExchange] = useState(defaultExchange)
   
-  // 2. 환경 세팅 (KIS 모의투자를 위해 MOCK 기본값)
-  const [brokerEnv, setBrokerEnv] = useState(normalizedRouteAssetType === 'STOCK' && defaultExchange === 'KIS' ? 'MOCK' : 'REAL')
+  // 2. 환경 세팅 (TOSS는 실거래만 지원하므로 기본 REAL 설정)
+  const [brokerEnv, setBrokerEnv] = useState('REAL')
   const [chartInterval, setChartInterval] = useState(normalizedRouteAssetType === 'STOCK' ? '1d' : '1h')
   
   // 3. 차트 및 시세 데이터 상태
@@ -57,6 +57,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [precheckLoading, setPrecheckLoading] = useState(false)
   const [precheckMessage, setPrecheckMessage] = useState('')
   const [brokerAvailability, setBrokerAvailability] = useState(null)
+  const [mlSignal, setMlSignal] = useState(null)
+  const [mlSignalLoading, setMlSignalLoading] = useState(false)
+  const [mlSignalMessage, setMlSignalMessage] = useState('')
 
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
@@ -72,8 +75,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const totalEstimatedAmount = effectiveOrderPrice * Number(quantity || 0)
   const isStockAsset = resolvedAssetType === 'STOCK'
   const showLevel2Panel = false
-  const chartPollMs = isStockAsset ? (isIntradayInterval ? 20000 : 30000) : (isIntradayInterval ? 5000 : 15000)
-  const level2PollMs = isStockAsset ? 10000 : 2000
+
+  const [isMarketClosed, setIsMarketClosed] = useState(false)
+  const chartPollMs = isMarketClosed
+    ? 60000
+    : (isStockAsset ? (isIntradayInterval ? 20000 : 30000) : (isIntradayInterval ? 5000 : 15000))
+  const level2PollMs = isMarketClosed
+    ? 30000
+    : (isStockAsset ? 10000 : 2000)
 
   // 세션 토큰 헤더 획득 헬퍼
   const getAuthHeader = async () => {
@@ -92,14 +101,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     ]
 
     for (const candidate of candidates) {
-      if (candidate.exchange === 'KIS') {
-        const key = `KIS_${candidate.brokerEnv}`
-        if (statusMap[key]?.registered) {
-          return candidate
-        }
-      } else {
-        const status = statusMap[candidate.exchange]
-        if (status?.registered) {
+      const exData = statusMap[candidate.exchange]
+      if (exData && exData.accounts) {
+        const hasRegistered = exData.accounts.some(
+          acc => acc.broker_env === candidate.brokerEnv && acc.registered
+        )
+        if (hasRegistered) {
           return candidate
         }
       }
@@ -110,12 +117,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   const isRegisteredStockBroker = (statusMap, targetExchange, targetEnv) => {
     if (!statusMap) return false
-    if (targetExchange === 'KIS') {
-      const key = `KIS_${targetEnv}`
-      return !!statusMap[key]?.registered
-    }
-    const status = statusMap[targetExchange]
-    return !!status?.registered
+    const exData = statusMap[targetExchange]
+    if (!exData || !exData.accounts) return false
+    return exData.accounts.some(acc => acc.broker_env === targetEnv && acc.registered)
   }
 
   const loadBrokerAvailability = async () => {
@@ -176,6 +180,55 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
   }
 
+  const fetchMlSignal = async () => {
+    if (!isLoggedIn) {
+      setMlSignal(null)
+      setMlSignalMessage('로그인 후 AI 시그널을 확인할 수 있습니다.')
+      return
+    }
+
+    const authHeader = await getAuthHeader()
+    if (!authHeader) {
+      setMlSignal(null)
+      setMlSignalMessage('로그인 세션이 만료되었습니다.')
+      return
+    }
+
+    setMlSignalLoading(true)
+    setMlSignalMessage('')
+    try {
+      const params = new URLSearchParams({
+        asset_type: resolvedAssetType,
+        symbols: symbol,
+        limit: '1',
+      })
+      const response = await fetch(`${API_BASE_URL}/api/ml/predictions/active?${params.toString()}`, {
+        headers: {
+          Authorization: authHeader,
+        },
+      })
+      const resData = await response.json()
+      if (!response.ok || !resData.success) {
+        setMlSignal(null)
+        setMlSignalMessage(
+          response.status === 404
+            ? '현재 이 종목에 표시할 활성 AI 시그널이 없습니다.'
+            : (resData.message || 'AI 시그널 조회에 실패했습니다.')
+        )
+        return
+      }
+
+      const firstSignal = resData.data?.predictions?.[0] || null
+      setMlSignal(firstSignal ? { ...firstSignal, meta: resData.data } : null)
+      setMlSignalMessage(firstSignal ? '' : '현재 이 종목에 표시할 활성 AI 시그널이 없습니다.')
+    } catch (error) {
+      setMlSignal(null)
+      setMlSignalMessage(`AI 시그널 통신 실패: ${error.message}`)
+    } finally {
+      setMlSignalLoading(false)
+    }
+  }
+
   // 시간 표시 포맷 헬퍼
   const formatTime = (isoString) => {
     if (!isoString) return '';
@@ -208,6 +261,43 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       second: '2-digit',
       hour12: false,
     })
+  }
+
+  const formatProbability = (value) => {
+    if (value === null || value === undefined || value === '') return '-'
+    const numberValue = Number(value)
+    if (Number.isNaN(numberValue)) return '-'
+    return `${(numberValue * 100).toFixed(1)}%`
+  }
+
+  const formatSignalScore = (value) => {
+    if (value === null || value === undefined || value === '') return '-'
+    const numberValue = Number(value)
+    if (Number.isNaN(numberValue)) return '-'
+    return numberValue.toFixed(2)
+  }
+
+  const formatStaleness = (minutes) => {
+    if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return '-'
+    const numericMinutes = Number(minutes)
+    if (numericMinutes < 60) return `${numericMinutes}분 전`
+    if (numericMinutes < 1440) return `${Math.floor(numericMinutes / 60)}시간 전`
+    return `${Math.floor(numericMinutes / 1440)}일 전`
+  }
+
+  const getSignalGradeLabel = (grade) => {
+    if (grade === 'STRONG_BUY_CANDIDATE') return '강한 후보'
+    if (grade === 'WATCH') return '관찰'
+    if (grade === 'RISKY') return '위험'
+    if (grade === 'NO_SIGNAL') return '신호 없음'
+    return grade || '미분류'
+  }
+
+  const getSignalGradeTone = (grade) => {
+    if (grade === 'STRONG_BUY_CANDIDATE') return 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+    if (grade === 'WATCH') return 'border-cyan-500/50 bg-cyan-950/30 text-cyan-300'
+    if (grade === 'RISKY') return 'border-rose-500/50 bg-rose-950/40 text-rose-300'
+    return 'border-slate-700 bg-slate-900/70 text-slate-400'
   }
 
   const normalizeCandleTime = (rawTime) => {
@@ -386,6 +476,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           lastCandleSignatureRef.current = signature
           setCandleData(uniqueFormatted)
         }
+        if (resData.meta?.cache_ttl_seconds && resData.meta.cache_ttl_seconds > 600) {
+          setIsMarketClosed(true)
+        } else {
+          setIsMarketClosed(false)
+        }
         setMarketFeeds(prev => ({
           ...prev,
           candles: {
@@ -399,7 +494,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         const lastCandle = uniqueFormatted[uniqueFormatted.length - 1];
         setCurrentPrice(lastCandle.close);
         
-        if (uniqueFormatted.length > 1) {
+        if (resData.meta && typeof resData.meta.change_rate === 'number') {
+          setPriceChangeRate(resData.meta.change_rate);
+        } else if (uniqueFormatted.length > 1) {
           const prevCandle = uniqueFormatted[uniqueFormatted.length - 2];
           const change = prevCandle.close !== 0 ? ((lastCandle.close - prevCandle.close) / prevCandle.close) * 100 : 0;
           setPriceChangeRate(change);
@@ -440,22 +537,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         headers['Authorization'] = authHeader
       }
 
-      // 호가 조회
-      const obUrl = `${API_BASE_URL}/api/chart/orderbook?exchange=${chartEx}&symbol=${symbol}&broker_env=${chartEnv}`;
-      const obRes = await fetch(obUrl, { headers });
-      const obData = await obRes.json();
-      if (obData.success) {
-        setOrderbook(obData.data);
-        setMarketFeeds(prev => ({
-          ...prev,
-          orderbook: {
-            source: obData.meta?.source || (obData.is_mock ? 'MOCK' : 'LIVE'),
-            isMock: Boolean(obData.meta?.is_mock ?? obData.is_mock),
-            degradedReason: obData.meta?.degraded_reason || '',
-            checkedAt: Date.now(),
-          },
-        }))
-      }
+
       
       // 체결 조회
       const trUrl = `${API_BASE_URL}/api/chart/trades?exchange=${chartEx}&symbol=${symbol}&broker_env=${chartEnv}`;
@@ -463,11 +545,15 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       const trData = await trRes.json();
       if (trData.success) {
         setTrades(trData.data);
+        const isMockTr = Boolean(trData.meta?.is_mock ?? trData.is_mock);
+        if (isMockTr) {
+          setIsMarketClosed(true);
+        }
         setMarketFeeds(prev => ({
           ...prev,
           trades: {
-            source: trData.meta?.source || (trData.is_mock ? 'MOCK' : 'LIVE'),
-            isMock: Boolean(trData.meta?.is_mock ?? trData.is_mock),
+            source: trData.meta?.source || (isMockTr ? 'MOCK' : 'LIVE'),
+            isMock: isMockTr,
             degradedReason: trData.meta?.degraded_reason || '',
             checkedAt: Date.now(),
           },
@@ -577,6 +663,17 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   // 거래소 토글 시 환경값 변경
   const handleExchangeChange = (newEx, newEnv = 'REAL') => {
+    // 가상자산은 Real만 가용하므로 항상 통과, 주식의 경우 KIS MOCK은 기본 제공 폴백이므로 항상 통과
+    const isMockKis = newEx === 'KIS' && newEnv === 'MOCK'
+    const isCrypto = resolvedAssetType === 'CRYPTO'
+    const isValid = isCrypto || isMockKis || isRegisteredStockBroker(brokerAvailability, newEx, newEnv)
+
+    if (resolvedAssetType === 'STOCK' && !isValid) {
+      const displayName = newEx === 'KIS' ? '한국투자증권 실거래' : '토스증권 실거래'
+      alert(`등록된 ${displayName} API Key가 없습니다. 대시보드 상단에서 API Key를 등록한 후에 사용해 주세요.`)
+      return
+    }
+
     setExchange(newEx)
     setBrokerEnv(newEnv)
     setPrice('')
@@ -590,6 +687,10 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
   }
 
+  const refreshMlSignal = useEffectEvent(() => {
+    fetchMlSignal()
+  })
+
   useEffect(() => {
     fetchCandles()
     fetchUserBalance()
@@ -600,6 +701,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   useEffect(() => {
     loadBrokerAvailability()
   }, [symbol])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      refreshMlSignal()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [isLoggedIn, resolvedAssetType, symbol])
 
   useEffect(() => {
     if (resolvedAssetType === 'STOCK') {
@@ -957,28 +1065,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               </span>
             </div>
 
-            {/* 52주 범위 게이지 바 */}
-            <div className="hidden sm:flex flex-col w-48">
-              <div className="flex justify-between text-[9px] text-slate-400 font-mono">
-                <span>52주 최저</span>
-                <span>52주 최고</span>
-              </div>
-              <div className="w-full bg-[#1b253b] h-1.5 rounded-full mt-1.5 overflow-hidden relative">
-                {/* 현재 위치 마커바 */}
-                <div 
-                  className="bg-cyan-400 h-full absolute rounded-full" 
-                  style={{ width: '40%', left: '30%' }}
-                />
-              </div>
-            </div>
 
-            {/* 거래대금 또는 거래소 추가 메타 정보 */}
-            <div className="flex flex-col text-right">
-              <span className="text-[10px] text-slate-400 font-bold">체결강도</span>
-              <span className="text-sm font-mono text-slate-500 font-bold mt-0.5">
-                {showLevel2Panel ? (marketFeeds.orderbook.isMock ? '112.4%' : '124.93%') : '-'}
-              </span>
-            </div>
           </div>
         </div>
 
@@ -1137,6 +1224,75 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
           {/* [3열: 우측 - 주문 패널 & 내 보유 주식 (3/12 cols)] */}
           <div className={`${showLevel2Panel ? 'lg:col-span-3' : 'lg:col-span-3'} flex flex-col gap-5`}>
+
+            {/* AI 시그널 카드 */}
+            <div className="bg-[#0e1529]/90 border border-cyan-500/30 rounded-xl p-4 flex flex-col gap-3 backdrop-blur-md">
+              <div className="flex items-start justify-between gap-3 border-b border-[#1f2945] pb-2">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300">AI Signal</span>
+                  <h2 className="mt-1 text-xs font-bold text-white">ML 참고 신호</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchMlSignal}
+                  disabled={mlSignalLoading}
+                  className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30 disabled:opacity-50"
+                >
+                  {mlSignalLoading ? '조회 중' : '갱신'}
+                </button>
+              </div>
+
+              {mlSignalLoading ? (
+                <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-4 text-center text-[11px] font-mono text-cyan-300">
+                  활성 모델 신호 확인 중...
+                </div>
+              ) : mlSignal ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded border px-2 py-1 text-[10px] font-black tracking-widest ${getSignalGradeTone(mlSignal.signal_grade)}`}>
+                      {getSignalGradeLabel(mlSignal.signal_grade)}
+                    </span>
+                    <span className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-[10px] font-bold text-slate-300">
+                      {mlSignal.position || 'HOLD'}
+                    </span>
+                    <span className="rounded border border-cyan-500/20 bg-cyan-950/20 px-2 py-1 text-[10px] font-bold text-cyan-300">
+                      {mlSignal.model_version || mlSignal.meta?.model_version || '-'}
+                    </span>
+                  </div>
+
+                  <p className="break-words text-[11px] leading-5 text-slate-300">
+                    {mlSignal.reason_summary || '현재 모델 신호를 요약할 수 없습니다.'}
+                  </p>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded border border-[#1f2945] bg-[#070b19] p-2">
+                      <p className="text-[9px] text-slate-500">상승 확률</p>
+                      <p className="mt-1 font-mono text-xs font-bold text-emerald-300">{formatProbability(mlSignal.up_probability)}</p>
+                    </div>
+                    <div className="rounded border border-[#1f2945] bg-[#070b19] p-2">
+                      <p className="text-[9px] text-slate-500">하락 위험</p>
+                      <p className="mt-1 font-mono text-xs font-bold text-amber-300">{formatProbability(mlSignal.risk_probability)}</p>
+                    </div>
+                    <div className="rounded border border-[#1f2945] bg-[#070b19] p-2">
+                      <p className="text-[9px] text-slate-500">복합 점수</p>
+                      <p className="mt-1 font-mono text-xs font-bold text-cyan-300">{formatSignalScore(mlSignal.signal_score)}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-amber-900/40 bg-amber-950/10 px-3 py-2 text-[9px] leading-4 text-amber-300">
+                    AI 신호는 주문 실행 근거가 아니라 참고 지표입니다. 주문 전 사전검증과 사용자 승인을 우선합니다.
+                  </div>
+
+                  <p className="font-mono text-[10px] text-slate-500">
+                    예측 {formatStaleness(mlSignal.staleness_minutes)} · {mlSignal.predicted_at || mlSignal.date || '-'}
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-4 text-[11px] leading-5 text-slate-400">
+                  {mlSignalMessage || '현재 표시할 AI 시그널이 없습니다.'}
+                </div>
+              )}
+            </div>
             
             {/* 주문 입력 폼 카드 */}
             <div className="bg-[#0e1529]/90 border border-[#1f2945] rounded-xl p-4 flex flex-col gap-4 backdrop-blur-md">

@@ -13,9 +13,129 @@ from backend.services.kis_client import KISClient
 CANDLE_CACHE = {}
 ORDERBOOK_CACHE = {}
 TRADES_CACHE = {}
-CACHE_TTL_SECONDS = 10  # 10초 유효
+PRICE_CHANGE_CACHE = {}
+PRICE_CHANGE_CACHE_TTL = 10
+CACHE_TTL_SECONDS = 10  # 기본값 10초 유효
 LEVEL2_CACHE_TTL_SECONDS = 10
 REAL_ORDER_LIMIT_KRW = 100000.0
+
+def get_cached_change_rate(exchange, symbol, broker_env, auth_header):
+    cache_key = (exchange, symbol, broker_env)
+    now = time.time()
+    if cache_key in PRICE_CHANGE_CACHE:
+        expire, val = PRICE_CHANGE_CACHE[cache_key]
+        if now < expire:
+            return val
+            
+    change_rate = 0.0
+    try:
+        if exchange == "TOSS" and auth_header:
+            user_id, token = get_user_id_from_header(auth_header)
+            crypto_helper = current_app.crypto
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "TOSS", broker_env)
+            if records:
+                access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
+                secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
+                toss_account_seq = records[0].get("toss_account_seq")
+                client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env, user_id=user_id)
+                price_data = client.get_price(symbol)
+                change_rate = float(price_data.get("change_rate") or 0.0)
+        elif exchange == "KIS" and auth_header:
+            user_id, token = get_user_id_from_header(auth_header)
+            crypto_helper = current_app.crypto
+            records = _get_quote_records_with_env_fallback(auth_header, user_id, "KIS", broker_env)
+            if records:
+                access_key = crypto_helper.decrypt(records[0].get("encrypted_access_key"))
+                secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
+                cano = records[0].get("kis_account_no")
+                acnt_prdt_cd = records[0].get("kis_account_code", "01")
+                kis_env = records[0].get("broker_env", "MOCK")
+                client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env, user_id=user_id)
+                price_data = client.get_price(symbol)
+                change_rate = float(price_data.get("change_rate") or 0.0)
+        elif exchange == "COINONE":
+            url = f"https://api.coinone.co.kr/public/v2/ticker/KRW/{symbol.upper()}"
+            res = requests.get(url, timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("result") == "success" and data.get("tickers"):
+                    ticker = data["tickers"][0]
+                    last = float(ticker.get("last", 0))
+                    yesterday_last = float(ticker.get("yesterday_last", last))
+                    if yesterday_last > 0:
+                        change_rate = ((last - yesterday_last) / yesterday_last) * 100
+        elif exchange == "BINANCE":
+            url = "https://api.binance.com/api/v3/ticker/24hr"
+            res = requests.get(url, params={"symbol": symbol.upper()}, timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                change_rate = float(data.get("priceChangePercent") or 0.0)
+    except Exception:
+        pass
+        
+    PRICE_CHANGE_CACHE[cache_key] = (now + PRICE_CHANGE_CACHE_TTL, change_rate)
+    return change_rate
+
+from datetime import timedelta, timezone as datetime_timezone
+
+def is_kr_market_open() -> bool:
+    """
+    현재 한국 장(KRX)이 열려 있는지 여부를 판단합니다. (평일 09:00 ~ 15:30 KST)
+    """
+    kst_now = datetime.now(datetime_timezone(timedelta(hours=9)))
+    if kst_now.weekday() >= 5:
+        return False
+    start_time = kst_now.replace(hour=9, minute=0, second=0, microsecond=0)
+    end_time = kst_now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return start_time <= kst_now <= end_time
+
+def is_us_market_open() -> bool:
+    """
+    현재 미국 주식 시장이 열려 있는지 여부를 판단합니다. (미동부 통합 운영 04:00 ~ 20:00 EST/EDT)
+    """
+    utc_now = datetime.now(datetime_timezone.utc)
+    # 3~10월은 서머타임(EDT = UTC-4), 11~2월은 표준시(EST = UTC-5)로 대략적 추정
+    month = utc_now.month
+    est_offset = timedelta(hours=-4) if 3 <= month <= 10 else timedelta(hours=-5)
+    est_now = utc_now.astimezone(datetime_timezone(est_offset))
+    
+    if est_now.weekday() >= 5:
+        return False
+        
+    start_time = est_now.replace(hour=4, minute=0, second=0, microsecond=0)
+    end_time = est_now.replace(hour=20, minute=0, second=0, microsecond=0)
+    return start_time <= est_now <= end_time
+
+def get_dynamic_ttl(exchange: str, symbol: str, interval: str) -> int:
+    """
+    거래소, 종목 심볼, 주기에 맞춰 최적화된 동적 캐시 TTL을 반환합니다.
+    """
+    exchange_upper = exchange.upper()
+    
+    if exchange_upper in ("COINONE", "BINANCE"):
+        is_market_open = True  # 가상자산은 24시간 가동
+    else:
+        # 주식인 경우 숫자 심볼이면 한국 주식, 영문자가 섞여 있으면 미국 주식으로 판별
+        is_us_stock = any(c.isalpha() for c in symbol)
+        if is_us_stock:
+            is_market_open = is_us_market_open()
+        else:
+            is_market_open = is_kr_market_open()
+
+    # 장외 시간(주말/야간 등)에는 12시간(43200초) 캐시
+    if not is_market_open:
+        return 43200
+
+    # 장내 시간
+    interval_lower = interval.lower()
+    if interval_lower == "1m":
+        return 10  # 1분봉: 10초
+    elif interval_lower in ("5m", "15m", "30m"):
+        return 60  # 5분~30분봉: 1분
+    elif interval_lower in ("60m", "1h"):
+        return 300  # 1시간봉: 5분
+    else:
+        return 600  # 일봉 이상: 10분
 
 # API 호출 동시성 제어를 위한 Lock 딕셔너리 (Request Collapsing용)
 _api_locks = {}
@@ -569,8 +689,10 @@ def get_chart_candles():
         return jsonify({"success": False, "message": "exchange 및 symbol 파라미터가 필수적입니다."}), 400
 
     auth_header = request.headers.get("Authorization")
+    ttl = get_dynamic_ttl(exchange, symbol, interval)
+    change_rate = get_cached_change_rate(exchange, symbol, broker_env, auth_header)
 
-    # 10초 단기 캐싱 조회
+    # 동적 캐싱 조회
     cache_key = (exchange, symbol, interval, broker_env)
     now = time.time()
     if cache_key in CANDLE_CACHE:
@@ -582,7 +704,8 @@ def get_chart_candles():
                 "meta": {
                     "source": "CACHE",
                     "is_mock": False,
-                    "cache_ttl_seconds": CACHE_TTL_SECONDS,
+                    "cache_ttl_seconds": ttl,
+                    "change_rate": change_rate,
                 }
             })
 
@@ -599,14 +722,15 @@ def get_chart_candles():
                     "meta": {
                         "source": "CACHE",
                         "is_mock": False,
-                        "cache_ttl_seconds": CACHE_TTL_SECONDS,
+                        "cache_ttl_seconds": ttl,
+                        "change_rate": change_rate,
                     }
                 })
 
-        return _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker_env, auth_header)
+        return _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker_env, auth_header, ttl, change_rate)
 
 
-def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker_env, auth_header):
+def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker_env, auth_header, ttl, change_rate):
     try:
 
         # 1. TOSS 캔들
@@ -629,11 +753,11 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
                 client = _load_kis_client_from_records(records_kis)
                 candles = _fetch_kis_candles_with_interval(client, symbol, interval, count)
                     
-                CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+                CANDLE_CACHE[cache_key] = (time.time() + ttl, candles)
                 return jsonify({
                     "success": True,
                     "data": candles,
-                    "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                    "meta": {"source": "KIS_FALLBACK", "is_mock": False, "cache_ttl_seconds": ttl, "change_rate": change_rate}
                 })
             
             # Toss 키가 없는 경우 KIS 키도 없다면 에러 반환
@@ -653,22 +777,22 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
                 current_app.logger.warning(f"Toss 캔들 조회 실패, KIS 폴백 시도: {str(toss_error)}")
 
             if candles:
-                CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+                CANDLE_CACHE[cache_key] = (time.time() + ttl, candles)
                 return jsonify({
                     "success": True,
                     "data": candles,
-                    "meta": {"source": "LIVE", "is_mock": False}
+                    "meta": {"source": "LIVE", "is_mock": False, "cache_ttl_seconds": ttl, "change_rate": change_rate}
                 })
 
             if records_kis:
                 client_kis = _load_kis_client_from_records(records_kis)
                 candles = _fetch_kis_candles_with_interval(client_kis, symbol, interval, count)
                 if candles:
-                    CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+                    CANDLE_CACHE[cache_key] = (time.time() + ttl, candles)
                     return jsonify({
                         "success": True,
                         "data": candles,
-                        "meta": {"source": "KIS_FALLBACK", "is_mock": False}
+                        "meta": {"source": "KIS_FALLBACK", "is_mock": False, "cache_ttl_seconds": ttl, "change_rate": change_rate}
                     })
 
             return jsonify({"success": False, "message": "Toss/KIS 차트 조회 결과가 비어 있습니다."}), 502
@@ -709,11 +833,11 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
             else:
                 candles = client.get_candles(symbol, interval="D", count=count)
                 
-            CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+            CANDLE_CACHE[cache_key] = (time.time() + ttl, candles)
             return jsonify({
                 "success": True,
                 "data": candles,
-                "meta": {"source": "LIVE", "is_mock": False}
+                "meta": {"source": "LIVE", "is_mock": False, "cache_ttl_seconds": ttl, "change_rate": change_rate}
             })
 
         # 3. COINONE 캔들
@@ -757,11 +881,11 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
                 except (ValueError, TypeError):
                     pass
             candles_subset = candles[-count:]
-            CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles_subset)
+            CANDLE_CACHE[cache_key] = (time.time() + ttl, candles_subset)
             return jsonify({
                 "success": True,
                 "data": candles_subset,
-                "meta": {"source": "LIVE", "is_mock": False}
+                "meta": {"source": "LIVE", "is_mock": False, "cache_ttl_seconds": ttl, "change_rate": change_rate}
             })
 
         # 4. BINANCE 캔들
@@ -808,11 +932,11 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
                     })
                 except (ValueError, TypeError, IndexError):
                     pass
-            CANDLE_CACHE[cache_key] = (time.time() + CACHE_TTL_SECONDS, candles)
+            CANDLE_CACHE[cache_key] = (time.time() + ttl, candles)
             return jsonify({
                 "success": True,
                 "data": candles,
-                "meta": {"source": "LIVE", "is_mock": False}
+                "meta": {"source": "LIVE", "is_mock": False, "cache_ttl_seconds": ttl, "change_rate": change_rate}
             })
 
         else:

@@ -708,10 +708,10 @@ OAuth 2.0 Access Token의 다중 서버(Scale-out) 배포 환경에서의 동기
 ### 7.1 스키마 설계 (`token_caches` 및 `active_locks`)
 
 ```mermaid
-erJulia
 erDiagram
     token_caches {
         uuid id PK "기본키"
+        uuid user_id FK "사용자 격리 식별자"
         string exchange "거래소 (TOSS | KIS)"
         string broker_env "브로커 환경 (MOCK | REAL)"
         string encrypted_access_token "암호화된 Access Token"
@@ -732,6 +732,7 @@ erDiagram
 | 컬럼명 | 데이터 타입 | 제약 조건 | 설명 |
 | :--- | :--- | :--- | :--- |
 | `id` | `UUID` | PK, DEFAULT gen_random_uuid() | 고유 식별자 |
+| `user_id` | `UUID` | FK, REFERENCES public.profiles(id) ON DELETE CASCADE, NULLABLE | 사용자 식별 고유키 (시스템 공용 캐시일 경우 NULL) |
 | `exchange` | `TEXT` | CHECK (exchange IN ('TOSS', 'KIS')), NOT NULL | 거래소 구분 (현재 토큰 기반 거래소만 대상) |
 | `broker_env` | `TEXT` | CHECK (broker_env IN ('MOCK', 'REAL')), NOT NULL | 거래 환경 구분 |
 | `encrypted_access_token` | `TEXT` | NOT NULL | AES-256 GCM으로 양방향 암호화된 토큰 원문 |
@@ -739,8 +740,10 @@ erDiagram
 | `created_at` | `TIMESTAMPTZ` | DEFAULT now(), NOT NULL | 생성 일시 |
 | `updated_at` | `TIMESTAMPTZ` | DEFAULT now(), NOT NULL | 마지막 업데이트 시각 |
 
-* **유니크 제약 (Unique Constraint)**:
-  * `UNIQUE (exchange, broker_env)` 제약을 생성하여, 동일 거래소의 동일 실행 환경에 대해서는 **항상 테이블 내에 오직 1개의 행만 유지(Upsert)**되도록 제약합니다.
+* **유니크 제약 및 부분 고유 인덱스 (Unique Indexes)**:
+  * 기존 단일 `UNIQUE (exchange, broker_env)` 제약을 제거하고 아래의 2개 부분 유니크 인덱스를 생성하여, 사용자별 격리 캐시와 시스템 공용 캐시를 함께 안정적으로 지원합니다.
+  * `token_caches_user_id_exchange_broker_env_idx`: `UNIQUE (user_id, exchange, broker_env) WHERE user_id IS NOT NULL`
+  * `token_caches_null_user_id_exchange_broker_env_idx`: `UNIQUE (exchange, broker_env) WHERE user_id IS NULL`
 
 #### 테이블 명세 (`active_locks`)
 

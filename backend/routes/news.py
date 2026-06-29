@@ -23,6 +23,7 @@ def get_news_feed():
             query = symbol
     
     news_repository = current_app.news_repository
+    news_summary_service = current_app.news_summary_service
     try:
         items = news_repository.list_articles(
             market=market,
@@ -30,6 +31,37 @@ def get_news_feed():
             limit=int(limit),
             offset=int(offset),
         )
+
+        # 조회된 기사들 중 가장 최신 기사 딱 1개에 대해서만 우선적으로 실시간 자동 요약 갱신 실행
+        updates = []
+        if items:
+            item = items[0]
+            existing_summary = (item.get("ai_summary") or "").strip()
+            existing_model = item.get("ai_summary_model")
+            
+            if not existing_summary or (existing_model == "fallback" and news_summary_service.enabled):
+                try:
+                    summary_payload = news_summary_service.summarize(item)
+                    item["ai_summary"] = summary_payload["ai_summary"]
+                    item["ai_summary_model"] = summary_payload["ai_summary_model"]
+                    item["ai_summary_generated_at"] = datetime.utcnow().isoformat() + "Z"
+                    item["ai_summary_prompt_version"] = summary_payload["ai_summary_prompt_version"]
+                    
+                    updates.append({
+                        "id": item["id"],
+                        "ai_summary": item["ai_summary"],
+                        "ai_summary_model": item["ai_summary_model"],
+                        "ai_summary_generated_at": item["ai_summary_generated_at"],
+                        "ai_summary_prompt_version": item["ai_summary_prompt_version"]
+                    })
+                except Exception as sum_err:
+                    current_app.logger.warning(f"Failed to auto-summarize article {item.get('id')}: {str(sum_err)}")
+
+        if updates:
+            try:
+                news_repository.upsert_article_summaries(updates)
+            except Exception as db_err:
+                current_app.logger.error(f"Failed to save auto-generated summaries: {str(db_err)}")
 
         total_count = news_repository.count_articles(
             market=market,
@@ -104,7 +136,8 @@ def ensure_news_summaries():
                 continue
 
             existing_summary = (article.get("ai_summary") or "").strip()
-            if existing_summary:
+            existing_model = article.get("ai_summary_model")
+            if existing_summary and (existing_model != "fallback" or not news_summary_service.enabled):
                 items.append({
                     "id": article_id,
                     "ai_summary": existing_summary,

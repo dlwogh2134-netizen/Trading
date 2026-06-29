@@ -370,7 +370,8 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                                                 
                                                 macro_rows = fetch_macro_indices(int(dataset_config["count"]))
                                                 macro_output = PROJECT_ROOT / "ml" / "data" / "raw" / "macro_indices.csv"
-                                                write_rows(macro_output, macro_rows, append=bool(dataset_config.get("append", True)))
+                                                if macro_rows:
+                                                    write_rows(macro_output, macro_rows, append=bool(dataset_config.get("append", True)))
                                                 
                                                 rows, failures = fetch_toss_candles(
                                                     symbols,

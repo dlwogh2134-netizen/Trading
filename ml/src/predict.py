@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from ml.src.model_utils import apply_probability_calibration
+from ml.src.build_features import build_features, normalize_columns
 
 
 def load_config(path: str) -> dict:
@@ -39,6 +40,7 @@ def main() -> None:
     model_path = resolve_ml_path(args.config, args.model or config["model"]["output_path"])
     features_path = resolve_ml_path(args.config, config["data"]["features_path"])
     predictions_path = resolve_ml_path(args.config, config["data"]["predictions_path"])
+    raw_candles_path = resolve_ml_path(args.config, config["data"]["raw_candles_path"])
 
     payload = load_model_payload(model_path)
     model = payload["model"]
@@ -61,7 +63,11 @@ def main() -> None:
             risk_calibrator = risk_payload.get("calibrator")
             risk_feature_columns = risk_payload["config"]["model"]["feature_columns"]
 
-    df = pd.read_csv(features_path)
+    if raw_candles_path.exists():
+        raw_df = normalize_columns(pd.read_csv(raw_candles_path))
+        df = build_features(raw_df, config, include_unlabeled=True)
+    else:
+        df = pd.read_csv(features_path)
     df["date"] = pd.to_datetime(df["date"])
     latest_df = df.sort_values(["symbol", "date"]).groupby("symbol", as_index=False).tail(1).copy()
     up_probabilities = model.predict_proba(latest_df[feature_columns])[:, 1]

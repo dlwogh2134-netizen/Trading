@@ -328,8 +328,19 @@ def fetch_binance_klines(
 
 
 def fetch_macro_indices(count: int) -> list[dict[str, Any]]:
-    import pandas as pd
-    import yfinance as yf
+    try:
+        import pandas as pd
+        import yfinance as yf
+    except ImportError as error:
+        fallback_path = PROJECT_ROOT / "ml" / "data" / "raw" / "macro_indices.csv"
+        print(
+            f"pandas/yfinance 의존성이 없어 매크로 지표 신규 수집을 건너뜁니다: {error}",
+            file=sys.stderr,
+        )
+        if fallback_path.exists():
+            with fallback_path.open("r", newline="", encoding="utf-8") as file:
+                return list(csv.DictReader(file))
+        return []
 
     days_to_fetch = count * 2
     start_date = (datetime.now(timezone.utc) - timedelta(days=days_to_fetch)).strftime("%Y-%m-%d")
@@ -421,8 +432,11 @@ def main() -> None:
         macro_output = PROJECT_ROOT / "ml" / "data" / "raw" / "macro_indices.csv"
         print("매크로 지수(KOSPI, NASDAQ, 환율 등) 수집을 시작합니다...")
         macro_rows = fetch_macro_indices(args.count)
-        write_rows(macro_output, macro_rows, append=args.append)
-        print(f"매크로 지수 CSV 생성 완료: {macro_output} ({len(macro_rows)} 행)")
+        if macro_rows:
+            write_rows(macro_output, macro_rows, append=args.append)
+            print(f"매크로 지수 CSV 생성 완료: {macro_output} ({len(macro_rows)} 행)")
+        else:
+            print("매크로 지수 신규 수집 결과가 없어 기존 파일을 유지합니다.", file=sys.stderr)
 
     if args.exchange == "TOSS":
         if args.asset_type != "STOCK":

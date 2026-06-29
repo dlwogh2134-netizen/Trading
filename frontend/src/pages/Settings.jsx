@@ -94,8 +94,23 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
         }
       })
       const resData = await response.json()
-      if (resData.success) {
-        setStatus(resData.data)
+      if (resData.success && resData.data) {
+        const raw = resData.data
+        const processed = {
+          ...raw,
+          KIS_MOCK: { registered: false },
+          KIS_REAL: { registered: false }
+        }
+        if (raw.KIS && raw.KIS.accounts) {
+          raw.KIS.accounts.forEach(acc => {
+            if (acc.broker_env === 'MOCK') {
+              processed.KIS_MOCK = acc
+            } else if (acc.broker_env === 'REAL') {
+              processed.KIS_REAL = acc
+            }
+          })
+        }
+        setStatus(processed)
       }
     } catch (error) {
       console.error('연동 현황 로드 실패:', error.message)
