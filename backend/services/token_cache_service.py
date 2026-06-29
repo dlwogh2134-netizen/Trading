@@ -6,7 +6,7 @@ from backend.utils.crypto_helper import CryptoHelper
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "default-dev-encryption-key-32bytes!")
 crypto = CryptoHelper(ENCRYPTION_KEY)
 
-def get_db_token(exchange: str, env: str) -> str | None:
+def get_db_token(exchange: str, env: str, user_id: str | None = None) -> str | None:
     """
     Supabase DB의 token_caches 테이블로부터 만료되지 않은 유효한 토큰을 조회하여 복호화 후 반환합니다.
     """
@@ -17,6 +17,10 @@ def get_db_token(exchange: str, env: str) -> str | None:
         "exchange": f"eq.{exchange_upper}",
         "broker_env": f"eq.{env_upper}"
     }
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+    else:
+        params["user_id"] = "is.null"
     
     # service_role 권한으로 token_caches 테이블 조회
     records = safe_query_supabase_as_service_role("token_caches", "GET", params=params)
@@ -51,7 +55,7 @@ def get_db_token(exchange: str, env: str) -> str | None:
 
     return None
 
-def set_db_token(exchange: str, env: str, token: str, expires_in: int) -> None:
+def set_db_token(exchange: str, env: str, token: str, expires_in: int, user_id: str | None = None) -> None:
     """
     새로 발급받은 토큰을 암호화하여 Supabase DB의 token_caches 테이블에 Upsert 처리합니다.
     """
@@ -69,11 +73,19 @@ def set_db_token(exchange: str, env: str, token: str, expires_in: int) -> None:
         "expired_at": expired_at_str,
         "updated_at": datetime.utcnow().isoformat() + "Z"
     }
+    if user_id:
+        payload["user_id"] = user_id
+    else:
+        payload["user_id"] = None
 
     params = {
         "exchange": f"eq.{exchange_upper}",
         "broker_env": f"eq.{env_upper}"
     }
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+    else:
+        params["user_id"] = "is.null"
 
     # 기존 캐시 여부 체크 (GET)
     existing = safe_query_supabase_as_service_role("token_caches", "GET", params=params)
@@ -86,7 +98,7 @@ def set_db_token(exchange: str, env: str, token: str, expires_in: int) -> None:
         # 없으면 생성 (POST)
         query_supabase_as_service_role("token_caches", "POST", json_data=payload)
 
-def clear_db_token(exchange: str, env: str) -> None:
+def clear_db_token(exchange: str, env: str, user_id: str | None = None) -> None:
     """
     토큰 만료나 인증 에러(401) 시, DB의 특정 거래소/환경의 토큰 수명을 과거 시각으로 강제 만료시킵니다.
     """
@@ -97,6 +109,10 @@ def clear_db_token(exchange: str, env: str) -> None:
         "exchange": f"eq.{exchange_upper}",
         "broker_env": f"eq.{env_upper}"
     }
+    if user_id:
+        params["user_id"] = f"eq.{user_id}"
+    else:
+        params["user_id"] = "is.null"
 
     existing = safe_query_supabase_as_service_role("token_caches", "GET", params=params)
     if existing and len(existing) > 0:
@@ -107,3 +123,4 @@ def clear_db_token(exchange: str, env: str) -> None:
             "updated_at": datetime.utcnow().isoformat() + "Z"
         }
         query_supabase_as_service_role(f"token_caches?id=eq.{record_id}", "PATCH", json_data=payload)
+

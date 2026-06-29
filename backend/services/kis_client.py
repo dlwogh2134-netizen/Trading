@@ -38,12 +38,13 @@ def _floor_kst_bucket_timestamp(timestamp: int, interval_minutes: int) -> int:
     return int(bucket_dt.timestamp())
 
 class KISClient(ExchangeClient):
-    def __init__(self, appkey: str, appsecret: str, cano: str, acnt_prdt_cd: str = "01", env: str = "MOCK"):
+    def __init__(self, appkey: str, appsecret: str, cano: str, acnt_prdt_cd: str = "01", env: str = "MOCK", user_id: str | None = None):
         self.appkey = appkey
         self.appsecret = appsecret
         self.cano = cano
         self.acnt_prdt_cd = acnt_prdt_cd
         self.env = env.upper()
+        self.user_id = user_id
         
         if self.env == "REAL":
             self.base_url = "https://openapi.koreainvestment.com:9443"
@@ -62,7 +63,7 @@ class KISClient(ExchangeClient):
         """
         from backend.services.token_cache_service import clear_db_token
         try:
-            clear_db_token("KIS", self.env)
+            clear_db_token("KIS", self.env, self.user_id)
         except Exception:
             pass
 
@@ -75,7 +76,7 @@ class KISClient(ExchangeClient):
         
         # DB에서 유효한 공용 토큰 획득 시도
         try:
-            token = get_db_token("KIS", self.env)
+            token = get_db_token("KIS", self.env, self.user_id)
             if token:
                 return token
         except Exception:
@@ -97,7 +98,7 @@ class KISClient(ExchangeClient):
 
         # DB 캐시 테이블에 신규 토큰 저장 (Upsert)
         try:
-            set_db_token("KIS", self.env, new_token, expires_in)
+            set_db_token("KIS", self.env, new_token, expires_in, self.user_id)
         except Exception:
             pass
             

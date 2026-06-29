@@ -183,7 +183,7 @@ def get_toss_accounts():
             return jsonify({"success": False, "message": f"DB 조회 실패: {str(e)}"}), 500
 
     try:
-        client = TossClient(client_id=client_id, client_secret=client_secret, env=broker_env)
+        client = TossClient(client_id=client_id, client_secret=client_secret, env=broker_env, user_id=user_id)
         accounts = client.get_accounts()
         return jsonify({"success": True, "data": accounts})
     except Exception as e:
@@ -193,6 +193,13 @@ def get_toss_accounts():
 def test_keys():
     """임시 혹은 DB에 저장된 API Key 크리덴셜의 연결 가능 여부를 실시간 검증합니다."""
     auth_header = request.headers.get("Authorization")
+    user_id = None
+    if auth_header:
+        try:
+            user_id, _ = get_user_id_from_header(auth_header)
+        except Exception:
+            pass
+
     data = request.json or {}
     exchange = data.get("exchange", "KIS")
     broker_env = data.get("broker_env", "MOCK")
@@ -220,7 +227,8 @@ def test_keys():
         if not auth_header:
             return jsonify({"success": False, "message": "인증 정보 혹은 API 키 입력값이 누락되었습니다."}), 400
         try:
-            user_id, token = get_user_id_from_header(auth_header)
+            # user_id가 이미 선언되어 있으므로 재할당
+            token = auth_header.split(" ")[1] if " " in auth_header else auth_header
             params = {
                 "user_id": f"eq.{user_id}",
                 "exchange": f"eq.{exchange}",
@@ -243,13 +251,13 @@ def test_keys():
 
     try:
         if exchange == "TOSS":
-            client = TossClient(client_id=client_id, client_secret=client_secret, account_seq=toss_account_seq, env=broker_env)
+            client = TossClient(client_id=client_id, client_secret=client_secret, account_seq=toss_account_seq, env=broker_env, user_id=user_id)
             client.get_accounts()
             message = "Toss Open API 연결에 성공했습니다."
         elif exchange == "KIS":
             if not cano:
                 return jsonify({"success": False, "message": "KIS 테스트를 위해서는 계좌번호(cano)가 필수적입니다."}), 400
-            client = KISClient(appkey=client_id, appsecret=client_secret, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=broker_env)
+            client = KISClient(appkey=client_id, appsecret=client_secret, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=broker_env, user_id=user_id)
             client.get_balance()
             message = "KIS API 연결에 성공했습니다."
         elif exchange == "COINONE":

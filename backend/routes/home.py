@@ -102,8 +102,9 @@ def require_market_sync_admin():
 def get_home_market():
     """홈 화면의 종합 시장 현황 데이터를 조회합니다."""
     try:
+        auth_header = request.headers.get("Authorization")
         data = request.json or {}
-        overview = build_home_overview(data)
+        overview = build_home_overview(data, auth_header=auth_header)
         return jsonify({
             "success": True,
             "data": overview
@@ -175,6 +176,14 @@ def get_home_overview():
     홈 화면용 시장 요약 데이터를 구성합니다.
     KIS 인증 정보가 있으면 계좌 보유 종목을, 없으면 Coinone 공개 시세만 반환합니다.
     """
+    auth_header = request.headers.get("Authorization")
+    user_id = None
+    if auth_header:
+        try:
+            user_id, _ = get_user_id_from_header(auth_header)
+        except Exception:
+            pass
+
     data = request.json or {}
     appkey = data.get("appkey")
     appsecret = data.get("appsecret")
@@ -210,6 +219,7 @@ def get_home_overview():
             cano=cano,
             acnt_prdt_cd=acnt_prdt_cd,
             env=env,
+            user_id=user_id,
         )
 
         balance = client.get_balance()
@@ -373,7 +383,8 @@ def get_dashboard_balance():
                 client_id=access_key,
                 client_secret=secret_key,
                 account_seq=account_seq,
-                env=broker_env
+                env=broker_env,
+                user_id=user_id,
             )
             balance = client.get_balance()
         elif exchange == "KIS":
@@ -384,7 +395,8 @@ def get_dashboard_balance():
                 appsecret=secret_key,
                 cano=cano,
                 acnt_prdt_cd=acnt_prdt_cd,
-                env=broker_env
+                env=broker_env,
+                user_id=user_id,
             )
             balance = client.get_balance()
         elif exchange == "COINONE":

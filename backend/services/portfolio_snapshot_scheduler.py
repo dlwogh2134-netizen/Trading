@@ -88,6 +88,7 @@ class PortfolioSnapshotScheduler:
         broker_env = record.get("broker_env") or ("MOCK" if exchange == "KIS" else "REAL")
         access_key = self.crypto_helper.decrypt(record.get("encrypted_access_key"))
         secret_key = self.crypto_helper.decrypt(record.get("encrypted_secret_key"))
+        user_id = record.get("user_id")
 
         if exchange == "TOSS":
             client = TossClient(
@@ -95,6 +96,7 @@ class PortfolioSnapshotScheduler:
                 client_secret=secret_key,
                 account_seq=record.get("toss_account_seq"),
                 env=broker_env,
+                user_id=user_id,
             )
             return client.get_balance()
 
@@ -105,6 +107,7 @@ class PortfolioSnapshotScheduler:
                 cano=record.get("kis_account_no"),
                 acnt_prdt_cd=record.get("kis_account_code", "01"),
                 env=broker_env,
+                user_id=user_id,
             )
             return client.get_balance()
 

@@ -119,6 +119,7 @@ def _build_exchange_client(exchange: str, broker_env: str, record: dict, access_
             client_secret=secret_key,
             account_seq=record.get("toss_account_seq"),
             env=broker_env,
+            user_id=record.get("user_id"),
         )
     if exchange == "KIS":
         return KISClient(
@@ -127,6 +128,7 @@ def _build_exchange_client(exchange: str, broker_env: str, record: dict, access_
             cano=record.get("kis_account_no"),
             acnt_prdt_cd=record.get("kis_account_code", "01"),
             env=broker_env,
+            user_id=record.get("user_id"),
         )
     return None
 
@@ -151,6 +153,7 @@ def _load_kis_client_from_records(records_kis: list[dict]):
         cano=cano,
         acnt_prdt_cd=acnt_prdt_cd,
         env=kis_env,
+        user_id=record.get("user_id"),
     )
 
 
@@ -642,7 +645,7 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
             secret_key = crypto_helper.decrypt(records[0].get("encrypted_secret_key"))
             toss_account_seq = records[0].get("toss_account_seq")
             
-            client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
+            client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env, user_id=user_id)
             try:
                 candles = client.get_candles(symbol, interval=interval, count=count)
             except Exception as toss_error:
@@ -684,7 +687,7 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
             cano = records[0].get("kis_account_no")
             acnt_prdt_cd = records[0].get("kis_account_code", "01")
             
-            client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=broker_env)
+            client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=broker_env, user_id=user_id)
             
             # interval 판별 및 리샘플링 적용
             if interval in ("1d", "D"):
@@ -1022,7 +1025,7 @@ def _fetch_orderbook_uncached(cache_key, exchange, symbol, broker_env, auth_head
                 acnt_prdt_cd = records[0].get("kis_account_code", "01")
                 kis_env = records[0].get("broker_env", "MOCK")
                 
-                client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
+                client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env, user_id=user_id)
                 kis_data = client.get_orderbook(symbol)
                 output = kis_data.get("output1", {})
                 
@@ -1115,7 +1118,7 @@ def _fetch_orderbook_uncached(cache_key, exchange, symbol, broker_env, auth_head
                 asks = []
                 bids = []
                 try:
-                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
+                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env, user_id=user_id)
                     toss_data = client.get_orderbook(symbol)
                     
                     result = {}
@@ -1347,7 +1350,7 @@ def _fetch_trades_uncached(cache_key, exchange, symbol, broker_env, auth_header)
                 acnt_prdt_cd = records[0].get("kis_account_code", "01")
                 kis_env = records[0].get("broker_env", "MOCK")
                 
-                client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env)
+                client = KISClient(appkey=access_key, appsecret=secret_key, cano=cano, acnt_prdt_cd=acnt_prdt_cd, env=kis_env, user_id=user_id)
                 kis_data = client.get_trades(symbol)
                 output2 = kis_data.get("output", [])
                 
@@ -1432,7 +1435,7 @@ def _fetch_trades_uncached(cache_key, exchange, symbol, broker_env, auth_header)
                 
                 trades = []
                 try:
-                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env)
+                    client = TossClient(client_id=access_key, client_secret=secret_key, account_seq=toss_account_seq, env=broker_env, user_id=user_id)
                     toss_data = client.get_trades(symbol)
                     
                     raw_trades = []

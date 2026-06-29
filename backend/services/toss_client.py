@@ -22,12 +22,13 @@ class TossClient(ExchangeClient):
     """
     토스증권 Open API 연동 및 연결 검증을 담당하는 클라이언트 클래스입니다.
     """
-    def __init__(self, client_id: str, client_secret: str, account_seq: str = None, env: str = "MOCK"):
+    def __init__(self, client_id: str, client_secret: str, account_seq: str = None, env: str = "MOCK", user_id: str | None = None):
         self.client_id = client_id
         self.client_secret = client_secret
         self.account_seq = account_seq
         self.env = env.upper()
         self.base_url = "https://openapi.tossinvest.com"
+        self.user_id = user_id
 
     def _clear_token_cache(self):
         """
@@ -35,7 +36,7 @@ class TossClient(ExchangeClient):
         """
         from backend.services.token_cache_service import clear_db_token
         try:
-            clear_db_token("TOSS", self.env)
+            clear_db_token("TOSS", self.env, self.user_id)
         except Exception:
             pass
 
@@ -48,7 +49,7 @@ class TossClient(ExchangeClient):
         
         # DB에서 유효한 공용 토큰 획득 시도
         try:
-            token = get_db_token("TOSS", self.env)
+            token = get_db_token("TOSS", self.env, self.user_id)
             if token:
                 return token
         except Exception:
@@ -61,7 +62,7 @@ class TossClient(ExchangeClient):
 
         # DB 캐시 테이블에 신규 토큰 저장 (Upsert)
         try:
-            set_db_token("TOSS", self.env, new_token, expires_in)
+            set_db_token("TOSS", self.env, new_token, expires_in, self.user_id)
         except Exception:
             pass
 

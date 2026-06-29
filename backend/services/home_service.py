@@ -520,7 +520,15 @@ def enrich_stock_rows_with_toss(rows: list[dict]) -> list[dict]:
     return enriched_rows
 
 
-def build_home_overview(data: dict) -> dict:
+def build_home_overview(data: dict, auth_header: str | None = None) -> dict:
+    user_id = None
+    if auth_header:
+        try:
+            from backend.services.auth_service import get_user_id_from_header
+            user_id, _ = get_user_id_from_header(auth_header)
+        except Exception:
+            pass
+
     kis = resolve_kis_credentials(data)
     appkey = kis["appkey"]
     appsecret = kis["appsecret"]
@@ -574,6 +582,7 @@ def build_home_overview(data: dict) -> dict:
         cano=cano,
         acnt_prdt_cd=acnt_prdt_cd,
         env=env,
+        user_id=user_id,
     )
 
     balance = client.get_balance()
