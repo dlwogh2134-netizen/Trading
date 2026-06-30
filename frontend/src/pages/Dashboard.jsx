@@ -12,7 +12,6 @@ import AdminMlData from './AdminMlData.jsx'
 
 const DASHBOARD_API_BASE_URL = 'http://localhost:5050'
 const BALANCE_EXCHANGE_ORDER = ['TOSS', 'KIS', 'COINONE', 'BINANCE']
-const TRADE_PROPOSAL_HOLDING_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,order_amount,market_country,currency,status,broker_env,created_at'
 
 const toNumber = (value) => {
   const numericValue = Number(value)
@@ -198,7 +197,6 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
   
   const holdings = filteredItems.flatMap((item) => {
     const exchange = item.exchange
-    const sourceExchange = item.raw_exchange || exchange
     const rate = toNumber(item.exchange_rate) || representativeRate
     const itemCurrency = item.currency || 'KRW'
     
@@ -217,10 +215,6 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
       ...holding,
       exchange: holding.exchange || exchange,
       account_type: holding.account_type || exchange,
-      raw_exchange: holding.raw_exchange || sourceExchange,
-      asset_type: holding.asset_type || (['COINONE', 'BINANCE'].includes(sourceExchange) ? 'CRYPTO' : 'STOCK'),
-      account_key_id: item.api_key_id,
-      source: holding.source || 'LIVE_BALANCE',
       env: item.env || 'REAL',
     }))
   })
@@ -232,118 +226,6 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
     exchange_rate: representativeRate,
     holdings,
     sources: filteredItems.map((item) => item.exchange),
-  }
-}
-
-const getHoldingIdentity = (holding = {}) => {
-  const symbol = String(holding.symbol || holding.ticker || holding.id || '').trim().toUpperCase()
-  const assetType = String(holding.asset_type || '').trim().toUpperCase() || 'STOCK'
-  return symbol ? `${assetType}:${symbol}` : ''
-}
-
-const fetchTradeSymbolNameMap = async (tradeRows = []) => {
-  const symbols = Array.from(new Set(
-    tradeRows
-      .filter((row) => String(row.status || '').toUpperCase() === 'EXECUTED')
-      .map((row) => String(row.symbol || row.ticker || '').trim().toUpperCase())
-      .filter(Boolean),
-  ))
-
-  if (symbols.length === 0) return {}
-
-  const pairs = await Promise.all(
-    symbols.map(async (symbol) => {
-      try {
-        const response = await fetch(`${DASHBOARD_API_BASE_URL}/api/symbol/lookup?query=${encodeURIComponent(symbol)}`)
-        const payload = await response.json()
-        const displayName = payload?.success ? payload.data?.display_name : ''
-        return [symbol, displayName || symbol]
-      } catch {
-        return [symbol, symbol]
-      }
-    }),
-  )
-
-  return Object.fromEntries(pairs)
-}
-
-const buildEstimatedHoldingsFromTrades = (tradeRows = [], liveHoldings = [], showMockAssets = true) => {
-  const liveKeys = new Set(liveHoldings.map(getHoldingIdentity).filter(Boolean))
-  const grouped = new Map()
-
-  tradeRows.forEach((row) => {
-    const status = String(row.status || '').toUpperCase()
-    const env = String(row.broker_env || 'REAL').toUpperCase()
-    if (status !== 'EXECUTED') return
-    if (!showMockAssets && env === 'MOCK') return
-
-    const symbol = String(row.symbol || row.ticker || '').trim().toUpperCase()
-    if (!symbol) return
-
-    const assetType = String(row.asset_type || (['COINONE', 'BINANCE'].includes(row.exchange) ? 'CRYPTO' : 'STOCK')).toUpperCase()
-    const key = `${assetType}:${symbol}`
-    const side = String(row.side || '').toUpperCase()
-    const price = toNumber(row.price)
-    const volume = toNumber(row.volume) || (price > 0 ? toNumber(row.order_amount) / price : 0)
-    if (volume <= 0) return
-
-    const current = grouped.get(key) || {
-      symbol,
-      name: row.display_name || symbol,
-      asset_type: assetType,
-      exchange: row.exchange || '-',
-      raw_exchange: row.exchange || '-',
-      account_type: row.exchange || '-',
-      env,
-      currency: row.currency || (row.exchange === 'BINANCE' ? 'USD' : 'KRW'),
-      qty: 0,
-      buyQty: 0,
-      buyAmount: 0,
-      lastPrice: 0,
-    }
-
-    if (side === 'SELL') {
-      current.qty -= volume
-    } else {
-      current.qty += volume
-      current.buyQty += volume
-      current.buyAmount += price * volume
-    }
-    if (price > 0) current.lastPrice = price
-    grouped.set(key, current)
-  })
-
-  return Array.from(grouped.values())
-    .filter((item) => item.qty > 0 && !liveKeys.has(`${item.asset_type}:${item.symbol}`))
-    .map((item) => {
-      const avgPrice = item.buyQty > 0 ? item.buyAmount / item.buyQty : item.lastPrice
-      const currentPrice = item.lastPrice || avgPrice
-      return {
-        symbol: item.symbol,
-        name: item.name,
-        qty: item.qty,
-        avg_price: avgPrice,
-        current_price: currentPrice,
-        profit: 0,
-        profit_rate: 0,
-        currency: item.currency,
-        exchange: item.exchange,
-        raw_exchange: item.raw_exchange,
-        account_type: item.account_type,
-        asset_type: item.asset_type,
-        env: item.env,
-        source: 'DB_ESTIMATED',
-        source_label: '실잔고 미확인',
-      }
-    })
-}
-
-const mergeBalanceWithTradeEstimates = (mergedBalance, tradeRows = [], showMockAssets = true) => {
-  const holdings = Array.isArray(mergedBalance?.holdings) ? mergedBalance.holdings : []
-  const estimatedHoldings = buildEstimatedHoldingsFromTrades(tradeRows, holdings, showMockAssets)
-  return {
-    ...mergedBalance,
-    holdings: [...holdings, ...estimatedHoldings],
   }
 }
 
@@ -369,7 +251,6 @@ const buildBalanceRequests = (keyStatus) =>
       return {
         exchange,
         env,
-        apiKeyId: account?.id,
         label: getBalanceRequestLabel(exchange, env),
       }
     })
@@ -395,7 +276,6 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [showMockAssets, setShowMockAssets] = useState(true)
   const [rawBalances, setRawBalances] = useState([])
-  const [executedTradeRows, setExecutedTradeRows] = useState([])
   const [dashboardWatchlist, setDashboardWatchlist] = useState([])
   const [watchlistLoading, setWatchlistLoading] = useState(false)
   const [watchlistError, setWatchlistError] = useState('')
@@ -502,7 +382,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
       }
 
       const results = await Promise.all(
-        balanceRequests.map(async ({ exchange, env, label, apiKeyId }) => {
+        balanceRequests.map(async ({ exchange, env, label }) => {
           try {
             const response = await fetch(`${DASHBOARD_API_BASE_URL}/api/dashboard/balance`, {
               method: 'POST',
@@ -510,7 +390,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                 'Content-Type': 'application/json',
                 Authorization: authHeader,
               },
-              body: JSON.stringify({ exchange, env, api_key_id: apiKeyId }),
+              body: JSON.stringify({ exchange, env }),
             })
             const payload = await response.json()
 
@@ -522,7 +402,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
               }
             }
 
-            return { ...payload.data, exchange: label, raw_exchange: exchange, env, api_key_id: apiKeyId }
+            return { ...payload.data, exchange: label, raw_exchange: exchange, env }
           } catch (error) {
             return {
               exchange: label,
@@ -535,34 +415,8 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
       const failedResults = results.filter((item) => item?.error)
       const successResults = results.filter((item) => !item?.error)
-      let tradeRows = []
-      const { data: proposalRows, error: proposalError } = await supabase
-        .from('trade_proposals')
-        .select(TRADE_PROPOSAL_HOLDING_FIELDS)
-        .eq('status', 'EXECUTED')
-        .order('created_at', { ascending: true })
-
-      if (proposalError) {
-        setBalanceError(`거래내역 보정 조회 실패: ${proposalError.message}`)
-      } else {
-        const baseRows = proposalRows || []
-        const symbolNameMap = await fetchTradeSymbolNameMap(baseRows)
-        tradeRows = baseRows.map((row) => {
-          const symbol = String(row.symbol || row.ticker || '').trim().toUpperCase()
-          return {
-            ...row,
-            display_name: symbolNameMap[symbol] || symbol,
-          }
-        })
-      }
-
-      setExecutedTradeRows(tradeRows)
       setRawBalances(successResults)
-      const mergedBalance = mergeBalanceWithTradeEstimates(
-        mergeAccountBalances(successResults, showMockAssets),
-        tradeRows,
-        showMockAssets,
-      )
+      const mergedBalance = mergeAccountBalances(successResults, showMockAssets)
       setBalance(mergedBalance)
 
       if (mergedBalance.sources.length === 0) {
@@ -663,13 +517,9 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
   useEffect(() => {
     if (rawBalances.length > 0) {
-      setBalance(mergeBalanceWithTradeEstimates(
-        mergeAccountBalances(rawBalances, showMockAssets),
-        executedTradeRows,
-        showMockAssets,
-      ))
+      setBalance(mergeAccountBalances(rawBalances, showMockAssets))
     }
-  }, [rawBalances, showMockAssets, executedTradeRows])
+  }, [rawBalances, showMockAssets])
 
   const refreshBalance = async () => {
     if (!encrypted) {
@@ -1146,20 +996,11 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           const exchangeRate = balance.exchange_rate || 1380
                           const currentDisplayCurrency = isForeign ? displayCurrency : 'KRW'
                           const exchangeName = stock.exchange || stock.account_type || '-'
-                          const isEstimatedHolding = stock.source === 'DB_ESTIMATED'
-                          const profitRate = Number(stock.profit_rate)
 
                           return (
                             <tr key={`${exchangeName}-${stock.env || 'REAL'}-${stock.symbol}-${index}`} className="hover:bg-slate-800/40 transition-colors">
                               <td className="py-3 px-3 font-sans">
-                                <div className="flex flex-wrap items-center gap-2 font-semibold text-white">
-                                  <span>{stock.name}</span>
-                                  {isEstimatedHolding ? (
-                                    <span className="rounded border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
-                                      실잔고 미확인
-                                    </span>
-                                  ) : null}
-                                </div>
+                                <div className="font-semibold text-white">{stock.name}</div>
                                 <div className="text-[10px] text-slate-500 font-mono">{stock.symbol}</div>
                               </td>
                               <td className="py-3 px-3 text-left font-sans font-bold text-slate-400">
@@ -1178,7 +1019,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                                 {stock.profit > 0 ? '+' : ''}{formatCurrency(stock.profit, stockCurrency, currentDisplayCurrency, exchangeRate)}
                               </td>
                               <td className={`py-3 px-3 text-right font-semibold`}>
-                                <Rate value={(profitRate >= 0 ? '+' : '') + (Number.isFinite(profitRate) ? profitRate.toFixed(2) : '0.00') + '%'} />
+                                <Rate value={(stock.profit_rate >= 0 ? '+' : '') + stock.profit_rate.toFixed(2) + '%'} />
                               </td>
                             </tr>
                           )

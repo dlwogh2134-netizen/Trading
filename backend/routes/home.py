@@ -508,26 +508,20 @@ def get_dashboard_balance():
     data = request.json or {}
     exchange = data.get("exchange", "KIS")
     broker_env = data.get("env", "MOCK")
-    api_key_id = data.get("api_key_id")
 
     try:
         user_id, token = get_user_id_from_header(auth_header)
         
-        params = {"user_id": f"eq.{user_id}"}
-        if api_key_id:
-            params["id"] = f"eq.{api_key_id}"
-        else:
-            params.update({
-                "exchange": f"eq.{exchange}",
-                "broker_env": f"eq.{broker_env}"
-            })
+        params = {
+            "user_id": f"eq.{user_id}",
+            "exchange": f"eq.{exchange}",
+            "broker_env": f"eq.{broker_env}"
+        }
         records = query_supabase(auth_header, "user_api_keys", "GET", params=params)
         if not records or len(records) == 0:
             return jsonify({"success": False, "message": f"?깅줉??{exchange} ({broker_env}) API ?ㅺ? ?놁뒿?덈떎."}), 404
             
         record = records[0]
-        exchange = str(record.get("exchange") or exchange).upper()
-        broker_env = str(record.get("broker_env") or broker_env).upper()
         crypto_helper = current_app.crypto
         access_key = crypto_helper.decrypt(record.get("encrypted_access_key"))
         secret_key = crypto_helper.decrypt(record.get("encrypted_secret_key"))

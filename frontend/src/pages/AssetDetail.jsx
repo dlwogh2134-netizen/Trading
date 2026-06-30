@@ -57,6 +57,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [precheckLoading, setPrecheckLoading] = useState(false)
   const [precheckMessage, setPrecheckMessage] = useState('')
   const [brokerAvailability, setBrokerAvailability] = useState(null)
+  const [tradeHoldingContext, setTradeHoldingContext] = useState(null)
   const [mlSignal, setMlSignal] = useState(null)
   const [mlSignalLoading, setMlSignalLoading] = useState(false)
   const [mlSignalMessage, setMlSignalMessage] = useState('')
@@ -120,6 +121,58 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     const exData = statusMap[targetExchange]
     if (!exData || !exData.accounts) return false
     return exData.accounts.some(acc => acc.broker_env === targetEnv && acc.registered)
+  }
+
+  const loadTradeHoldingContext = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user?.id || !symbol) {
+      setTradeHoldingContext(null)
+      return
+    }
+
+    const normalizedSymbol = String(symbol).trim().toUpperCase()
+    const { data, error } = await supabase
+      .from('trade_proposals')
+      .select('id,exchange,broker_env,symbol,ticker,side,status,volume,price,created_at')
+      .or(`symbol.eq.${normalizedSymbol},ticker.eq.${normalizedSymbol}`)
+      .order('created_at', { ascending: false })
+
+    if (error || !data?.length) {
+      setTradeHoldingContext(null)
+      return
+    }
+
+    const rows = data || []
+    const latestBrokerRow = rows.find((row) => row.exchange && row.broker_env) || rows[0]
+    const executedRows = rows.filter((row) => String(row.status || '').toUpperCase() === 'EXECUTED')
+    const quantity = executedRows.reduce((sum, row) => {
+      const sideValue = String(row.side || '').toUpperCase()
+      const volume = Number(row.volume || 0)
+      if (!Number.isFinite(volume) || volume <= 0) return sum
+      return sideValue === 'SELL' ? sum - volume : sum + volume
+    }, 0)
+    const buyAmount = executedRows.reduce((sum, row) => {
+      const sideValue = String(row.side || '').toUpperCase()
+      const volume = Number(row.volume || 0)
+      const rowPrice = Number(row.price || 0)
+      if (sideValue !== 'BUY' || !Number.isFinite(volume) || !Number.isFinite(rowPrice)) return sum
+      return sum + (volume * rowPrice)
+    }, 0)
+    const buyQuantity = executedRows.reduce((sum, row) => {
+      const sideValue = String(row.side || '').toUpperCase()
+      const volume = Number(row.volume || 0)
+      if (sideValue !== 'BUY' || !Number.isFinite(volume)) return sum
+      return sum + volume
+    }, 0)
+
+    setTradeHoldingContext({
+      exchange: latestBrokerRow?.exchange || '',
+      brokerEnv: latestBrokerRow?.broker_env || '',
+      estimatedQty: Math.max(quantity, 0),
+      avgPrice: buyQuantity > 0 ? buyAmount / buyQuantity : 0,
+      latestStatus: latestBrokerRow?.status || '',
+      latestSide: latestBrokerRow?.side || '',
+    })
   }
 
   const loadBrokerAvailability = async () => {
@@ -700,6 +753,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   useEffect(() => {
     loadBrokerAvailability()
+    loadTradeHoldingContext()
   }, [symbol])
 
   useEffect(() => {
@@ -711,6 +765,17 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   useEffect(() => {
     if (resolvedAssetType === 'STOCK') {
+      if (
+        tradeHoldingContext?.exchange &&
+        tradeHoldingContext?.brokerEnv &&
+        tradeHoldingContext?.estimatedQty > 0 &&
+        (exchange !== tradeHoldingContext.exchange || brokerEnv !== tradeHoldingContext.brokerEnv)
+      ) {
+        setExchange(tradeHoldingContext.exchange)
+        setBrokerEnv(tradeHoldingContext.brokerEnv)
+        return
+      }
+
       const preferredBroker = pickPreferredStockBroker(brokerAvailability)
       const currentBrokerValid = isRegisteredStockBroker(brokerAvailability, exchange, brokerEnv)
       if (preferredBroker && !currentBrokerValid) {
@@ -741,7 +806,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     if (!['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M'].includes(chartInterval)) {
       setChartInterval('1h')
     }
-  }, [resolvedAssetType, exchange, brokerEnv, chartInterval, brokerAvailability])
+  }, [resolvedAssetType, exchange, brokerEnv, chartInterval, brokerAvailability, tradeHoldingContext])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -998,6 +1063,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       normalizedHoldingSymbol.includes(normalizedCurrentSymbol)
     )
   });
+  const dbEstimatedHolding = !myHolding && tradeHoldingContext?.estimatedQty > 0
+    ? tradeHoldingContext
+    : null
   const overallFeedStatus = getOverallFeedStatus()
   const isOrderBlocked = brokerEnv === 'REAL' && (
     orderPrecheck?.exceeds_real_order_limit ||
@@ -1592,6 +1660,32 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                       {myHolding.profit >= 0 ? '+' : ''}{myHolding.profit.toLocaleString()} ({myHolding.profit_rate.toFixed(2)}%)
                     </span>
                   </div>
+                </div>
+              ) : dbEstimatedHolding ? (
+                <div className="flex flex-col gap-2.5 rounded border border-amber-400/40 bg-amber-400/10 px-3 py-3 text-xs">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-bold text-amber-300">거래내역 기준 추정 보유</span>
+                    <span className="rounded border border-amber-400/40 px-2 py-0.5 text-[10px] font-bold text-amber-200">
+                      실잔고 미확인
+                    </span>
+                  </div>
+                  <div className="flex justify-between border-b border-amber-400/20 py-1">
+                    <span className="text-slate-300">추정 수량</span>
+                    <span className="font-bold text-white">{dbEstimatedHolding.estimatedQty.toLocaleString()} 주</span>
+                  </div>
+                  <div className="flex justify-between border-b border-amber-400/20 py-1">
+                    <span className="text-slate-300">기록 계좌</span>
+                    <span className="font-bold text-white">{dbEstimatedHolding.exchange} ({dbEstimatedHolding.brokerEnv})</span>
+                  </div>
+                  {dbEstimatedHolding.avgPrice > 0 ? (
+                    <div className="flex justify-between border-b border-amber-400/20 py-1">
+                      <span className="text-slate-300">추정 평균가</span>
+                      <span className="font-bold text-white">₩{dbEstimatedHolding.avgPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                    </div>
+                  ) : null}
+                  <p className="leading-relaxed text-amber-200">
+                    거래내역에는 체결 매수 기록이 있지만, 현재 선택 계좌의 실제 잔고 API에서는 확인되지 않았습니다. 매도 주문은 실제 KIS 잔고에 수량이 있어야 성공합니다.
+                  </p>
                 </div>
               ) : balanceMessage ? (
                 <div className="rounded border border-amber-900/50 bg-amber-950/20 px-3 py-3 text-[11px] leading-relaxed text-amber-300">
