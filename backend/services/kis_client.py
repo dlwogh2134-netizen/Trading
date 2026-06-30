@@ -792,6 +792,105 @@ class KISClient(ExchangeClient):
             "raw": data
         }
 
+    def get_modifiable_orders(self) -> list[dict]:
+        """
+        KIS 국내주식 정정/취소 가능 주문 목록을 조회합니다.
+        """
+        _enforce_kis_mock_rate_limit(self.env)
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+        token = self._get_cached_token()
+        headers = {
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+            "appkey": self.appkey,
+            "appsecret": self.appsecret,
+            "tr_id": "TTTC8036R" if self.env == "REAL" else "VTTC8036R",
+        }
+        params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "INQR_DVSN_1": "0",
+            "INQR_DVSN_2": "0",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        orders = []
+
+        for _ in range(10):
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            if res.status_code != 200:
+                raise Exception(f"KIS modifiable orders failed: {res.text}")
+
+            data = res.json()
+            if data.get("rt_cd") != "0":
+                raise Exception(f"KIS modifiable orders error: {data.get('msg1')}")
+
+            page_orders = data.get("output", []) or data.get("output1", []) or []
+            if isinstance(page_orders, dict):
+                page_orders = [page_orders]
+
+            for row in page_orders:
+                order_id = str(row.get("odno") or row.get("ODNO") or row.get("orgn_odno") or "").strip()
+                order_org_no = str(
+                    row.get("ord_gno_brno")
+                    or row.get("KRX_FWDG_ORD_ORGNO")
+                    or row.get("krx_fwdg_ord_orgno")
+                    or ""
+                ).strip()
+                order_qty = self._to_float(row.get("ord_qty") or row.get("ORD_QTY"))
+                executed_qty = self._to_float(row.get("tot_ccld_qty") or row.get("TOT_CCLD_QTY"))
+                remaining_qty = self._to_float(
+                    row.get("psbl_qty")
+                    or row.get("rvse_cncl_psbl_qty")
+                    or row.get("nccs_qty")
+                    or row.get("rmn_qty")
+                )
+                if remaining_qty <= 0 and order_qty > 0:
+                    remaining_qty = max(order_qty - executed_qty, 0)
+
+                orders.append({
+                    "order_id": order_id,
+                    "order_org_no": order_org_no,
+                    "symbol": str(row.get("pdno") or row.get("PDNO") or "").strip(),
+                    "name": row.get("prdt_name") or row.get("PRDT_NAME") or "",
+                    "order_qty": order_qty,
+                    "executed_qty": executed_qty,
+                    "remaining_qty": remaining_qty,
+                    "raw": row,
+                })
+
+            next_fk100 = str(data.get("ctx_area_fk100") or data.get("CTX_AREA_FK100") or "").strip()
+            next_nk100 = str(data.get("ctx_area_nk100") or data.get("CTX_AREA_NK100") or "").strip()
+            tr_cont = str(res.headers.get("tr_cont") or res.headers.get("Tr_Cont") or "").upper()
+            if not next_fk100 and not next_nk100:
+                break
+            if tr_cont and tr_cont not in {"M", "F"}:
+                break
+            params["CTX_AREA_FK100"] = next_fk100
+            params["CTX_AREA_NK100"] = next_nk100
+
+        return orders
+
+    def get_modifiable_order(self, order_id: str, order_org_no: str = "") -> dict:
+        """
+        특정 원주문의 정정/취소 가능 여부와 미체결 잔량을 반환합니다.
+        """
+        target_order_id = str(order_id or "").strip()
+        target_org_no = str(order_org_no or "").strip()
+        for order in self.get_modifiable_orders():
+            same_order = order.get("order_id") == target_order_id
+            same_org = not target_org_no or not order.get("order_org_no") or order.get("order_org_no") == target_org_no
+            if same_order and same_org:
+                return {**order, "is_modifiable": order.get("remaining_qty", 0) > 0}
+
+        return {
+            "order_id": target_order_id,
+            "order_org_no": target_org_no,
+            "remaining_qty": 0.0,
+            "is_modifiable": False,
+            "raw": {},
+        }
+
     def _modify_or_cancel_order(
         self,
         order_id: str,
