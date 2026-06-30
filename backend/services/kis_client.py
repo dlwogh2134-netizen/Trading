@@ -1250,6 +1250,159 @@ class KISClient(ExchangeClient):
             ord_type=ord_type,
         )
 
+    def get_daily_order_executions(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        symbol: str = "",
+        order_id: str = "",
+    ) -> list[dict]:
+        """
+        KIS 국내주식 계좌 일별 주문체결 내역을 조회합니다.
+        """
+        _enforce_kis_mock_rate_limit(self.env)
+        today = datetime.now(KST).strftime("%Y%m%d")
+        start = start_date or today
+        end = end_date or today
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        token = self._get_cached_token()
+        headers = {
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+            "appkey": self.appkey,
+            "appsecret": self.appsecret,
+            "tr_id": "TTTC0081R" if self.env == "REAL" else "VTTC0081R",
+        }
+        params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "INQR_STRT_DT": start,
+            "INQR_END_DT": end,
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": symbol or "",
+            "CCLD_DVSN": "00",
+            "ORD_GNO_BRNO": "",
+            "ODNO": order_id or "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        executions = []
+
+        for _ in range(10):
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            if res.status_code != 200:
+                raise Exception(f"KIS daily executions failed: {res.text}")
+
+            data = res.json()
+            if data.get("rt_cd") != "0":
+                raise Exception(f"KIS daily executions error: {data.get('msg1')}")
+
+            page_rows = data.get("output1", []) or data.get("output", []) or []
+            if isinstance(page_rows, dict):
+                page_rows = [page_rows]
+
+            for row in page_rows:
+                row_order_id = str(row.get("odno") or row.get("ODNO") or "").strip()
+                row_symbol = str(row.get("pdno") or row.get("PDNO") or "").strip()
+                order_qty = self._to_float(row.get("ord_qty") or row.get("ORD_QTY"))
+                executed_qty = self._to_float(
+                    row.get("tot_ccld_qty")
+                    or row.get("TOT_CCLD_QTY")
+                    or row.get("ccld_qty")
+                    or row.get("CCLD_QTY")
+                )
+                remaining_qty = self._to_float(row.get("nccs_qty") or row.get("NCCS_QTY"))
+                avg_price = self._to_float(
+                    row.get("avg_prvs")
+                    or row.get("AVG_PRVS")
+                    or row.get("ord_unpr")
+                    or row.get("ORD_UNPR")
+                )
+                cancel_yn = str(row.get("cncl_yn") or row.get("CNCL_YN") or "").upper()
+
+                executions.append({
+                    "order_id": row_order_id,
+                    "symbol": row_symbol,
+                    "name": row.get("prdt_name") or row.get("PRDT_NAME") or "",
+                    "side_code": row.get("sll_buy_dvsn_cd") or row.get("SLL_BUY_DVSN_CD") or "",
+                    "order_qty": order_qty,
+                    "executed_qty": executed_qty,
+                    "remaining_qty": remaining_qty,
+                    "avg_price": avg_price,
+                    "canceled": cancel_yn == "Y",
+                    "raw": row,
+                })
+
+            next_fk100 = str(data.get("ctx_area_fk100") or data.get("CTX_AREA_FK100") or "").strip()
+            next_nk100 = str(data.get("ctx_area_nk100") or data.get("CTX_AREA_NK100") or "").strip()
+            tr_cont = str(res.headers.get("tr_cont") or res.headers.get("Tr_Cont") or "").upper()
+            if not next_fk100 and not next_nk100:
+                break
+            if tr_cont and tr_cont not in {"M", "F"}:
+                break
+            params["CTX_AREA_FK100"] = next_fk100
+            params["CTX_AREA_NK100"] = next_nk100
+
+        return executions
+
+    def get_order_execution_status(self, order_id: str, symbol: str = "", lookback_days: int = 7) -> dict:
+        """
+        주문번호 기준으로 계좌 주문체결 상태를 조회합니다.
+        """
+        end_dt = datetime.now(KST)
+        start_dt = end_dt - timedelta(days=lookback_days)
+        executions = self.get_daily_order_executions(
+            start_date=start_dt.strftime("%Y%m%d"),
+            end_date=end_dt.strftime("%Y%m%d"),
+            symbol=symbol,
+            order_id=order_id,
+        )
+        target_order_id = str(order_id or "").strip()
+        target_symbol = str(symbol or "").strip().upper()
+        matched = [
+            item for item in executions
+            if (not target_order_id or item.get("order_id") == target_order_id)
+            and (not target_symbol or str(item.get("symbol") or "").upper() == target_symbol)
+        ]
+        if not matched:
+            return {
+                "order_id": target_order_id,
+                "symbol": target_symbol,
+                "status": "UNKNOWN",
+                "order_qty": 0.0,
+                "executed_qty": 0.0,
+                "remaining_qty": 0.0,
+                "canceled": False,
+                "raw": [],
+            }
+
+        order_qty = max((item.get("order_qty") or 0) for item in matched)
+        executed_qty = sum(item.get("executed_qty") or 0 for item in matched)
+        remaining_qty = max(order_qty - executed_qty, 0)
+        canceled = any(item.get("canceled") for item in matched)
+        if canceled:
+            status = "CANCELED"
+        elif order_qty > 0 and executed_qty >= order_qty:
+            status = "EXECUTED"
+        elif executed_qty > 0:
+            status = "PARTIALLY_FILLED"
+        else:
+            status = "ORDERED"
+
+        return {
+            "order_id": target_order_id,
+            "symbol": target_symbol,
+            "status": status,
+            "order_qty": order_qty,
+            "executed_qty": executed_qty,
+            "remaining_qty": remaining_qty,
+            "canceled": canceled,
+            "raw": matched,
+        }
+
     def get_order_status(self, order_id: str) -> dict:
         return {
             "order_id": order_id,

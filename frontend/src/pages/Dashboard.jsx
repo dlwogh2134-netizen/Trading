@@ -10,6 +10,7 @@ import AdminMlData from './AdminMlData.jsx'
 
 const DASHBOARD_API_BASE_URL = 'http://localhost:5050'
 const BALANCE_EXCHANGE_ORDER = ['TOSS', 'KIS', 'COINONE', 'BINANCE']
+const TRADE_PROPOSAL_HOLDING_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,order_amount,market_country,currency,status,broker_env,created_at'
 
 const toNumber = (value) => {
   const numericValue = Number(value)
@@ -254,12 +255,143 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
   }
 }
 
+const getHoldingIdentity = (holding = {}) => {
+  const symbol = String(holding.symbol || holding.ticker || holding.id || '').trim().toUpperCase()
+  const exchangeText = String(holding.raw_exchange || holding.exchange || holding.account_type || '').toUpperCase()
+  const rawExchange = exchangeText.includes('KIS') ? 'KIS'
+    : exchangeText.includes('TOSS') ? 'TOSS'
+      : exchangeText.includes('COINONE') ? 'COINONE'
+        : exchangeText.includes('BINANCE') ? 'BINANCE'
+          : exchangeText
+  const env = String(holding.env || (exchangeText.includes('모의') ? 'MOCK' : exchangeText.includes('실전') ? 'REAL' : 'REAL')).toUpperCase()
+  const assetType = String(holding.asset_type || (['COINONE', 'BINANCE'].includes(rawExchange) ? 'CRYPTO' : 'STOCK')).toUpperCase()
+  return symbol ? `${assetType}:${rawExchange}:${env}:${symbol}` : ''
+}
+
+const fetchTradeSymbolNameMap = async (tradeRows = []) => {
+  const symbols = Array.from(new Set(
+    tradeRows
+      .map((row) => String(row.symbol || row.ticker || '').trim().toUpperCase())
+      .filter(Boolean),
+  ))
+
+  if (symbols.length === 0) return {}
+
+  const pairs = await Promise.all(
+    symbols.map(async (symbol) => {
+      try {
+        const response = await fetch(`${DASHBOARD_API_BASE_URL}/api/symbol/lookup?query=${encodeURIComponent(symbol)}`)
+        const payload = await response.json()
+        const displayName = payload?.success ? payload.data?.display_name : ''
+        return [symbol, displayName || symbol]
+      } catch {
+        return [symbol, symbol]
+      }
+    }),
+  )
+
+  return Object.fromEntries(pairs)
+}
+
+const buildEstimatedHoldingsFromTrades = (tradeRows = [], liveHoldings = [], showMockAssets = true) => {
+  const liveKeys = new Set(liveHoldings.map(getHoldingIdentity).filter(Boolean))
+  if (tradeRows.some((row) => row.source === 'DB_ESTIMATED')) {
+    return tradeRows.filter((item) => item.qty > 0 && (showMockAssets || item.env !== 'MOCK') && !liveKeys.has(getHoldingIdentity(item)))
+  }
+  const grouped = new Map()
+
+  tradeRows.forEach((row) => {
+    const status = String(row.status || '').toUpperCase()
+    const env = String(row.broker_env || 'REAL').toUpperCase()
+    if (status !== 'EXECUTED') return
+    if (!showMockAssets && env === 'MOCK') return
+
+    const symbol = String(row.symbol || row.ticker || '').trim().toUpperCase()
+    if (!symbol) return
+
+    const exchange = String(row.exchange || '').toUpperCase()
+    const assetType = String(row.asset_type || (['COINONE', 'BINANCE'].includes(exchange) ? 'CRYPTO' : 'STOCK')).toUpperCase()
+    const key = `${assetType}:${exchange}:${env}:${symbol}`
+    const side = String(row.side || '').toUpperCase()
+    const price = toNumber(row.price)
+    const volume = toNumber(row.volume) || (price > 0 ? toNumber(row.order_amount) / price : 0)
+    if (volume <= 0) return
+
+    const current = grouped.get(key) || {
+      symbol,
+      name: row.display_name || symbol,
+      asset_type: assetType,
+      exchange: exchange === 'KIS' ? `KIS ${env === 'MOCK' ? '모의' : '실전'}` : (exchange || '-'),
+      raw_exchange: exchange || '-',
+      account_type: exchange ? `${exchange} ${env === 'MOCK' ? '모의' : '실전'}` : '-',
+      env,
+      currency: row.currency || (exchange === 'BINANCE' ? 'USD' : 'KRW'),
+      qty: 0,
+      buyQty: 0,
+      buyAmount: 0,
+      lastPrice: 0,
+    }
+
+    if (side === 'SELL') {
+      current.qty -= volume
+    } else {
+      current.qty += volume
+      current.buyQty += volume
+      current.buyAmount += price * volume
+    }
+    if (price > 0) current.lastPrice = price
+    grouped.set(key, current)
+  })
+
+  return Array.from(grouped.values())
+    .filter((item) => item.qty > 0 && !liveKeys.has(getHoldingIdentity(item)))
+    .map((item) => {
+      const avgPrice = item.buyQty > 0 ? item.buyAmount / item.buyQty : item.lastPrice
+      const currentPrice = item.lastPrice || avgPrice
+      return {
+        symbol: item.symbol,
+        name: item.name,
+        qty: item.qty,
+        avg_price: avgPrice,
+        current_price: currentPrice,
+        profit: 0,
+        profit_rate: 0,
+        currency: item.currency,
+        exchange: item.exchange,
+        raw_exchange: item.raw_exchange,
+        account_type: item.account_type,
+        asset_type: item.asset_type,
+        env: item.env,
+        source: 'DB_ESTIMATED',
+      }
+    })
+}
+
+const mergeBalanceWithTradeEstimates = (mergedBalance, tradeRows = [], showMockAssets = true) => {
+  const holdings = Array.isArray(mergedBalance?.holdings) ? mergedBalance.holdings : []
+  const estimatedHoldings = buildEstimatedHoldingsFromTrades(tradeRows, holdings, showMockAssets)
+  return {
+    ...mergedBalance,
+    holdings: [...holdings, ...estimatedHoldings],
+  }
+}
+
 const getBalanceRequestLabel = (exchange, env) => {
   if (exchange === 'KIS') {
     return `KIS ${env === 'REAL' ? '실전' : '모의'}`
   }
 
   return exchange
+}
+
+const getBalanceAccountLabel = (exchange, env, account = {}) => {
+  const baseLabel = getBalanceRequestLabel(exchange, env)
+  const accountNo = exchange === 'KIS'
+    ? account.kis_account_no
+    : exchange === 'TOSS'
+      ? account.toss_account_no
+      : ''
+  return accountNo ? `${baseLabel} ${accountNo}` : baseLabel
 }
 
 const buildBalanceRequests = (keyStatus) =>
@@ -276,7 +408,7 @@ const buildBalanceRequests = (keyStatus) =>
       return {
         exchange,
         env,
-        label: getBalanceRequestLabel(exchange, env),
+        label: getBalanceAccountLabel(exchange, env, account),
       }
     })
   })
@@ -298,6 +430,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [showMockAssets, setShowMockAssets] = useState(true)
   const [rawBalances, setRawBalances] = useState([])
+  const [executedTradeRows, setExecutedTradeRows] = useState([])
   const [dashboardWatchlist, setDashboardWatchlist] = useState([])
   const [watchlistLoading, setWatchlistLoading] = useState(false)
   const [watchlistError, setWatchlistError] = useState('')
@@ -435,8 +568,65 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
       const failedResults = results.filter((item) => item?.error)
       const successResults = results.filter((item) => !item?.error)
+      try {
+        await fetch(`${DASHBOARD_API_BASE_URL}/api/trade/orders/sync-status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: authHeader,
+          },
+        })
+      } catch {
+        // 거래내역 상태 동기화 실패는 잔고 조회 자체를 막지 않습니다.
+      }
+
+      let tradeRows = []
+      const { data: proposalRows, error: proposalError } = await supabase
+        .from('trade_proposals')
+        .select(TRADE_PROPOSAL_HOLDING_FIELDS)
+        .eq('status', 'EXECUTED')
+        .order('created_at', { ascending: true })
+
+      if (proposalError) {
+        setBalanceError(`거래내역 보정 조회 실패: ${proposalError.message}`)
+      } else {
+        const baseRows = proposalRows || []
+        const symbolNameMap = await fetchTradeSymbolNameMap(baseRows)
+        tradeRows = baseRows.map((row) => {
+          const symbol = String(row.symbol || row.ticker || '').trim().toUpperCase()
+          return {
+            ...row,
+            display_name: symbolNameMap[symbol] || symbol,
+          }
+        })
+      }
+
+      try {
+        const estimatedResponse = await fetch(`${DASHBOARD_API_BASE_URL}/api/trade/estimated-holdings`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: authHeader,
+          },
+          body: JSON.stringify({ show_mock_assets: showMockAssets }),
+        })
+        const estimatedPayload = await estimatedResponse.json()
+        if (estimatedResponse.ok && estimatedPayload.success) {
+          tradeRows = estimatedPayload.data?.holdings || []
+        } else {
+          setBalanceError(estimatedPayload.message || '거래내역 기반 보유종목 보정 조회에 실패했습니다.')
+        }
+      } catch (error) {
+        setBalanceError(`거래내역 기반 보유종목 보정 조회 실패: ${error.message}`)
+      }
+
+      setExecutedTradeRows(tradeRows)
       setRawBalances(successResults)
-      const mergedBalance = mergeAccountBalances(successResults, showMockAssets)
+      const mergedBalance = mergeBalanceWithTradeEstimates(
+        mergeAccountBalances(successResults, showMockAssets),
+        tradeRows,
+        showMockAssets,
+      )
       setBalance(mergedBalance)
 
       if (mergedBalance.sources.length === 0) {
@@ -486,9 +676,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
   useEffect(() => {
     if (rawBalances.length > 0) {
-      setBalance(mergeAccountBalances(rawBalances, showMockAssets))
+      setBalance(mergeBalanceWithTradeEstimates(
+        mergeAccountBalances(rawBalances, showMockAssets),
+        executedTradeRows,
+        showMockAssets,
+      ))
     }
-  }, [rawBalances, showMockAssets])
+  }, [rawBalances, showMockAssets, executedTradeRows])
 
   const refreshBalance = async () => {
     if (!encrypted) {
@@ -902,6 +1096,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           const exchangeRate = balance.exchange_rate || 1380
                           const currentDisplayCurrency = isForeign ? displayCurrency : 'KRW'
                           const exchangeName = stock.exchange || stock.account_type || '-'
+                          const profitRate = Number(stock.profit_rate)
 
                           return (
                             <tr key={`${exchangeName}-${stock.env || 'REAL'}-${stock.symbol}-${index}`} className="hover:bg-slate-800/40 transition-colors">
@@ -925,7 +1120,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                                 {stock.profit > 0 ? '+' : ''}{formatCurrency(stock.profit, stockCurrency, currentDisplayCurrency, exchangeRate)}
                               </td>
                               <td className={`py-3 px-3 text-right font-semibold`}>
-                                <Rate value={(stock.profit_rate >= 0 ? '+' : '') + stock.profit_rate.toFixed(2) + '%'} />
+                                <Rate value={(profitRate >= 0 ? '+' : '') + (Number.isFinite(profitRate) ? profitRate.toFixed(2) : '0.00') + '%'} />
                               </td>
                             </tr>
                           )

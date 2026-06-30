@@ -1998,9 +1998,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 <div className="flex flex-col gap-2.5 rounded border border-amber-400/40 bg-amber-400/10 px-3 py-3 text-xs">
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-bold text-amber-300">거래내역 기준 추정 보유</span>
-                    <span className="rounded border border-amber-400/40 px-2 py-0.5 text-[10px] font-bold text-amber-200">
-                      실잔고 미확인
-                    </span>
                   </div>
                   <div className="flex justify-between border-b border-amber-400/20 py-1">
                     <span className="text-slate-300">추정 수량</span>
