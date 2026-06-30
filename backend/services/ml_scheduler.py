@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 import threading
@@ -33,6 +34,7 @@ from backend.scripts.export_training_candles import (
 PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "default-dev-encryption-key-32bytes!")
 crypto = CryptoHelper(ENCRYPTION_KEY)
+logger = logging.getLogger(__name__)
 
 # 모듈 수준의 전역 상태 변수
 _news_ingest_started = False
@@ -132,8 +134,11 @@ def start_news_ingest_scheduler(news_ingest_service, news_ingest_enabled: bool, 
     """뉴스 수집 스케줄러를 백그라운드 스레드로 구동합니다."""
     global _news_ingest_started
     if _news_ingest_started or not news_ingest_enabled:
+        if not news_ingest_enabled:
+            logger.info("[NewsIngestScheduler] disabled")
         return
     _news_ingest_started = True
+    logger.info("[NewsIngestScheduler] started interval=%ss", news_ingest_interval_seconds)
 
     def _loop() -> None:
         while True:
@@ -141,9 +146,17 @@ def start_news_ingest_scheduler(news_ingest_service, news_ingest_enabled: bool, 
                 # 10분(600초) 동안 유효한 뉴스 수집 분산 락 획득 시도
                 with distributed_lock("news_ingest", 600) as locked:
                     if locked:
-                        news_ingest_service.run_once()
-            except Exception:
-                pass
+                        result = news_ingest_service.run_once()
+                        logger.info(
+                            "[NewsIngestScheduler] run complete fetched=%s inserted=%s skipped=%s",
+                            result.get("fetched"),
+                            result.get("inserted"),
+                            result.get("queries_skipped"),
+                        )
+                    else:
+                        logger.info("[NewsIngestScheduler] lock not acquired")
+            except Exception as error:
+                logger.exception("[NewsIngestScheduler] run failed: %s", error)
             now_kr = datetime.utcnow() + timedelta(hours=9)
             is_weekday = now_kr.weekday() < 5
             is_market_hours = is_weekday and (

@@ -1,5 +1,6 @@
 import csv
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -313,6 +314,11 @@ class KISMarketUniverseService:
                 kis_client,
                 max_workers=max_workers,
             )
+        if market_segment.upper() in {"ALL", "US"} and os.getenv("HOME_US_MARKET_SNAPSHOT_ENABLED", "true").lower() == "true":
+            try:
+                quote_rows.extend(kis_client.get_overseas_rank_candidates(limit=min(quote_limit, 50)))
+            except Exception as exc:
+                print(f"[KIS][US-ranking-snapshot-failed] {exc}")
         self.repository.upsert_turnover_latest(quote_rows)
 
         return {

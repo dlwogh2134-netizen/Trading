@@ -246,6 +246,13 @@ def is_domestic_common_stock_row(row: dict) -> bool:
     return bool(re.fullmatch(r"\d{6}|[0-9A-Z]{6}", symbol))
 
 
+def is_foreign_stock_row(row: dict) -> bool:
+    market_segment = str(row.get("market_segment") or "").strip().upper()
+    market_country = str(row.get("market_country") or "").strip().upper()
+    symbol = str(row.get("symbol") or row.get("code") or "").strip().upper()
+    return market_segment == "US" or market_country in {"US", "USA"} or bool(re.fullmatch(r"[A-Z][A-Z.\-]{0,9}", symbol))
+
+
 def dedupe_market_rows(rows: list[dict]) -> list[dict]:
     seen = set()
     deduped = []
@@ -346,29 +353,31 @@ def fetch_top_turnover_stock_rows(
     region: str = "전체",
     ranking: str = "거래대금",
     horizon: str = "실시간",
+    force_refresh: bool = False,
 ) -> list[dict]:
     now = time.time()
     market_segment = normalize_market_segment(region)
-    if market_segment == "US":
-        return []
 
     cache_key = f"{market_segment}:{ranking}:실시간:{limit}"
     cached_rows = HOME_STOCK_TURNOVER_CACHE["rows_by_key"].get(cache_key)
-    if cached_rows and now < HOME_STOCK_TURNOVER_CACHE["expires_at"]:
+    if not force_refresh and cached_rows and now < HOME_STOCK_TURNOVER_CACHE["expires_at"]:
         return cached_rows[:limit]
 
     repository = MarketRepository()
     lookup_limit = max(limit * 20, HOME_MARKET_RANK_LIMIT * 4, 200)
     order_by = get_stock_rank_order(ranking)
-    rows = repository.list_turnover_rankings(
-        market_segment=market_segment if market_segment != "US" else "ALL",
-        limit=lookup_limit,
-        order_by=order_by,
-    )
+    rows = []
+    if not force_refresh:
+        rows = repository.list_turnover_rankings(
+            market_segment=market_segment,
+            limit=lookup_limit,
+            order_by=order_by,
+        )
     kis = get_kis_env_credentials()
     meta = build_snapshot_meta(rows)
-    should_refresh = not rows
+    should_refresh = force_refresh or not rows
     if should_refresh and kis["appkey"] and kis["appsecret"]:
+        refresh_limit = min(lookup_limit, max(limit, HOME_MARKET_RANK_LIMIT))
         client = KISClient(
             appkey=kis["appkey"],
             appsecret=kis["appsecret"],
@@ -376,36 +385,55 @@ def fetch_top_turnover_stock_rows(
             acnt_prdt_cd=kis["acnt_prdt_cd"],
             env=kis["env"],
         )
-        rows = build_home_rank_candidate_rows(repository, client, lookup_limit)
+        if market_segment == "US":
+            rows = client.get_overseas_rank_candidates(limit=refresh_limit)
+        else:
+            rows = build_home_rank_candidate_rows(repository, client, refresh_limit)
         if rows and repository.is_configured:
             repository.upsert_turnover_latest(rows)
         if repository.is_configured:
             stored_rows = repository.list_turnover_rankings(
-                market_segment=market_segment if market_segment != "US" else "ALL",
+                market_segment=market_segment,
                 limit=lookup_limit,
                 order_by=order_by,
             )
             if stored_rows:
                 rows = stored_rows
+    elif force_refresh:
+        rows = repository.list_turnover_rankings(
+            market_segment=market_segment,
+            limit=lookup_limit,
+            order_by=order_by,
+        )
 
     normalized_rows = []
-    stock_only_rows = [row for row in rows if is_domestic_common_stock_row(row)]
+    if market_segment == "US":
+        stock_only_rows = [row for row in rows if is_foreign_stock_row(row)]
+    elif market_segment == "ALL":
+        stock_only_rows = [
+            row for row in rows
+            if is_domestic_common_stock_row(row) or is_foreign_stock_row(row)
+        ]
+    else:
+        stock_only_rows = [row for row in rows if is_domestic_common_stock_row(row)]
     for index, row in enumerate(stock_only_rows[:lookup_limit], start=1):
         trading_value = to_float(row.get("trading_value"))
         change_rate = to_float(row.get("change_rate"))
         current_price = to_float(row.get("current_price"))
         prefix = "+" if change_rate > 0 else ""
+        is_foreign = is_foreign_stock_row(row)
 
         normalized_rows.append({
             "rank": index,
             "name": clean_stock_name(row.get("name")) or row.get("symbol"),
             "code": row.get("symbol"),
-            "price": f"{current_price:,.0f}" if current_price else "-",
+            "price": f"{current_price:,.2f}" if is_foreign and current_price else f"{current_price:,.0f}" if current_price else "-",
             "change": f"{prefix}{change_rate:.2f}%",
-            "value": format_krw_compact(trading_value) if trading_value else "-",
+            "value": "-" if is_foreign and ranking in {"상승률", "하락률"} else format_krw_compact(trading_value) if trading_value else "-",
             "trading_value": trading_value,
             "trading_volume": to_float(row.get("trading_volume")),
             "market_segment": row.get("market_segment"),
+            "market_country": row.get("market_country"),
             "as_of": row.get("as_of"),
         })
 
@@ -563,11 +591,12 @@ def build_home_overview(data: dict, auth_header: str | None = None) -> dict:
             region=filters.get("region", "전체"),
             ranking=ranking,
             horizon=filters.get("horizon", "실시간"),
+            force_refresh=bool(filters.get("forceRefresh") or data.get("forceRefresh")),
         )
         result["stocks"] = enrich_stock_rows_with_toss(stock_rows)
         result["market_snapshot"] = build_snapshot_meta(result["stocks"])
         if not result["stocks"]:
-            empty_reason = "해외 주식 랭킹은 아직 지원하지 않습니다." if normalize_market_segment(filters.get("region")) == "US" else "주식 거래대금 스냅샷 데이터가 아직 없습니다."
+            empty_reason = "해외 주식 랭킹 스냅샷 데이터가 아직 없습니다." if normalize_market_segment(filters.get("region")) == "US" else "주식 거래대금 스냅샷 데이터가 아직 없습니다."
             result["message"] = (result["message"] + " " if result["message"] else "") + empty_reason
     except Exception as stock_error:
         result["stocks"] = []

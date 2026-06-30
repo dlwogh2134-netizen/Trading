@@ -5,7 +5,7 @@ import Header from "../components/Header.jsx";
 import { deleteUserWatchlistItem, fetchUserWatchlist, normalizeWatchlistItem, upsertUserWatchlistItem } from "../supabaseClient";
 
 const filters = {
-  region: ["전체", "국내", "해외"],
+  region: ["국내", "해외"],
   ranking: ["거래대금", "거래량", "상승률", "하락률"],
 };
 
@@ -47,12 +47,29 @@ function formatNumber(value, decimals = 0) {
   });
 }
 
+function isForeignRow(row = {}) {
+  const marketText = String(
+    row.market_segment
+      ?? row.market_country
+      ?? row.region
+      ?? row.country
+      ?? "",
+  ).toUpperCase();
+  const assetType = String(row.asset_type ?? row.assetType ?? "").toUpperCase();
+  const symbol = String(row.symbol ?? row.code ?? row.ticker ?? "").toUpperCase();
+  const explicitForeign = ["US", "USA", "NASDAQ", "NYSE", "AMEX", "해외"].some((token) => marketText.includes(token));
+  return explicitForeign || (assetType === "STOCK" && /^[A-Z.\-]+$/.test(symbol));
+}
+
 function formatPrice(row) {
   if (typeof row.price === "string" && row.price) {
+    if (row.price === "-") return "-";
+    if (isForeignRow(row)) return row.price.startsWith("$") ? row.price : `$${row.price}`;
     return row.price.endsWith("원") ? row.price : `${row.price}원`;
   }
   const price = row.price ?? row.current_price ?? row.live_price;
   if (price === undefined || price === null || price === "") return "-";
+  if (isForeignRow(row)) return `$${formatNumber(price, Number(price) % 1 === 0 ? 0 : 2)}`;
   return `${formatNumber(price, Number(price) % 1 === 0 ? 0 : 2)}원`;
 }
 
@@ -65,7 +82,8 @@ function formatChange(row) {
   return `${change > 0 ? "+" : ""}${change.toFixed(2)}%`;
 }
 
-function formatValue(row, valueKey) {
+function formatValue(row, valueKey, ranking) {
+  if (isForeignRow(row) && valueKey !== "volume" && ["상승률", "하락률"].includes(ranking)) return "-";
   const direct = valueKey === "volume"
     ? row.trading_volume ?? row.volume
     : row.trading_value ?? row.value;
@@ -103,8 +121,14 @@ function getWatchlistKey(row = {}, assetType = "STOCK") {
   return `${item.asset_type}:${item.exchange}:${item.symbol}`;
 }
 
+function matchesRegion(row, region) {
+  if (!region) return true;
+  const isForeign = isForeignRow(row);
+  return region === "해외" ? isForeign : !isForeign;
+}
+
 function applyClientMarketFilters(rows, activeFilters) {
-  const filtered = [...rows];
+  const filtered = [...rows].filter((row) => matchesRegion(row, activeFilters.region));
   const ranking = activeFilters.ranking || activeFilters.metric || "거래대금";
 
   if (ranking === "상승률") {
@@ -216,7 +240,7 @@ function MarketTable({ rows, titleType = "stock", ranking = "거래대금", favo
               <div className={`text-right text-[15px] font-medium tabular-nums ${changeClass(formatChange(row))}`}>
                 {formatChange(row)}
               </div>
-              <div className="text-right text-[15px] tabular-nums text-slate-200">{formatValue(row, valueKey)}</div>
+              <div className="text-right text-[15px] tabular-nums text-slate-200">{formatValue(row, valueKey, ranking)}</div>
             </Link>
           );
         })}
@@ -281,7 +305,7 @@ function MobileMarketTable({ rows, titleType = "stock", ranking = "거래대금"
               </div>
               <div>
                 <div className="text-[10px] text-slate-500">{valueLabel}</div>
-                <div className="mt-1 text-slate-200">{formatValue(row, valueKey)}</div>
+                <div className="mt-1 text-slate-200">{formatValue(row, valueKey, ranking)}</div>
               </div>
             </div>
           </Link>
@@ -302,7 +326,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
   const [snapshotMeta, setSnapshotMeta] = useState({});
   const [updatedAt, setUpdatedAt] = useState("");
   const [stockFilters, setStockFilters] = useState({
-    region: "전체",
+    region: "국내",
     ranking: "거래대금",
     horizon: "실시간",
   });
@@ -311,12 +335,15 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
   });
   const stocks = useMemo(
     () => applyClientMarketFilters(stockCandidates, stockFilters).slice(0, 10),
-    [stockCandidates, stockFilters.ranking],
+    [stockCandidates, stockFilters.region, stockFilters.ranking],
   );
   const filteredCoins = useMemo(
     () => applyClientMarketFilters(coins, coinFilters).slice(0, 10),
     [coins, coinFilters.ranking],
   );
+  const stockRankingOptions = stockFilters.region === "해외"
+    ? filters.ranking.filter((label) => label !== "거래대금")
+    : filters.ranking;
 
   const loadFavorites = async () => {
     if (!isLoggedIn) {
@@ -399,14 +426,17 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
   const refreshOverview = () => {
     loadOverview({
       region: stockFilters.region,
-      ranking: "거래대금",
+      ranking: stockFilters.ranking,
       horizon: stockFilters.horizon,
+      forceRefresh: true,
     });
   };
+  const snapshotTimeText = snapshotMeta.as_of ? ` · 데이터 기준 ${formatSnapshotTime(snapshotMeta.as_of)}` : "";
+  const checkedTimeText = updatedAt ? ` · 확인 ${updatedAt}` : "";
   const marketStatusText = message
     || (status === "loading"
       ? "시장 데이터를 불러오는 중입니다."
-      : `시장 데이터 정상 표시 중${snapshotMeta.as_of ? ` · 기준 ${formatSnapshotTime(snapshotMeta.as_of)}` : updatedAt ? ` · ${updatedAt}` : ""}`);
+      : `시장 데이터 정상 표시 중${snapshotTimeText}${checkedTimeText}`);
 
   useEffect(() => {
     loadFavorites();
@@ -417,7 +447,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
     let cancelled = false;
     const requestFilters = {
       region: stockFilters.region,
-      ranking: "거래대금",
+      ranking: stockFilters.ranking,
       horizon: stockFilters.horizon,
     };
 
@@ -440,7 +470,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [stockFilters.region, stockFilters.horizon]);
+  }, [stockFilters.region, stockFilters.ranking, stockFilters.horizon]);
 
   return (
     <div className="min-h-screen bg-obsidian-bg text-[#e2e2ec] font-inter">
@@ -458,11 +488,15 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
                         key={`stock-region-${label}`}
                         label={label}
                         active={stockFilters.region === label}
-                        onClick={() => setStockFilters((prev) => ({ ...prev, region: label }))}
+                        onClick={() => setStockFilters((prev) => ({
+                          ...prev,
+                          region: label,
+                          ranking: label === "해외" && prev.ranking === "거래대금" ? "거래량" : prev.ranking,
+                        }))}
                       />
                     ))}
                     <span className="mx-1 hidden h-7 w-px bg-slate-700 md:block" />
-                    {filters.ranking.map((label) => (
+                    {stockRankingOptions.map((label) => (
                       <FilterChip
                         key={`stock-ranking-${label}`}
                         label={label}

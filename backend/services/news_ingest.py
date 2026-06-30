@@ -28,6 +28,8 @@ class NewsIngestService:
         )
         batches: list[dict[str, Any]] = []
         per_query_results: list[dict[str, Any]] = []
+        saved_count = 0
+        duplicate_count = 0
 
         for query in selected_queries:
             query_started_at = datetime.now(timezone.utc).isoformat()
@@ -40,6 +42,11 @@ class NewsIngestService:
                     articles = []
 
                 batches.extend(articles)
+                deduplicated = self._deduplicate(articles)
+                duplicate_count += len(articles) - len(deduplicated)
+                if deduplicated:
+                    self.repository.upsert_articles(deduplicated)
+                    saved_count += len(deduplicated)
                 per_query_results.append(
                     {
                         "provider": query.provider,
@@ -68,14 +75,10 @@ class NewsIngestService:
         for skipped in skipped_queries:
             self._insert_skipped_log(skipped, started_at)
 
-        deduplicated = self._deduplicate(batches)
-        if deduplicated:
-            self.repository.upsert_articles(deduplicated)
-
         return {
-            "inserted": len(deduplicated),
+            "inserted": saved_count,
             "fetched": len(batches),
-            "deduplicated": len(batches) - len(deduplicated),
+            "deduplicated": duplicate_count,
             "queries_called": len(selected_queries),
             "queries_skipped": len(skipped_queries),
             "skipped": skipped_queries[:20],

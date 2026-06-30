@@ -69,7 +69,7 @@ class MarketRepository:
             return []
 
         params = {
-            "select": "symbol,name,market_segment,current_price,change_rate,trading_volume,trading_value,as_of",
+            "select": "symbol,name,market_segment,market_country,current_price,change_rate,trading_volume,trading_value,as_of",
             "order": order_by,
             "limit": str(limit),
         }

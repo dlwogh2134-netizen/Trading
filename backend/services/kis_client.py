@@ -16,6 +16,8 @@ _kis_mock_rate_limiter_lock = threading.Lock()
 _last_kis_mock_request_time = 0.0
 KIS_MOCK_MIN_INTERVAL = 0.5  # 초당 3회 한도 방어를 위해 최소 0.5초 간격 유지
 
+DEFAULT_US_RANK_EXCHANGES = ["NAS", "NYS", "AMS"]
+
 
 def _enforce_kis_mock_rate_limit(env: str):
     global _last_kis_mock_request_time
@@ -703,6 +705,150 @@ class KISClient(ExchangeClient):
         )
         rankings.sort(key=lambda row: row["change_rate"], reverse=direction == "up")
         return rankings[:limit]
+
+    def _normalize_overseas_rank_item(self, item: dict, source: str) -> dict | None:
+        symbol = str(item.get("symb") or item.get("ovrs_pdno") or "").strip().upper()
+        if not symbol:
+            return None
+
+        current_price = self._to_float(item.get("last") or item.get("ovrs_now_pric"))
+        change_rate = self._to_float(item.get("rate") or item.get("n_rate"))
+        trading_volume = self._to_float(item.get("tvol") or item.get("a_tvol"))
+        trading_value = self._to_float(item.get("tamt"))
+
+        return {
+            "symbol": symbol,
+            "name": str(item.get("name") or item.get("ename") or symbol).strip(),
+            "market_segment": "US",
+            "market_country": "US",
+            "current_price": current_price,
+            "change_rate": change_rate,
+            "trading_volume": trading_volume,
+            "trading_value": trading_value,
+            "as_of": datetime.utcnow().isoformat() + "Z",
+            "raw": {**item, "_rank_source": source, "_exchange_code": item.get("excd")},
+        }
+
+    def _get_overseas_rankings(
+        self,
+        endpoint: str,
+        tr_id: str,
+        params: dict,
+        source: str,
+        limit: int,
+    ) -> list[dict]:
+        _enforce_kis_mock_rate_limit(self.env)
+        token = self._get_cached_token()
+        headers = {
+            "content-type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token}",
+            "appkey": self.appkey,
+            "appsecret": self.appsecret,
+            "tr_id": tr_id,
+        }
+        res = requests.get(f"{self.base_url}{endpoint}", headers=headers, params=params, timeout=20)
+        if res.status_code != 200:
+            raise Exception(f"KIS overseas ranking failed: {res.text}")
+
+        data = res.json()
+        if data.get("rt_cd") != "0":
+            raise Exception(f"KIS overseas ranking error: {data.get('msg1')}")
+
+        rows = []
+        for item in data.get("output2", []) or []:
+            row = self._normalize_overseas_rank_item(item, source)
+            if row:
+                rows.append(row)
+        return rows[:limit]
+
+    def get_overseas_trade_volume_rankings(self, exchange: str = "NAS", limit: int = 50) -> list[dict]:
+        """
+        KIS 해외주식 거래량 순위 API를 호출합니다.
+        """
+        return self._get_overseas_rankings(
+            endpoint="/uapi/overseas-stock/v1/ranking/trade-vol",
+            tr_id="HHDFS76310010",
+            params={
+                "EXCD": exchange,
+                "NDAY": "0",
+                "VOL_RANG": "0",
+                "KEYB": "",
+                "AUTH": "",
+                "PRC1": "",
+                "PRC2": "",
+            },
+            source=f"KIS_OVERSEAS_TRADE_VOLUME_{exchange}",
+            limit=limit,
+        )
+
+    def get_overseas_updown_rankings(self, direction: str = "up", exchange: str = "NAS", limit: int = 50) -> list[dict]:
+        """
+        KIS 해외주식 상승률/하락률 순위 API를 호출합니다.
+        direction='up'은 상승률 상위, direction='down'은 하락률 하위를 반환합니다.
+        """
+        return self._get_overseas_rankings(
+            endpoint="/uapi/overseas-stock/v1/ranking/updown-rate",
+            tr_id="HHDFS76290000",
+            params={
+                "EXCD": exchange,
+                "NDAY": "0",
+                "GUBN": "1" if direction == "up" else "0",
+                "VOL_RANG": "0",
+                "AUTH": "",
+                "KEYB": "",
+            },
+            source=f"KIS_OVERSEAS_UPDOWN_{direction.upper()}_{exchange}",
+            limit=limit,
+        )
+
+    def get_overseas_rank_candidates(self, limit: int = 50) -> list[dict]:
+        """
+        미국 시장 거래량/상승률/하락률 순위 API를 합쳐 홈 캐시 후보군을 만듭니다.
+        NASDAQ, NYSE, AMEX를 기본 대상으로 조회합니다.
+        """
+        exchanges = [
+            value.strip().upper()
+            for value in os.getenv("KIS_US_RANK_EXCHANGES", ",".join(DEFAULT_US_RANK_EXCHANGES)).split(",")
+            if value.strip()
+        ]
+        collected: list[dict] = []
+        errors: list[str] = []
+        for exchange in exchanges:
+            for fetcher in (
+                lambda exchange=exchange: self.get_overseas_trade_volume_rankings(exchange=exchange, limit=limit),
+                lambda exchange=exchange: self.get_overseas_updown_rankings(direction="up", exchange=exchange, limit=limit),
+                lambda exchange=exchange: self.get_overseas_updown_rankings(direction="down", exchange=exchange, limit=limit),
+            ):
+                try:
+                    collected.extend(fetcher())
+                except Exception as exc:
+                    errors.append(str(exc))
+
+        by_symbol: dict[str, dict] = {}
+        for row in collected:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            previous = by_symbol.get(symbol)
+            if not previous:
+                by_symbol[symbol] = row
+                continue
+            merged = {**previous, **row}
+            merged["trading_volume"] = max(
+                self._to_float(previous.get("trading_volume")),
+                self._to_float(row.get("trading_volume")),
+            )
+            merged["trading_value"] = max(
+                self._to_float(previous.get("trading_value")),
+                self._to_float(row.get("trading_value")),
+            )
+            by_symbol[symbol] = merged
+
+        rows = list(by_symbol.values())
+        rows.sort(key=lambda row: row.get("trading_volume", 0), reverse=True)
+        if not rows and errors:
+            raise Exception("KIS overseas rank candidates failed: " + "; ".join(errors[:5]))
+        return rows
 
     def get_market_rank_candidates(self, limit: int = 50) -> list[dict]:
         """
