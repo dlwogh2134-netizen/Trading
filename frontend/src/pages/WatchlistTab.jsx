@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { fetchNewsArticles, ensureNewsSummaries } from '../lib/supabaseClient.js'
-import { fetchUserWatchlist, supabase } from '../supabaseClient'
+import { fetchUserWatchlist, supabase, updateUserWatchlistOrder } from '../supabaseClient'
 import { SectionHeader } from '../components/DashboardComponents.jsx'
 import { formatNewsDate, getWatchlistNewsMarket, mergeLatestNews } from '../dashboardUtils.js'
 
@@ -30,6 +30,23 @@ const CRYPTO_INTERVALS = [
   { label: '주봉', value: '1w' },
   { label: '월봉', value: '1M' },
 ]
+
+const WATCHLIST_MARKET_FILTERS = [
+  { key: 'all', label: '전체' },
+  { key: 'domestic', label: '국내주식' },
+  { key: 'overseas', label: '해외주식' },
+  { key: 'crypto', label: '코인' },
+]
+
+function getWatchlistMarketFilterKey(item = {}) {
+  const assetType = String(item.assetType || item.asset_type || '').toUpperCase()
+  const marketCountry = String(item.marketCountry || item.market_country || '').toUpperCase()
+  const market = String(item.market || '')
+
+  if (assetType === 'CRYPTO' || market.includes('코인')) return 'crypto'
+  if (marketCountry === 'US' || market.includes('해외')) return 'overseas'
+  return 'domestic'
+}
 
 function normalizeCandleTime(rawTime) {
   if (typeof rawTime === 'number' && !Number.isNaN(rawTime)) return rawTime
@@ -340,9 +357,15 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
   const [expandedNewsId, setExpandedNewsId] = useState('')
   const [summaryLoadingId, setSummaryLoadingId] = useState('')
   const [chartCurrentPrice, setChartCurrentPrice] = useState(null)
+  const [marketFilter, setMarketFilter] = useState('all')
+  const [draggingWatchId, setDraggingWatchId] = useState('')
+  const [dragOverWatchId, setDragOverWatchId] = useState('')
 
-  const selectedItem = watchlistItems.find((item) => item.id === selectedId) || watchlistItems[0]
-  const useSlider = watchlistItems.length >= 5
+  const filteredWatchlistItems = marketFilter === 'all'
+    ? watchlistItems
+    : watchlistItems.filter((item) => getWatchlistMarketFilterKey(item) === marketFilter)
+  const selectedItem = filteredWatchlistItems.find((item) => item.id === selectedId) || filteredWatchlistItems[0]
+  const useSlider = filteredWatchlistItems.length >= 5
 
   const assetType = selectedItem?.assetType || (selectedItem?.market === '코인' ? 'CRYPTO' : 'STOCK')
   const selectedCurrency = selectedItem?.currency || (assetType === 'CRYPTO' ? 'KRW' : selectedItem?.marketCountry === 'US' ? 'USD' : 'KRW')
@@ -374,6 +397,29 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
     },
   ]
 
+  function reorderWatchlistItems(sourceId, targetId) {
+    if (!sourceId || !targetId || sourceId === targetId) return
+
+    setWatchlistItems((current) => {
+      const sourceIndex = current.findIndex((item) => item.id === sourceId)
+      const targetIndex = current.findIndex((item) => item.id === targetId)
+
+      if (sourceIndex < 0 || targetIndex < 0) return current
+
+      const next = [...current]
+      const [movedItem] = next.splice(sourceIndex, 1)
+      next.splice(targetIndex, 0, movedItem)
+      const orderedNext = next.map((item, index) => ({ ...item, sortOrder: index + 1 }))
+
+      void updateUserWatchlistOrder(orderedNext).catch((error) => {
+        setWatchlistError(error.message || '관심종목 순서를 저장하지 못했습니다.')
+      })
+
+      return orderedNext
+    })
+    setSelectedId(sourceId)
+  }
+
   useEffect(() => {
     let isMounted = true
 
@@ -401,6 +447,13 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
       isMounted = false
     }
   }, [])
+
+  useEffect(() => {
+    setSelectedId((current) => {
+      if (current && filteredWatchlistItems.some((item) => item.id === current)) return current
+      return filteredWatchlistItems[0]?.id || ''
+    })
+  }, [marketFilter, watchlistItems])
 
   useEffect(() => {
     if (!selectedItem) return
@@ -491,23 +544,79 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
   return (
     <main className="max-w-7xl mx-auto flex flex-col gap-6">
       <section className="bg-slate-surface border border-slate-700/80 rounded-lg p-5">
-        <SectionHeader title="관심종목 명단" />
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <SectionHeader title="관심종목 명단" />
+          <div className="inline-flex w-fit rounded-md border border-slate-700/80 bg-[#0f172a] p-1">
+            {WATCHLIST_MARKET_FILTERS.map((filter) => (
+              <button
+                key={filter.key}
+                className={`rounded px-2.5 py-1 text-[10px] font-bold transition ${
+                  marketFilter === filter.key
+                    ? 'bg-ai-cyan text-slate-950'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                type="button"
+                onClick={() => setMarketFilter(filter.key)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className={useSlider ? 'flex snap-x gap-2 overflow-x-auto pb-2' : 'grid gap-2 md:grid-cols-2 xl:grid-cols-4'}>
-          {watchlistItems.map((item) => (
+          {filteredWatchlistItems.map((item) => (
             <button
               key={item.id}
-              className={`${useSlider ? 'min-w-60 snap-start' : 'w-full'} rounded-lg px-4 py-3 text-left transition ${selectedItem?.id === item.id ? 'bg-institutional-blue text-white' : 'bg-[#0f172a] text-slate-300 hover:bg-white/5'
-                }`}
+              className={`${useSlider ? 'min-w-60 snap-start' : 'w-full'} cursor-grab rounded-lg border px-4 py-3 text-left transition active:cursor-grabbing ${
+                selectedItem?.id === item.id
+                  ? 'border-institutional-blue bg-institutional-blue text-white'
+                  : 'border-transparent bg-[#0f172a] text-slate-300 hover:bg-white/5'
+              } ${
+                draggingWatchId === item.id
+                  ? 'opacity-50'
+                  : dragOverWatchId === item.id
+                    ? 'border-ai-cyan ring-1 ring-ai-cyan/50'
+                    : ''
+              }`}
+              draggable
               type="button"
               onClick={() => setSelectedId(item.id)}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData('text/plain', item.id)
+                setDraggingWatchId(item.id)
+              }}
+              onDragOver={(event) => {
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                if (draggingWatchId && draggingWatchId !== item.id) {
+                  setDragOverWatchId(item.id)
+                }
+              }}
+              onDragLeave={() => {
+                if (dragOverWatchId === item.id) setDragOverWatchId('')
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                const sourceId = event.dataTransfer.getData('text/plain') || draggingWatchId
+                reorderWatchlistItems(sourceId, item.id)
+                setDraggingWatchId('')
+                setDragOverWatchId('')
+              }}
+              onDragEnd={() => {
+                setDraggingWatchId('')
+                setDragOverWatchId('')
+              }}
             >
               <span className="block font-bold">{item.name}</span>
               <span className="mt-1 block text-xs opacity-70 font-mono">{item.market} · {item.account}</span>
             </button>
           ))}
-          {!watchlistLoading && watchlistItems.length === 0 ? (
+          {!watchlistLoading && filteredWatchlistItems.length === 0 ? (
             <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
-              관심종목이 없습니다. 하트를 눌러 관심 종목을 추가해주세요.
+              {watchlistItems.length === 0
+                ? '관심종목이 없습니다. 하트를 눌러 관심 종목을 추가해주세요.'
+                : '선택한 분류에 해당하는 관심종목이 없습니다.'}
             </div>
           ) : null}
         </div>

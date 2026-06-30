@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS public.user_watchlist (
     change_rate NUMERIC,
     average_price NUMERIC,
     quantity NUMERIC,
+    sort_order INTEGER,
     source_payload JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -19,6 +20,9 @@ CREATE TABLE IF NOT EXISTS public.user_watchlist (
 
 CREATE INDEX IF NOT EXISTS idx_user_watchlist_user_updated
     ON public.user_watchlist (user_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_watchlist_user_sort_order
+    ON public.user_watchlist (user_id, sort_order ASC, updated_at DESC);
 
 ALTER TABLE public.user_watchlist ENABLE ROW LEVEL SECURITY;
 

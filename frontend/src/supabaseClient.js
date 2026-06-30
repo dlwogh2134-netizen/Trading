@@ -26,6 +26,7 @@ export function normalizeWatchlistItem(row = {}) {
   const changeRate = parseWatchNumber(row.change_rate ?? row.changeRate ?? row.live_change_rate ?? row.change)
   const averagePrice = parseWatchNumber(row.average_price ?? row.averagePrice ?? row.current_price ?? row.live_price ?? row.price)
   const quantity = parseWatchNumber(row.quantity ?? row.qty ?? 0)
+  const sortOrder = parseWatchNumber(row.sort_order ?? row.sortOrder)
 
   return {
     symbol,
@@ -38,6 +39,7 @@ export function normalizeWatchlistItem(row = {}) {
     change_rate: changeRate,
     average_price: averagePrice,
     quantity: quantity || 0,
+    sort_order: Number.isFinite(sortOrder) ? sortOrder : null,
     source_payload: row.source_payload || row.sourcePayload || row,
   }
 }
@@ -63,6 +65,7 @@ export function toWatchlistViewItem(row = {}) {
     average: Number.isFinite(rawAverage) ? `${rawAverage}` : '-',
     change: Number.isFinite(rawChange) ? `${rawChange > 0 ? '+' : ''}${rawChange.toFixed(2)}%` : '0.00%',
     latestPrice: item.latest_price,
+    sortOrder: item.sort_order,
     sourcePayload: item.source_payload,
   }
 }
@@ -75,6 +78,7 @@ export async function fetchUserWatchlist() {
     .from('user_watchlist')
     .select('*')
     .eq('user_id', session.user.id)
+    .order('sort_order', { ascending: true, nullsFirst: false })
     .order('updated_at', { ascending: false })
 
   if (error) throw error
@@ -88,6 +92,13 @@ export async function upsertUserWatchlistItem(row) {
   }
 
   const item = normalizeWatchlistItem(row)
+  const { count, error: countError } = await supabase
+    .from('user_watchlist')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', session.user.id)
+
+  if (countError) throw countError
+
   if (!item.symbol) {
     throw new Error('관심종목 심볼을 확인할 수 없습니다.')
   }
@@ -95,6 +106,7 @@ export async function upsertUserWatchlistItem(row) {
   const payload = {
     ...item,
     user_id: session.user.id,
+    sort_order: item.sort_order ?? (count || 0) + 1,
     updated_at: new Date().toISOString(),
   }
 
@@ -106,6 +118,37 @@ export async function upsertUserWatchlistItem(row) {
 
   if (error) throw error
   return toWatchlistViewItem(data)
+}
+
+export async function updateUserWatchlistOrder(items = []) {
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.user?.id) {
+    throw new Error('로그인이 필요한 서비스입니다.')
+  }
+
+  const rows = items
+    .map((item, index) => {
+      const normalized = normalizeWatchlistItem(item)
+      return {
+        user_id: session.user.id,
+        symbol: normalized.symbol,
+        asset_type: normalized.asset_type,
+        exchange: normalized.exchange,
+        sort_order: index + 1,
+        updated_at: new Date().toISOString(),
+      }
+    })
+    .filter((item) => item.symbol)
+
+  if (rows.length === 0) return []
+
+  const { data, error } = await supabase
+    .from('user_watchlist')
+    .upsert(rows, { onConflict: 'user_id,symbol,asset_type,exchange' })
+    .select('*')
+
+  if (error) throw error
+  return data || []
 }
 
 export async function deleteUserWatchlistItem(row) {
