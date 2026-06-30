@@ -2,12 +2,14 @@ import os
 import json
 import time
 import threading
+import logging
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from backend.services.exchange_client import ExchangeClient
 
 KST = timezone(timedelta(hours=9))
+logger = logging.getLogger(__name__)
 
 # KIS 모의투자 API Rate Limiter
 _kis_mock_rate_limiter_lock = threading.Lock()
@@ -52,6 +54,10 @@ class KISClient(ExchangeClient):
             "cacheStatus": "MISS",
             "tokenStatus": "REFRESHED",
             "errorMessage": None,
+        }
+        self._access_token_cache = {
+            "token": None,
+            "expired_at": None,
         }
         
         if self.env == "REAL":
@@ -134,6 +140,115 @@ class KISClient(ExchangeClient):
         }
             
         return new_token
+
+    def _clear_token_cache(self):
+        from backend.services.token_cache_service import clear_db_token
+        try:
+            clear_db_token("KIS", self.env, self.user_id)
+        except Exception:
+            pass
+        self._access_token_cache = {
+            "token": None,
+            "expired_at": None,
+        }
+
+    def _get_cached_token(self) -> str:
+        from backend.services.lock_service import distributed_lock
+        from backend.services.token_cache_service import get_db_token_with_status, set_db_token
+
+        cached_token = self._access_token_cache.get("token")
+        cached_expired_at = self._access_token_cache.get("expired_at")
+        if cached_token and isinstance(cached_expired_at, datetime):
+            if (cached_expired_at - datetime.utcnow()).total_seconds() > 300:
+                self._last_token_cache_info = {
+                    "source": "memory",
+                    "cacheStatus": "HIT",
+                    "tokenStatus": "REUSED",
+                    "errorMessage": None,
+                    "expiredAt": cached_expired_at.isoformat() + "Z",
+                }
+                return cached_token
+
+        cache_state = get_db_token_with_status("KIS", self.env, self.user_id)
+        self._last_token_cache_info = {
+            "source": "token_cache_service",
+            "cacheStatus": cache_state.get("cache_status", "MISS"),
+            "tokenStatus": cache_state.get("token_status", "REFRESHED"),
+            "errorMessage": cache_state.get("error_message"),
+            "expiredAt": cache_state.get("expired_at"),
+        }
+        token = cache_state.get("token")
+        if token:
+            expired_at_raw = cache_state.get("expired_at")
+            try:
+                cached_expired_at = datetime.fromisoformat(str(expired_at_raw).replace("Z", "+00:00")).replace(tzinfo=None) if expired_at_raw else None
+            except Exception:
+                cached_expired_at = None
+            self._access_token_cache = {
+                "token": token,
+                "expired_at": cached_expired_at,
+            }
+            return token
+
+        # 같은 토큰을 동시에 다시 발급하지 않도록 잠근다.
+        lock_key = f"kis-token:{self.env}:{self.user_id or 'anonymous'}"
+        with distributed_lock(lock_key, duration_seconds=120) as acquired:
+            if not acquired:
+                time.sleep(0.5)
+                cache_state = get_db_token_with_status("KIS", self.env, self.user_id)
+                token = cache_state.get("token")
+                if token:
+                    expired_at_raw = cache_state.get("expired_at")
+                    try:
+                        cached_expired_at = datetime.fromisoformat(str(expired_at_raw).replace("Z", "+00:00")).replace(tzinfo=None) if expired_at_raw else None
+                    except Exception:
+                        cached_expired_at = None
+                    self._access_token_cache = {
+                        "token": token,
+                        "expired_at": cached_expired_at,
+                    }
+                    self._last_token_cache_info = {
+                        "source": "token_cache_service",
+                        "cacheStatus": "HIT",
+                        "tokenStatus": "REUSED",
+                        "errorMessage": cache_state.get("error_message"),
+                        "expiredAt": cache_state.get("expired_at"),
+                    }
+                    return token
+
+            token_data = self._request_new_token()
+            new_token = token_data["access_token"]
+            expires_in = 86400
+            expired_at_raw = token_data.get("expires_in") or token_data.get("access_token_token_expired") or token_data.get("access_token_expired_at")
+            if expired_at_raw:
+                try:
+                    if isinstance(expired_at_raw, (int, float)):
+                        expires_in = int(expired_at_raw)
+                    else:
+                        exp_dt = datetime.strptime(str(expired_at_raw), "%Y-%m-%d %H:%M:%S")
+                        expires_in = int((exp_dt - datetime.now()).total_seconds())
+                except Exception:
+                    pass
+            if expires_in <= 0:
+                expires_in = 86400
+
+            try:
+                set_db_token("KIS", self.env, new_token, expires_in, self.user_id)
+            except Exception as error:
+                logger.warning("[KIS Client] token cache save failed: %s", error)
+            expired_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            self._access_token_cache = {
+                "token": new_token,
+                "expired_at": expired_at,
+            }
+            self._last_token_cache_info = {
+                "source": "token_cache_service",
+                "cacheStatus": "MISS",
+                "tokenStatus": "REFRESHED",
+                "errorMessage": cache_state.get("error_message"),
+                "expiredAt": expired_at.isoformat() + "Z",
+            }
+            return new_token
 
     def _request_new_token(self) -> dict:
         _enforce_kis_mock_rate_limit(self.env)
