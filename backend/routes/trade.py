@@ -3118,47 +3118,11 @@ def lookup_symbol():
                 }
             })
 
-    # 4. 부분 일치 매칭 (SYMBOL_METADATA)
-    for sym, meta in SYMBOL_METADATA.items():
-        if query in meta.get("display_name", "").upper() or query in sym:
-            return jsonify({
-                "success": True,
-                "data": {
-                    "symbol": sym,
-                    "display_name": meta.get("display_name"),
-                    "asset_type": meta.get("asset_type"),
-                    "market": meta.get("market")
-                }
-            })
-
-    # 5. 주식 DB 부분 일치 매칭 폴백
-    if db_results:
-        best_match = db_results[0]
-        clean_name = re.sub(r"^KR\d{10}", "", best_match["name"]).strip()
-        return jsonify({
-            "success": True,
-            "data": {
-                "symbol": best_match["symbol"],
-                "display_name": clean_name,
-                "asset_type": "STOCK",
-                "market": "KR"
-            }
-        })
-
-    # 6. 매칭 실패 시 기본값 반환 (Toss 등 신규 등록 주식/코인 대비)
-    fallback_asset_type = "STOCK"
-    if asset_type_hint in ("STOCK", "CRYPTO"):
-        fallback_asset_type = asset_type_hint
-
     return jsonify({
-        "success": True,
-        "data": {
-            "symbol": query,
-            "display_name": query,
-            "asset_type": fallback_asset_type,
-            "market": ""
-        }
-    })
+        "success": False,
+        "message": "검색 결과가 없습니다. 종목명 또는 코드를 다시 확인해 주세요.",
+        "data": None,
+    }), 404
 
 
 @trade_bp.route("/api/trade/history/sync/toss", methods=["POST"])

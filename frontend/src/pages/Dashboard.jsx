@@ -181,7 +181,7 @@ const fetchDashboardWatchlistCurrentPrice = async (item = {}, authHeader = '') =
     symbol: item.id,
     interval,
     broker_env: brokerEnv,
-    count: '1',
+    count: '300',
   })
   const headers = authHeader ? { Authorization: authHeader } : {}
   const response = await fetch(`${DASHBOARD_API_BASE_URL}/api/chart/candles?${params.toString()}`, { headers })

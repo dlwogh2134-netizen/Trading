@@ -11,6 +11,14 @@ export default function SymbolSearch({ className = '' }) {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const navigate = useNavigate()
 
+  const navigateToSearchNotFound = (searchText) => {
+    const params = new URLSearchParams({
+      query: searchText,
+      assetType,
+    })
+    navigate(`/search/not-found?${params.toString()}`)
+  }
+
   // 폼 제출: 심볼 매핑 후 상세 페이지로 이동
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -26,10 +34,10 @@ export default function SymbolSearch({ className = '' }) {
         const { symbol, asset_type } = resData.data
         navigate(`/asset/${String(asset_type || assetType).toUpperCase()}/${symbol}`)
       } else {
-        navigate(`/asset/${assetType}/${trimmed.toUpperCase()}`)
+        navigateToSearchNotFound(trimmed)
       }
     } catch {
-      navigate(`/asset/${assetType}/${trimmed.toUpperCase()}`)
+      navigateToSearchNotFound(trimmed)
     }
     setQuery('')
     setSuggestions([])

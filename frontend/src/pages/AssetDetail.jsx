@@ -111,6 +111,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [mlSignalMessage, setMlSignalMessage] = useState('')
   const [isMlSignalExpanded, setIsMlSignalExpanded] = useState(false)
   const [isFavorite, setIsFavorite] = useState(false)
+  const [symbolLookupReady, setSymbolLookupReady] = useState(false)
 
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
@@ -255,6 +256,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   // 종목 메타데이터(한글명 등) 조회
   const fetchSymbolMetadata = async () => {
+    setSymbolLookupReady(false)
     try {
       const response = await fetch(`${API_BASE_URL}/api/symbol/lookup?query=${symbol}&asset_type=${normalizedRouteAssetType}`)
       const resData = await response.json()
@@ -262,14 +264,21 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         setDisplayName(resData.data.display_name)
         const mappedAssetType = String(resData.data.asset_type || '').toUpperCase() === 'STOCK' ? 'STOCK' : 'CRYPTO'
         setResolvedAssetType(mappedAssetType)
+        setSymbolLookupReady(true)
       } else {
-        setDisplayName(symbol)
-        setResolvedAssetType(normalizedRouteAssetType)
+        const params = new URLSearchParams({
+          query: symbol || '',
+          assetType: normalizedRouteAssetType,
+        })
+        navigate(`/search/not-found?${params.toString()}`, { replace: true })
       }
     } catch (e) {
       console.error("종목명 로드 실패:", e)
-      setDisplayName(symbol)
-      setResolvedAssetType(normalizedRouteAssetType)
+      const params = new URLSearchParams({
+        query: symbol || '',
+        assetType: normalizedRouteAssetType,
+      })
+      navigate(`/search/not-found?${params.toString()}`, { replace: true })
     }
   }
 
@@ -1050,13 +1059,19 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   })
 
   useEffect(() => {
+    fetchSymbolMetadata()
+  }, [symbol, normalizedRouteAssetType])
+
+  useEffect(() => {
+    if (!symbolLookupReady) return
+
     setNewsSyncMessage({ text: '', isError: false })
     fetchCandles()
     fetchUserBalance()
     fetchNewsList()
     fetchDisclosureList()
     fetchSymbolMetadata()
-  }, [exchange, symbol, chartInterval, brokerEnv])
+  }, [exchange, symbol, chartInterval, brokerEnv, symbolLookupReady])
 
   useEffect(() => {
     loadBrokerAvailability()
@@ -1171,6 +1186,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   // 3. TradingView Lightweight Charts 차트 초기 생성 및 리사이즈 대응
   useEffect(() => {
+    if (!symbolLookupReady) return
     if (!chartContainerRef.current || chartRef.current) return
 
     try {
@@ -1260,7 +1276,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     } catch (err) {
       console.error('TradingView 차트 생성 치명적 에러:', err)
     }
-  }, [])
+  }, [symbolLookupReady])
 
   // 4. 차트 데이터만 갱신하고 초기 1회만 fitContent 적용
   useEffect(() => {
@@ -1276,7 +1292,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     } catch (err) {
       console.error('차트 데이터 갱신 실패:', err)
     }
-  }, [candleData])
+  }, [candleData, symbolLookupReady])
 
   // 5. 수동 주문 제출 핸들러
   const handlePlaceOrder = async (e) => {
@@ -1415,6 +1431,16 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     orderPrecheck?.insufficient_cash ||
     orderPrecheck?.insufficient_holding
   )
+
+  if (!symbolLookupReady) {
+    return (
+      <div className="min-h-screen bg-[#070b19] text-[#e2e2ec] font-inter">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <Header isLoggedIn={isLoggedIn} userEmail={userEmail} handleLogout={handleLogout} userProfile={userProfile} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-[#070b19] text-[#e2e2ec] font-inter">

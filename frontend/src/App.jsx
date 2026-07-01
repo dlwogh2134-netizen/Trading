@@ -9,6 +9,7 @@ import Settings from './pages/Settings'
 import Home from './pages/Home'
 import AdminMlData from './pages/AdminMlData'
 import AssetDetail from './pages/AssetDetail'
+import SearchNotFound from './pages/SearchNotFound'
 import InvestmentSurveyModal from './components/InvestmentSurveyModal'
 
 function AppShell({
@@ -216,6 +217,16 @@ function AppShell({
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route
+            path="/asset/:assetType"
+            element={(
+              <SearchNotFound
+                isLoggedIn={isLoggedIn}
+                userEmail={userEmail}
+                handleLogout={handleLogout}
+              />
+            )}
+          />
+          <Route
             path="/asset/:assetType/:symbol"
             element={(
               <AssetDetail
@@ -223,6 +234,16 @@ function AppShell({
                 userEmail={userEmail}
                 handleLogout={handleLogout}
                 userProfile={userProfile}
+              />
+            )}
+          />
+          <Route
+            path="/search/not-found"
+            element={(
+              <SearchNotFound
+                isLoggedIn={isLoggedIn}
+                userEmail={userEmail}
+                handleLogout={handleLogout}
               />
             )}
           />

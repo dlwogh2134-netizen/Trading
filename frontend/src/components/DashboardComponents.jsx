@@ -200,7 +200,7 @@ function SidebarNav({ activeTab, isOpen, onClose, onOpen, onTabChange }) {
             <img className="h-full w-full object-contain" src="/logo.png" alt="Trading AI" />
           </span>
           <div className="min-w-28">
-            <p className="text-sm font-extrabold text-white">AE STOCK</p>
+            <p className="text-sm font-extrabold text-white">ANTRY</p>
             <p className="text-xs text-slate-500">Dashboard</p>
           </div>
           <button
