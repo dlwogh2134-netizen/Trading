@@ -46,6 +46,27 @@ export default function AssetsTab({ balance, allocation, displayCurrency = 'KRW'
     return `₩${Math.round(val).toLocaleString()}`
   }
 
+  const formatUnitCurrency = (value, currency, targetDisplayCurrency = displayCurrency) => {
+    const numeric = Number(value)
+    const val = Number.isFinite(numeric) ? numeric : 0
+    const rate = Number(exchangeRate) || 1500
+
+    if (targetDisplayCurrency === 'KRW') {
+      const displayValue = (currency === 'USD' || currency === 'USDT') ? val * rate : val
+      return `₩${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+    }
+
+    if (targetDisplayCurrency === 'USD') {
+      const displayValue = currency === 'KRW' ? val / rate : val
+      return `$${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+    }
+
+    if (currency === 'USD' || currency === 'USDT') {
+      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+    }
+    return `₩${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+  }
+
   const displayAccounts = ASSET_ACCOUNTS_MOCK.map((account) => {
     let val = parseFloat(account.balance.replace(/[^0-9.-]/g, '')) || 0
     let currency = account.accountType === '달러' ? 'USD' : 'KRW'
@@ -97,7 +118,7 @@ export default function AssetsTab({ balance, allocation, displayCurrency = 'KRW'
         assetType,
         source: stock.source || 'LIVE_BALANCE',
         quantity: `${stock.qty}`,
-        average: formatCurrency(stock.avg_price, stockCurrency, currentDisplayCurrency),
+        average: formatUnitCurrency(stock.avg_price, stockCurrency, currentDisplayCurrency),
         profit: formatCurrency(stock.profit, stockCurrency, currentDisplayCurrency),
         returnRate: `${profitRate >= 0 ? '+' : ''}${Number.isFinite(profitRate) ? profitRate.toFixed(2) : '0.00'}%`,
       }
@@ -115,7 +136,7 @@ export default function AssetsTab({ balance, allocation, displayCurrency = 'KRW'
       return {
         ...stock,
         exchange: exchangeName,
-        average: formatCurrency(rawAvg, stockCurrency, currentDisplayCurrency),
+        average: formatUnitCurrency(rawAvg, stockCurrency, currentDisplayCurrency),
         profit: formatCurrency(mockProfit, stockCurrency, currentDisplayCurrency),
       }
     }).filter((stock) => showMockAssets || stock.exchange !== 'KIS')

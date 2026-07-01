@@ -19,8 +19,31 @@ const formatCurrency = (value, currency = 'KRW') => {
   })}`
 }
 
-const mapTradeStatus = (status) => {
+const formatUnitCurrency = (value, currency = 'KRW') => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return '-'
+  const prefix = currency === 'USD' ? '$' : '₩'
+  return `${prefix}${formatNumber(numericValue, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  })}`
+}
+
+const mapTradeFailureStatus = (side) => (
+  String(side || '').toUpperCase() === 'SELL' ? '판매실패' : '구매실패'
+)
+
+const isActionableOrderStatus = (status) => (
+  ['PENDING', 'APPROVED', 'ORDERED', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED'].includes(String(status || '').toUpperCase())
+)
+
+const mapTradeStatus = (status, side = '') => {
   const normalizedStatus = String(status || '').toUpperCase()
+  if (['APPROVED', 'ORDERED'].includes(normalizedStatus)) return '주문 완료'
+  if (['PENDING', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED'].includes(normalizedStatus)) return '미체결'
+  if (normalizedStatus === 'EXECUTED') return '체결완료'
+  if (['FAILED', 'REJECTED', 'EXPIRED'].includes(normalizedStatus)) return mapTradeFailureStatus(side)
+  if (['CANCELED', 'CANCELLED'].includes(normalizedStatus)) return '취소완료'
   if (['PENDING', 'APPROVED', 'OPEN', 'ORDERED', 'PARTIALLY_FILLED'].includes(normalizedStatus)) return '미체결'
   if (normalizedStatus === 'EXECUTED') return '체결완료'
   if (normalizedStatus === 'REJECTED') return '거절'
@@ -108,6 +131,7 @@ const mapProposalToTrade = (proposal) => {
     id: proposal.id,
     sourceType: 'APP',
     rawStatus: proposal.status,
+    isActionable: isActionableOrderStatus(proposal.status),
     brokerEnv: proposal.broker_env || 'REAL',
     orderOrgNo: proposal.external_order_org_no || '',
     marketCountry: proposal.market_country || '',
@@ -120,10 +144,10 @@ const mapProposalToTrade = (proposal) => {
     ticker,
     side: mapTradeSide(proposal.side),
     currency,
-    price: price === null ? '-' : formatCurrency(price, currency),
+    price: price === null ? '-' : formatUnitCurrency(price, currency),
     quantity: quantity === null ? '-' : formatNumber(quantity, { maximumFractionDigits: 8 }),
     amount: computedAmount === null ? '-' : formatCurrency(computedAmount, currency),
-    status: mapTradeStatus(proposal.status),
+    status: mapTradeStatus(proposal.status, proposal.side),
     exchangeRate: '-',
     fees: '-',
     orderNumber: proposal.external_order_id || proposal.client_order_id || proposal.id,
@@ -156,6 +180,7 @@ const mapBrokerHistoryToTrade = (order, symbolNameMap = {}) => {
     id: `broker-${order.id}`,
     sourceType: 'BROKER',
     rawStatus: normalizedStatus,
+    isActionable: false,
     brokerEnv: order.broker_env || 'REAL',
     orderOrgNo: '',
     marketCountry: order.market_country || '',
@@ -168,10 +193,10 @@ const mapBrokerHistoryToTrade = (order, symbolNameMap = {}) => {
     ticker: symbol,
     side: mapTradeSide(order.side),
     currency,
-    price: rawPrice === null ? '-' : formatCurrency(rawPrice, currency),
+    price: rawPrice === null ? '-' : formatUnitCurrency(rawPrice, currency),
     quantity: rawQuantity === null ? '-' : formatNumber(rawQuantity, { maximumFractionDigits: 8 }),
     amount: computedAmount === null ? '-' : formatCurrency(computedAmount, currency),
-    status: mapTradeStatus(normalizedStatus),
+    status: mapTradeStatus(normalizedStatus, order.side),
     exchangeRate: '-',
     fees: (order.commission || order.tax)
       ? formatCurrency((Number(order.commission || 0) + Number(order.tax || 0)), currency)
@@ -582,9 +607,9 @@ export default function TradeHistoryTab() {
         </div>
         {isMoreFiltersOpen ? (
           <div className="mt-3 flex justify-end border-t border-slate-800 pt-3">
-            <div className="w-full rounded border border-slate-800 bg-[#0f172a] p-3 md:max-w-2xl">
+            <div className="w-full rounded border border-slate-800 bg-[#0f172a] p-3 md:max-w-4xl">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 md:ml-[25px]">
                   <span className="w-10 text-xs font-bold text-slate-500">구분</span>
                   {['ALL', '매수', '매도'].map((item) => (
                     <button
@@ -601,9 +626,9 @@ export default function TradeHistoryTab() {
                     </button>
                   ))}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 md:flex-1 md:justify-end md:pr-[25px]">
                   <span className="w-10 text-xs font-bold text-slate-500">상태</span>
-                  {['ALL', '체결완료', '미체결', '취소완료', '거절', '실패'].map((item) => (
+                  {['ALL', '주문 완료', '미체결', '체결완료', '취소완료', '구매실패', '판매실패'].map((item) => (
                     <button
                       key={item}
                       className={`rounded px-3 py-1.5 text-xs font-bold transition ${
@@ -670,7 +695,7 @@ export default function TradeHistoryTab() {
                       }`}>
                         {trade.status}{trade.status === '미체결' ? ' (Pending)' : ''}
                       </span>
-                      {trade.status === '미체결' && trade.sourceType === 'APP' ? (
+                      {trade.isActionable && trade.sourceType === 'APP' ? (
                         <div className="flex flex-wrap gap-2">
                           <button
                             className="rounded border border-ai-cyan/40 px-2.5 py-1 text-xs font-bold text-ai-cyan transition hover:bg-ai-cyan/10 disabled:cursor-not-allowed disabled:opacity-50"
@@ -779,7 +804,7 @@ export default function TradeHistoryTab() {
                 <span className="font-mono text-2xl font-extrabold text-emerald-300">{selectedTrade.amount}</span>
               </div>
 
-              {selectedTrade.status === '미체결' && selectedTrade.sourceType === 'APP' ? (
+              {selectedTrade.isActionable && selectedTrade.sourceType === 'APP' ? (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-2">
                     <button

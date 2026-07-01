@@ -391,6 +391,78 @@ def _infer_trade_status_from_order_status(order_status: dict | None, fallback: s
     return fallback
 
 
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _pick_nested_value(data: dict | None, keys: tuple[str, ...]):
+    if not isinstance(data, dict):
+        return None
+    for key in keys:
+        if key in data and data.get(key) not in (None, ""):
+            return data.get(key)
+    for value in data.values():
+        if isinstance(value, dict):
+            nested = _pick_nested_value(value, keys)
+            if nested not in (None, ""):
+                return nested
+    return None
+
+
+def _normalize_coinone_synced_status(order_status: dict | None, requested_qty: float = 0.0) -> tuple[str, dict]:
+    raw = (order_status or {}).get("raw") if isinstance(order_status, dict) else {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    raw_status = (
+        (order_status or {}).get("status")
+        or _pick_nested_value(raw, ("status", "order_status", "state", "orderState"))
+        or ""
+    )
+    normalized = str(raw_status).upper()
+    filled_qty = _as_float(_pick_nested_value(raw, (
+        "filled_qty",
+        "filled_quantity",
+        "executed_qty",
+        "executed_quantity",
+        "executed_volume",
+        "filledAmount",
+    )))
+    remaining_qty = _as_float(_pick_nested_value(raw, (
+        "remaining_qty",
+        "remain_qty",
+        "remaining_quantity",
+        "left_qty",
+        "unfilled_qty",
+    )), default=-1.0)
+    requested_qty = _as_float(requested_qty)
+
+    detail = {
+        "raw_status": raw_status,
+        "filled_qty": filled_qty,
+        "remaining_qty": remaining_qty,
+    }
+
+    if normalized in {"CANCELED", "CANCELLED", "CANCEL", "CANCEL_DONE"}:
+        return "CANCELED", detail
+    if normalized in {"REJECTED", "FAILED", "FAIL", "ERROR", "EXPIRED", "EXPIRE"}:
+        return "FAILED", detail
+    if normalized in {"EXECUTED", "FILLED", "COMPLETED", "COMPLETE", "DONE"}:
+        return "EXECUTED", detail
+    if requested_qty > 0 and filled_qty >= requested_qty:
+        return "EXECUTED", detail
+    if filled_qty > 0 and remaining_qty == 0:
+        return "EXECUTED", detail
+    if normalized in {"ORDERED", "RECEIVED", "ACCEPTED"}:
+        return "APPROVED", detail
+    return "PENDING", detail
+
+
 def _patch_proposal_as_not_actionable(auth_header: str, proposal_id: str, order_status: dict | None, reason: str):
     status = _infer_trade_status_from_order_status(order_status, fallback="EXECUTED")
     payload = {
@@ -1265,6 +1337,74 @@ def sync_kis_order_statuses():
             except Exception as exc:
                 errors.append(str(exc)[:200])
 
+    try:
+        coinone_proposals = query_supabase(
+            auth_header,
+            "trade_proposals",
+            "GET",
+            params={
+                "user_id": f"eq.{user_id}",
+                "exchange": "eq.COINONE",
+                "limit": "100",
+                "order": "created_at.desc",
+            },
+        ) or []
+    except Exception as e:
+        coinone_proposals = []
+        errors.append(f"Coinone order sync query failed: {str(e)[:160]}")
+
+    coinone_clients = {}
+    for proposal in coinone_proposals:
+        proposal_id = proposal.get("id")
+        symbol = proposal.get("symbol") or proposal.get("ticker")
+        order_id = proposal.get("external_order_id")
+        status = str(proposal.get("status") or "").upper()
+        if status in {"EXECUTED", "CANCELED", "CANCELLED", "REJECTED", "FAILED"}:
+            continue
+        if not proposal_id or not symbol or not order_id:
+            continue
+
+        broker_env = _resolve_proposal_broker_env(proposal)
+        try:
+            if broker_env not in coinone_clients:
+                record, access_key, secret_key = _load_user_exchange_record(
+                    auth_header,
+                    user_id,
+                    "COINONE",
+                    broker_env,
+                )
+                coinone_clients[broker_env] = _build_exchange_client("COINONE", broker_env, record, access_key, secret_key)
+            client = coinone_clients[broker_env]
+            checked_count += 1
+
+            current_order = client.get_order_status(order_id, symbol=symbol)
+            next_status, coinone_detail = _normalize_coinone_synced_status(
+                current_order,
+                requested_qty=proposal.get("volume"),
+            )
+            sync_detail = {
+                "account": {
+                    "exchange": "COINONE",
+                    "broker_env": broker_env,
+                },
+                "order_status": current_order,
+                "normalized": coinone_detail,
+            }
+            patch_payload = {
+                "status": next_status,
+                "broker_env": broker_env,
+                "failure_reason": None,
+                "raw_order_payload": {"sync_status_check": sync_detail},
+            }
+            if next_status == "CANCELED":
+                patch_payload["canceled_at"] = datetime.utcnow().isoformat() + "Z"
+            if next_status == "FAILED":
+                patch_payload["failure_reason"] = f"Coinone order status: {coinone_detail.get('raw_status') or 'FAILED'}"
+            _patch_trade_proposal(auth_header, proposal_id, patch_payload)
+            synced_count += 1
+        except Exception as exc:
+            errors.append(f"Coinone {symbol}: {str(exc)[:180]}")
+
     return jsonify({
         "success": True,
         "checked_count": checked_count,
@@ -1717,12 +1857,6 @@ def cancel_replace_order():
     if status in {"EXECUTED", "CANCELED", "REJECTED", "FAILED"}:
         return jsonify({"success": False, "message": "이미 완료되었거나 재주문할 수 없는 주문입니다."}), 400
 
-    if proposal.get("external_order_id"):
-        return jsonify({
-            "success": False,
-            "message": f"{exchange} 실제 주문 취소 API 연결 전에는 거래소 주문번호가 있는 주문을 취소 후 재주문할 수 없습니다.",
-        }), 400
-
     try:
         price_value = float(new_price) if new_price not in (None, "") else float(proposal.get("price") or 0)
         quantity_value = float(new_quantity) if new_quantity not in (None, "") else float(proposal.get("volume") or 0)
@@ -1731,11 +1865,45 @@ def cancel_replace_order():
         if quantity_value <= 0:
             return jsonify({"success": False, "message": "재주문 수량은 0보다 커야 합니다."}), 400
 
-        _patch_trade_proposal(auth_header, proposal_id, {
+        cancel_detail = None
+        replacement_order = None
+        external_order_id = proposal.get("external_order_id")
+        broker_env = _resolve_proposal_broker_env(proposal, data.get("broker_env"))
+        client = None
+        if external_order_id:
+            if exchange != "COINONE":
+                return jsonify({
+                    "success": False,
+                    "message": f"{exchange} 실제 주문 취소 API 연결 전에는 거래소 주문번호가 있는 주문을 취소 후 재주문할 수 없습니다.",
+                }), 400
+            record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
+            client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
+            cancel_detail = client.cancel_order(external_order_id, symbol=proposal.get("symbol") or proposal.get("ticker"))
+
+        cancel_patch = {
             "status": "CANCELED",
             "failure_reason": None,
             "canceled_at": datetime.utcnow().isoformat() + "Z",
-        })
+        }
+        if cancel_detail:
+            cancel_patch["raw_order_payload"] = {"cancel_replace_cancel": cancel_detail}
+        _patch_trade_proposal(auth_header, proposal_id, cancel_patch)
+
+        if exchange == "COINONE" and external_order_id:
+            if client is None:
+                record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
+                client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
+            replacement_order = client.place_order(
+                symbol=proposal.get("symbol") or proposal.get("ticker"),
+                qty=quantity_value,
+                side=proposal.get("side"),
+                ord_type=proposal.get("ord_type") or "LIMIT",
+                price=price_value,
+            )
+
+        replacement_status = "PENDING"
+        if replacement_order:
+            replacement_status = "EXECUTED" if _is_terminal_order_status(replacement_order.get("status")) else "APPROVED"
 
         replacement_payload = {
             "user_id": user_id,
@@ -1743,7 +1911,7 @@ def cancel_replace_order():
             "asset_type": proposal.get("asset_type") or "CRYPTO",
             "ticker": proposal.get("ticker"),
             "symbol": proposal.get("symbol") or proposal.get("ticker"),
-            "broker_env": _resolve_proposal_broker_env(proposal, data.get("broker_env")),
+            "broker_env": broker_env,
             "side": proposal.get("side"),
             "price": price_value,
             "volume": quantity_value,
@@ -1751,13 +1919,19 @@ def cancel_replace_order():
             "market_country": proposal.get("market_country"),
             "currency": proposal.get("currency") or ("USD" if exchange == "BINANCE" else "KRW"),
             "replaced_from_id": proposal_id,
-            "status": "PENDING",
+            "client_order_id": replacement_order.get("client_order_id") if replacement_order else None,
+            "external_order_id": replacement_order.get("order_id") if replacement_order else None,
+            "raw_order_payload": {
+                "cancel_replace_cancel": cancel_detail,
+                "cancel_replace_order": replacement_order.get("raw") if replacement_order else None,
+            },
+            "status": replacement_status,
         }
         created = _insert_trade_proposal_with_schema_fallback(auth_header, replacement_payload)
         return jsonify({
             "success": True,
-            "message": "기존 주문 제안을 취소하고 재주문 제안을 생성했습니다.",
-            "status": "PENDING",
+            "message": "기존 주문을 취소하고 새 주문을 전송했습니다." if replacement_order else "기존 주문을 취소하고 재주문 제안을 생성했습니다.",
+            "status": replacement_status,
             "data": created,
         })
     except ValueError as e:

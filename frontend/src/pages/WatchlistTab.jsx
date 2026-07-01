@@ -330,22 +330,22 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
 
     if (targetDisplayCurrency === 'KRW') {
       if (currency === 'USD' || currency === 'USDT') {
-        return `₩${Math.round(val * rate).toLocaleString()}`
+        return `₩${(val * rate).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
       }
-      return `₩${Math.round(val).toLocaleString()}`
+      return `₩${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
     }
 
     if (targetDisplayCurrency === 'USD') {
       if (currency === 'KRW') {
-        return `$${(val / rate).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        return `$${(val / rate).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
       }
-      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
     }
 
     if (currency === 'USD' || currency === 'USDT') {
-      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
     }
-    return `₩${Math.round(val).toLocaleString()}`
+    return `₩${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
   }
   const [selectedId, setSelectedId] = useState('')
   const [watchlistItems, setWatchlistItems] = useState([])

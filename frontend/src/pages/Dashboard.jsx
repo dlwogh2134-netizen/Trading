@@ -43,6 +43,26 @@ const formatCurrency = (value, currency, displayCurrency = 'KRW', exchangeRate =
   return `₩${Math.round(numeric).toLocaleString()}`
 }
 
+const formatUnitCurrency = (value, currency, displayCurrency = 'KRW', exchangeRate = 1500) => {
+  const numeric = toNumber(value)
+  const rate = toNumber(exchangeRate) || 1500
+
+  if (displayCurrency === 'KRW') {
+    const displayValue = (currency === 'USD' || currency === 'USDT') ? numeric * rate : numeric
+    return `₩${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+  }
+
+  if (displayCurrency === 'USD') {
+    const displayValue = currency === 'KRW' ? numeric / rate : numeric
+    return `$${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+  }
+
+  if (currency === 'USD' || currency === 'USDT') {
+    return `$${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+  }
+  return `₩${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+}
+
 const formatNullableCurrency = (value, currency, displayCurrency = 'KRW', exchangeRate = 1500) => {
   if (value === null || value === undefined || value === '') return '-'
   return formatCurrency(value, currency, displayCurrency, exchangeRate)
@@ -1054,7 +1074,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           const priceDelta = hasSavedPrice && hasCurrentPrice ? currentPrice - savedPrice : 0
                           const priceDeltaRate = hasSavedPrice ? (priceDelta / savedPrice) * 100 : 0
                           const priceDeltaTone = priceDelta > 0 ? 'text-red-400' : priceDelta < 0 ? 'text-blue-400' : 'text-white'
-                          const signedDeltaAmount = `${priceDelta > 0 ? '+' : priceDelta < 0 ? '-' : ''}${formatCurrency(Math.abs(priceDelta), stockCurrency, stockCurrency === 'USD' || stockCurrency === 'USDT' ? displayCurrency : 'KRW', balance?.exchange_rate || 1380)}`
+                          const signedDeltaAmount = `${priceDelta > 0 ? '+' : priceDelta < 0 ? '-' : ''}${formatUnitCurrency(Math.abs(priceDelta), stockCurrency, stockCurrency === 'USD' || stockCurrency === 'USDT' ? displayCurrency : 'KRW', balance?.exchange_rate || 1380)}`
                           const signedDeltaRate = `${priceDeltaRate > 0 ? '+' : ''}${priceDeltaRate.toFixed(2)}%`
                           const exchangeRate = balance?.exchange_rate || 1380
                           const currentDisplayCurrency = stockCurrency === 'USD' || stockCurrency === 'USDT' ? displayCurrency : 'KRW'
@@ -1063,10 +1083,10 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                               <td className="px-3 py-2.5 font-bold text-white">{item.name}</td>
                               <td className="px-3 py-2.5 text-slate-400">{item.market}</td>
                               <td className="px-3 py-2.5 text-right font-mono text-slate-300">
-                                {hasSavedPrice ? formatCurrency(savedPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
+                                {hasSavedPrice ? formatUnitCurrency(savedPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
                               </td>
                               <td className="px-3 py-2.5 text-right font-mono text-slate-300">
-                                {hasCurrentPrice ? formatCurrency(currentPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
+                                {hasCurrentPrice ? formatUnitCurrency(currentPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
                               </td>
                               <td className={`px-3 py-2.5 text-right font-mono font-bold ${priceDeltaTone}`}>
                                 {hasSavedPrice && hasCurrentPrice ? `${signedDeltaAmount} (${signedDeltaRate})` : '-'}
@@ -1162,10 +1182,10 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                               </td>
                               <td className="py-3 px-3 text-right text-slate-300">{stock.qty}</td>
                               <td className="py-3 px-3 text-right text-slate-300">
-                                {formatCurrency(stock.avg_price, stockCurrency, currentDisplayCurrency, exchangeRate)}
+                                {formatUnitCurrency(stock.avg_price, stockCurrency, currentDisplayCurrency, exchangeRate)}
                               </td>
                               <td className="py-3 px-3 text-right text-slate-100">
-                                {formatCurrency(stock.current_price, stockCurrency, currentDisplayCurrency, exchangeRate)}
+                                {formatUnitCurrency(stock.current_price, stockCurrency, currentDisplayCurrency, exchangeRate)}
                               </td>
                               <td className={`py-3 px-3 text-right font-semibold ${stock.profit > 0 ? 'text-red-400' : stock.profit < 0 ? 'text-blue-400' : 'text-white'}`}>
                                 {stock.profit > 0 ? '+' : ''}{formatCurrency(stock.profit, stockCurrency, currentDisplayCurrency, exchangeRate)}

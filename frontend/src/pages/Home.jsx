@@ -69,8 +69,8 @@ function formatPrice(row) {
   }
   const price = row.price ?? row.current_price ?? row.live_price;
   if (price === undefined || price === null || price === "") return "-";
-  if (isForeignRow(row)) return `$${formatNumber(price, Number(price) % 1 === 0 ? 0 : 2)}`;
-  return `${formatNumber(price, Number(price) % 1 === 0 ? 0 : 2)}원`;
+  if (isForeignRow(row)) return `$${formatNumber(price, Number(price) % 1 === 0 ? 0 : 1)}`;
+  return `${formatNumber(price, Number(price) % 1 === 0 ? 0 : 1)}원`;
 }
 
 function formatChange(row) {
