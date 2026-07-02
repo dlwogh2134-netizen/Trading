@@ -6,7 +6,7 @@ import logging
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from backend.services.exchange_client import ExchangeClient
+from backend.services.exchange_client import ExchangeClient, MarketClosedError, is_market_closed_order_error
 
 KST = timezone(timedelta(hours=9))
 logger = logging.getLogger(__name__)
@@ -829,11 +829,16 @@ class KISClient(ExchangeClient):
         
         res = requests.post(url, json=payload, headers=headers, timeout=10)
         if res.status_code != 200:
+            if is_market_closed_order_error(res.text):
+                raise MarketClosedError()
             raise Exception(f"KIS place_order failed: {res.text}")
             
         data = res.json()
         if data.get("rt_cd") != "0":
-            raise Exception(f"KIS place_order error: {data.get('msg1')}")
+            message = data.get("msg1")
+            if is_market_closed_order_error(message):
+                raise MarketClosedError()
+            raise Exception(f"KIS place_order error: {message}")
             
         output = data.get("output", {})
         return {

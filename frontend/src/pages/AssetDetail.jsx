@@ -1,11 +1,50 @@
 import React, { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
-import { supabase, deleteUserWatchlistItem, fetchUserWatchlist, upsertUserWatchlistItem } from '../supabaseClient'
+import { supabase, deleteUserWatchlistItem, ensureNewsSummaries, fetchUserWatchlist, upsertUserWatchlistItem } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
+const OPEN_ORDER_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,ord_type,currency,broker_env,external_order_id,status,created_at'
+const AUTO_RULE_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,broker_env,entry_price,investment_amount,quantity,target_profit_rate,stop_loss_rate,execution_mode,trigger_side,trigger_price,triggered_at,last_checked_at,last_error,status,created_at,updated_at'
+const ACTIONABLE_ORDER_STATUSES = ['PENDING', 'APPROVED', 'ORDERED', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED']
+
+const isActionableOrderStatus = (status) => ACTIONABLE_ORDER_STATUSES.includes(String(status || '').toUpperCase())
+const isCancelReplaceExchange = (exchange) => ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(String(exchange || '').toUpperCase())
+
+const getOrderStatusLabel = (status) => {
+  const normalized = String(status || '').toUpperCase()
+  if (['PENDING', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED'].includes(normalized)) return '미체결'
+  if (['APPROVED', 'ORDERED'].includes(normalized)) return '주문 완료'
+  if (normalized === 'EXECUTED') return '체결완료'
+  if (['CANCELED', 'CANCELLED'].includes(normalized)) return '취소완료'
+  if (['FAILED', 'REJECTED', 'EXPIRED'].includes(normalized)) return '실패'
+  return normalized || '-'
+}
+
+const getOrderSideLabel = (side) => (String(side || '').toUpperCase() === 'SELL' ? '매도' : '매수')
+
+const getAutoRuleStatusLabel = (status) => {
+  const normalized = String(status || '').toUpperCase()
+  if (normalized === 'RUNNING') return '감시 중'
+  if (normalized === 'COMPLETED') return '완료'
+  if (normalized === 'STOPPED') return '정지'
+  return normalized || '-'
+}
+
+const getAutoExecutionModeLabel = (mode) => {
+  const normalized = String(mode || '').toUpperCase()
+  if (normalized === 'AUTO') return '조건 도달 시 자동 매도'
+  return '조건 도달 시 매도 제안'
+}
+
+const getAutoTriggerLabel = (triggerSide) => {
+  const normalized = String(triggerSide || '').toUpperCase()
+  if (normalized === 'TAKE_PROFIT') return '익절 도달'
+  if (normalized === 'STOP_LOSS') return '손절 도달'
+  return '-'
+}
 
 export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userProfile }) {
   const { assetType, symbol } = useParams()
@@ -24,17 +63,44 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
   const getCurrencyDigits = () => {
     if (exchange === 'COINONE') return 0;
-    if (exchange === 'BINANCE' || exchange === 'BINANCE_UM_FUTURES') return 4;
+    if (exchange === 'BINANCE' || exchange === 'BINANCE_UM_FUTURES') return 6;
     if (resolvedAssetType === 'STOCK') {
       return /^\d+$/.test(symbol) ? 0 : 4;
     }
     return 4;
   };
 
+  const getPriceDigitsForValue = (value) => {
+    const numeric = Math.abs(Number(value))
+    if (!Number.isFinite(numeric)) return getCurrencyDigits()
+    if (exchange === 'COINONE') return 0
+    if (exchange === 'BINANCE' || exchange === 'BINANCE_UM_FUTURES') {
+      if (numeric > 0 && numeric < 0.01) return 8
+      if (numeric > 0 && numeric < 1) return 6
+      if (numeric < 100) return 4
+      return 2
+    }
+    if (resolvedAssetType === 'STOCK' && !/^\d+$/.test(symbol)) {
+      if (numeric > 0 && numeric < 1) return 6
+      return 4
+    }
+    return getCurrencyDigits()
+  }
+
   const formatUnitPrice = (value) => {
     const numeric = Number(value)
     if (!Number.isFinite(numeric)) return '-'
-    return `${getCurrencySign()}${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+    const digits = getPriceDigitsForValue(numeric)
+    return `${getCurrencySign()}${numeric.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
+  }
+
+  const getChartPriceFormat = (value) => {
+    const digits = getPriceDigitsForValue(value || currentPrice)
+    return {
+      type: 'price',
+      precision: digits,
+      minMove: 1 / (10 ** digits),
+    }
   }
 
   // 1. 거래소 기본값 세팅 (주식은 TOSS 실거래를 기본값으로, 코인은 COINONE. 단, USDT 마켓 코인은 BINANCE)
@@ -68,6 +134,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [autoExit, setAutoExit] = useState(false)
   const [targetProfitRate, setTargetProfitRate] = useState(5.0)
   const [stopLossRate, setStopLossRate] = useState(-3.0)
+  const [autoExitExecutionMode, setAutoExitExecutionMode] = useState('PROPOSAL')
   const [futuresIntent, setFuturesIntent] = useState('LONG_OPEN')
   const [futuresLeverage, setFuturesLeverage] = useState(1)
   const [futuresMarginType, setFuturesMarginType] = useState('CROSSED')
@@ -97,6 +164,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [loadingNews, setLoadingNews] = useState(false)
   const [newsSyncing, setNewsSyncing] = useState(false)
   const [newsSyncMessage, setNewsSyncMessage] = useState({ text: '', isError: false })
+  const [selectedNewsId, setSelectedNewsId] = useState('')
+  const [summaryLoadingId, setSummaryLoadingId] = useState('')
   const [disclosureList, setDisclosureList] = useState([])
   const [loadingDisclosures, setLoadingDisclosures] = useState(false)
   const [selectedDisclosureId, setSelectedDisclosureId] = useState('')
@@ -119,6 +188,16 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [isMlSignalExpanded, setIsMlSignalExpanded] = useState(false)
   const [isFavorite, setIsFavorite] = useState(false)
   const [symbolLookupReady, setSymbolLookupReady] = useState(false)
+  const [isChartExpanded, setIsChartExpanded] = useState(false)
+  const [openOrders, setOpenOrders] = useState([])
+  const [openOrdersLoading, setOpenOrdersLoading] = useState(false)
+  const [orderActionLoadingId, setOrderActionLoadingId] = useState('')
+  const [orderManagementMessage, setOrderManagementMessage] = useState({ text: '', isError: false })
+  const [modifyOrderId, setModifyOrderId] = useState('')
+  const [modifyDraft, setModifyDraft] = useState({ price: '', quantity: '' })
+  const [autoRules, setAutoRules] = useState([])
+  const [autoRulesLoading, setAutoRulesLoading] = useState(false)
+  const [autoRulesMessage, setAutoRulesMessage] = useState('')
 
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
@@ -139,8 +218,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       ? 'USD'
       : (/^\d+$/.test(symbol) ? 'KRW' : 'USD')
   const showLevel2Panel = false
-  const selectedDisclosure = disclosureList.find((item) => item.id === selectedDisclosureId) || disclosureList[0] || null
-
   const [isMarketClosed, setIsMarketClosed] = useState(false)
   const chartPollMs = isMarketClosed
     ? 60000
@@ -154,6 +231,188 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return null
     return `Bearer ${session.access_token}`
+  }
+
+  const loadOpenOrders = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user?.id || !symbol) {
+      setOpenOrders([])
+      return
+    }
+
+    setOpenOrdersLoading(true)
+    try {
+      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+      let query = supabase
+        .from('trade_proposals')
+        .select(OPEN_ORDER_SELECT_FIELDS)
+        .eq('exchange', exchange)
+        .in('status', ACTIONABLE_ORDER_STATUSES)
+        .or(`symbol.eq.${normalizedSymbol},ticker.eq.${normalizedSymbol}`)
+        .order('created_at', { ascending: false })
+        .limit(8)
+
+      if (brokerEnv) {
+        query = query.eq('broker_env', brokerEnv)
+      }
+
+      const { data, error } = await query
+      if (error) throw error
+      setOpenOrders((data || []).filter((order) => isActionableOrderStatus(order.status)))
+    } catch (error) {
+      const message = getApiErrorMessage(error, '미체결 주문을 불러오지 못했습니다.')
+      setOpenOrders([])
+      setOrderManagementMessage({
+        text: message.detail ? `${message.title} ${message.detail}` : message.title,
+        isError: true,
+      })
+    } finally {
+      setOpenOrdersLoading(false)
+    }
+  }
+
+  const loadAutoTradingRules = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user?.id || !symbol) {
+      setAutoRules([])
+      return
+    }
+
+    setAutoRulesLoading(true)
+    try {
+      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+      const primaryResult = await supabase
+        .from('auto_trading_rules')
+        .select(AUTO_RULE_SELECT_FIELDS)
+        .eq('exchange', exchange)
+        .or(`symbol.eq.${normalizedSymbol},ticker.eq.${normalizedSymbol}`)
+        .order('created_at', { ascending: false })
+        .limit(5)
+
+      if (primaryResult.error) {
+        const legacyResult = await supabase
+          .from('auto_trading_rules')
+          .select('id,exchange,asset_type,ticker,entry_price,investment_amount,target_profit_rate,stop_loss_rate,status,created_at,updated_at')
+          .eq('exchange', exchange)
+          .eq('ticker', normalizedSymbol)
+          .order('created_at', { ascending: false })
+          .limit(5)
+        if (legacyResult.error) throw primaryResult.error
+        setAutoRules(legacyResult.data || [])
+      } else {
+        setAutoRules(primaryResult.data || [])
+      }
+      setAutoRulesMessage('')
+    } catch (error) {
+      const message = getApiErrorMessage(error, '조건감시 상태를 불러오지 못했습니다.')
+      setAutoRules([])
+      setAutoRulesMessage(message.detail ? `${message.title} ${message.detail}` : message.title)
+    } finally {
+      setAutoRulesLoading(false)
+    }
+  }
+
+  const requestOrderAction = async (endpoint, body) => {
+    const authHeader = await getAuthHeader()
+    if (!authHeader) {
+      throw new Error('로그인이 필요합니다.')
+    }
+
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authHeader,
+      },
+      body: JSON.stringify(body),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload.success) {
+      const message = getApiErrorMessage(payload, '주문 처리 요청에 실패했습니다.')
+      throw new Error(message.detail ? `${message.title} ${message.detail}` : message.title)
+    }
+    return payload
+  }
+
+  const handleSyncOpenOrders = async () => {
+    setOrderActionLoadingId('sync-open-orders')
+    setOrderManagementMessage({ text: '', isError: false })
+    try {
+      await requestOrderAction('/api/trade/orders/sync-status', {})
+      await loadOpenOrders()
+      await fetchUserBalance()
+      setOrderManagementMessage({ text: '주문 상태를 최신 정보로 갱신했습니다.', isError: false })
+    } catch (error) {
+      setOrderManagementMessage({ text: error.message, isError: true })
+    } finally {
+      setOrderActionLoadingId('')
+    }
+  }
+
+  const handleCancelOpenOrder = async (order) => {
+    const confirmed = window.confirm(`${order.symbol || order.ticker} ${getOrderSideLabel(order.side)} 주문을 취소할까요?`)
+    if (!confirmed) return
+
+    setOrderActionLoadingId(`cancel-${order.id}`)
+    setOrderManagementMessage({ text: '', isError: false })
+    try {
+      const payload = await requestOrderAction('/api/trade/order/cancel', {
+        proposal_id: order.id,
+        broker_env: order.broker_env || brokerEnv,
+      })
+      await loadOpenOrders()
+      await fetchUserBalance()
+      setOrderManagementMessage({ text: payload.message || '주문 취소 요청이 완료되었습니다.', isError: false })
+    } catch (error) {
+      setOrderManagementMessage({ text: error.message, isError: true })
+    } finally {
+      setOrderActionLoadingId('')
+    }
+  }
+
+  const handleOpenModifyOrder = (order) => {
+    setModifyOrderId(order.id)
+    setModifyDraft({
+      price: order.price ? String(order.price) : '',
+      quantity: order.volume ? String(order.volume) : '',
+    })
+    setOrderManagementMessage({ text: '', isError: false })
+  }
+
+  const handleSubmitModifyOrder = async (order) => {
+    const nextPrice = String(modifyDraft.price || '').trim()
+    const nextQuantity = String(modifyDraft.quantity || '').trim()
+    if (!nextPrice && !nextQuantity) {
+      setOrderManagementMessage({ text: '정정할 가격 또는 수량을 입력해 주세요.', isError: true })
+      return
+    }
+
+    const isCancelReplace = isCancelReplaceExchange(order.exchange)
+    setOrderActionLoadingId(`modify-${order.id}`)
+    setOrderManagementMessage({ text: '', isError: false })
+    try {
+      const payload = await requestOrderAction(
+        isCancelReplace ? '/api/trade/order/cancel-replace' : '/api/trade/order/modify',
+        {
+          proposal_id: order.id,
+          broker_env: order.broker_env || brokerEnv,
+          price: nextPrice || undefined,
+          quantity: nextQuantity || undefined,
+        },
+      )
+      setModifyOrderId('')
+      setModifyDraft({ price: '', quantity: '' })
+      await loadOpenOrders()
+      await fetchUserBalance()
+      setOrderManagementMessage({
+        text: payload.message || (isCancelReplace ? '취소 후 재주문 요청이 완료되었습니다.' : '주문 정정 요청이 완료되었습니다.'),
+        isError: false,
+      })
+    } catch (error) {
+      setOrderManagementMessage({ text: error.message, isError: true })
+    } finally {
+      setOrderActionLoadingId('')
+    }
   }
 
   const pickPreferredStockBroker = (statusMap) => {
@@ -343,7 +602,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const fetchNewsList = async () => {
     setLoadingNews(true)
     try {
-      const response = await fetch(`${API_BASE_URL}/api/news?symbol=${symbol}&limit=6`)
+      const response = await fetch(`${API_BASE_URL}/api/news?symbol=${symbol}&limit=10`)
       const resData = await response.json()
       if (resData.success && resData.data && resData.data.items) {
         setNewsList(resData.data.items)
@@ -352,6 +611,52 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       console.error("뉴스 로드 실패:", e)
     } finally {
       setLoadingNews(false)
+    }
+  }
+
+  const handleToggleNewsSummary = async (item) => {
+    const articleId = item?.id
+    if (!articleId) return
+
+    if (selectedNewsId === articleId) {
+      setSelectedNewsId('')
+      return
+    }
+
+    setSelectedNewsId(articleId)
+
+    if (item.ai_summary) {
+      return
+    }
+
+    setSummaryLoadingId(articleId)
+
+    try {
+      const response = await ensureNewsSummaries({ articleIds: [articleId] })
+      const updatedItem = response?.items?.find((newsItem) => newsItem.id === articleId) || response?.items?.[0]
+
+      if (updatedItem) {
+        setNewsList((current) =>
+          current.map((newsItem) =>
+            newsItem.id === articleId
+              ? {
+                  ...newsItem,
+                  ai_summary: updatedItem.ai_summary || newsItem.ai_summary,
+                  ai_summary_model: updatedItem.ai_summary_model || newsItem.ai_summary_model,
+                  ai_summary_generated_at: updatedItem.ai_summary_generated_at || newsItem.ai_summary_generated_at,
+                  ai_summary_prompt_version: updatedItem.ai_summary_prompt_version || newsItem.ai_summary_prompt_version,
+                }
+              : newsItem,
+          ),
+        )
+      }
+    } catch (error) {
+      setNewsSyncMessage({
+        text: error.message || '뉴스 요약을 불러오지 못했습니다.',
+        isError: true,
+      })
+    } finally {
+      setSummaryLoadingId('')
     }
   }
 
@@ -523,6 +828,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     } catch (e) {
       return '';
     }
+  }
+
+  const formatNewsSource = (source) => {
+    const normalized = String(source || '').trim().toUpperCase()
+    if (normalized === 'NAVER') return '네이버'
+    if (normalized === 'FINNHUB') return 'Finnhub'
+    return source || 'NEWS'
   }
 
   const formatTimestamp = (value) => {
@@ -1075,6 +1387,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setNewsSyncMessage({ text: '', isError: false })
     fetchCandles()
     fetchUserBalance()
+    loadOpenOrders()
+    loadAutoTradingRules()
     fetchNewsList()
     fetchDisclosureList()
   }, [exchange, symbol, chartInterval, brokerEnv, symbolLookupReady])
@@ -1242,7 +1556,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           tickMarkFormatter: (time) => formatChartTick(time),
         },
         width: containerWidth,
-        height: 460,
+        height: 300,
       })
 
       const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -1251,6 +1565,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         borderVisible: false,
         wickUpColor: '#ef4444',
         wickDownColor: '#3b82f6',
+        priceFormat: getChartPriceFormat(currentPrice),
       })
 
       chartRef.current = chart
@@ -1310,6 +1625,21 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       console.error('차트 데이터 갱신 실패:', err)
     }
   }, [candleData, symbolLookupReady])
+
+  useEffect(() => {
+    if (!candleSeriesRef.current) return
+    candleSeriesRef.current.applyOptions({
+      priceFormat: getChartPriceFormat(currentPrice),
+    })
+  }, [currentPrice, exchange, resolvedAssetType, symbol])
+
+  useEffect(() => {
+    if (!chartRef.current || !chartContainerRef.current) return
+
+    const nextHeight = isChartExpanded ? 720 : 300
+    const nextWidth = chartContainerRef.current.clientWidth || 800
+    chartRef.current.applyOptions({ width: nextWidth, height: nextHeight })
+  }, [isChartExpanded])
 
   // 5. 수동 주문 제출 핸들러
   const handlePlaceOrder = async (e) => {
@@ -1381,6 +1711,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         auto_exit: autoExit,
         target_profit_rate: autoExit ? parseFloat(targetProfitRate) : null,
         stop_loss_rate: autoExit ? parseFloat(stopLossRate) : null,
+        auto_exit_execution_mode: autoExit ? autoExitExecutionMode : 'PROPOSAL',
         position_side: exchange === 'BINANCE_UM_FUTURES' ? 'BOTH' : null,
         reduce_only: exchange === 'BINANCE_UM_FUTURES' ? effectiveReduceOnly : false,
         leverage: exchange === 'BINANCE_UM_FUTURES' ? Number(futuresLeverage) : null,
@@ -1406,6 +1737,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         })
         setQuantity('')
         fetchUserBalance() // 주문 성공 시 보유 자산 즉시 갱신
+        loadOpenOrders()
+        loadAutoTradingRules()
       } else {
         const message = getApiErrorMessage(resData, '주문 전송에 실패했습니다.')
         setTradeMessage({
@@ -1441,6 +1774,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const myHoldingAbsQty = Math.abs(myHoldingQty)
   const myHoldingEvalAmount = Number(myHolding?.eval_amount ?? (Number(myHolding?.current_price || 0) * myHoldingAbsQty))
   const myHoldingDirection = myHolding?.position_direction || (myHoldingQty < 0 ? 'SHORT' : 'LONG')
+  const baseAvailableCash = Number(userBalance?.available_cash ?? NaN)
   const overallFeedStatus = getOverallFeedStatus()
   const isOrderBlocked = brokerEnv === 'REAL' && (
     orderPrecheck?.exceeds_real_order_limit ||
@@ -1448,6 +1782,41 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     orderPrecheck?.insufficient_cash ||
     orderPrecheck?.insufficient_holding
   )
+  const chartCardClassName = isChartExpanded
+    ? 'fixed inset-3 z-50 flex flex-col gap-4 rounded-2xl border border-cyan-500/40 bg-[#0e1529] p-4 shadow-2xl shadow-cyan-950/40 backdrop-blur-xl sm:inset-6'
+    : 'bg-[#0e1529]/90 border border-[#1f2945] rounded-xl p-4 flex flex-col gap-4 backdrop-blur-md'
+  const chartPanelClassName = isChartExpanded
+    ? 'w-full relative h-[72vh] min-h-[520px] bg-[#0e1529] rounded-lg overflow-hidden border border-cyan-500/20'
+    : 'w-full relative h-[300px] min-h-[300px] bg-[#0e1529] rounded-lg overflow-hidden border border-[#1f2945]/60'
+  const holdingSummaryLabel = myHolding && myHoldingAbsQty > 0
+    ? `${myHoldingAbsQty.toLocaleString()} ${exchange === 'BINANCE_UM_FUTURES' ? '계약' : '주'}`
+    : dbEstimatedHolding
+      ? `${dbEstimatedHolding.estimatedQty.toLocaleString()} 주 추정`
+      : '보유 없음'
+  const availableCashLabel = orderPrecheck?.available_cash != null
+    ? `${getCurrencySign()}${Number(orderPrecheck.available_cash).toLocaleString(undefined, { maximumFractionDigits: getCurrencyDigits() })}`
+    : Number.isFinite(baseAvailableCash)
+      ? `${getCurrencySign()}${baseAvailableCash.toLocaleString(undefined, { maximumFractionDigits: getCurrencyDigits() })}`
+      : '잔고 조회 필요'
+
+  const handleFillFullExitOrder = () => {
+    const exitQty = myHoldingAbsQty || dbEstimatedHolding?.estimatedQty || 0
+    if (!exitQty || exitQty <= 0) {
+      setTradeMessage({ text: '현재 선택 계좌에서 자동 입력할 보유 수량이 없습니다.', isError: true })
+      return
+    }
+
+    setQuantity(String(exitQty))
+    if (orderType === 'LIMIT' && currentPrice > 0) {
+      setPrice(String(currentPrice))
+    }
+    if (exchange === 'BINANCE_UM_FUTURES') {
+      setFuturesIntent(myHoldingDirection === 'SHORT' ? 'SHORT_CLOSE' : 'LONG_CLOSE')
+    } else {
+      setSide('SELL')
+    }
+    setTradeMessage({ text: '보유 수량 기준으로 청산/매도 주문값을 채웠습니다. 전송 전 사전검증을 확인하세요.', isError: false })
+  }
 
   if (!symbolLookupReady) {
     return (
@@ -1540,16 +1909,24 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         {/* 2. 메인 3열(3-column) WTS 레이아웃 */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           
-          {/* [1열: 좌측 - 차트 및 요약 뉴스 탭 (6/12 cols)] */}
-          <div className={`${showLevel2Panel ? 'lg:col-span-6' : 'lg:col-span-9'} flex flex-col gap-5`}>
+          {/* [1열: 좌측 - 컴팩트 차트 및 저비용 정보 패널] */}
+          <div className={`${showLevel2Panel ? 'lg:col-span-6' : 'lg:col-span-8'} flex flex-col gap-5`}>
             
             {/* 차트 카드 */}
-            <div className="bg-[#0e1529]/90 border border-[#1f2945] rounded-xl p-4 flex flex-col gap-4 backdrop-blur-md">
+            {isChartExpanded && (
+              <button
+                type="button"
+                aria-label="차트 크게보기 닫기"
+                onClick={() => setIsChartExpanded(false)}
+                className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+              />
+            )}
+            <div className={chartCardClassName}>
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
                     <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
-                    <span className="text-xs font-bold text-white">실시간 통합 차트</span>
+                    <span className="text-xs font-bold text-white">{isChartExpanded ? '실시간 통합 차트 크게보기' : '컴팩트 차트'}</span>
                   </div>
                   <p className="text-[10px] text-slate-500 font-mono">
                     마지막 차트 확인 {formatTimestamp(marketFeeds.candles.checkedAt)}
@@ -1557,63 +1934,375 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 </div>
                 
                 {/* 캔들 주기 변경 탭 */}
-                <div className="flex flex-wrap gap-1 bg-[#1b253b] p-0.5 rounded border border-[#2b395b] max-w-[70%] sm:max-w-none justify-end">
-                  {resolvedAssetType === 'STOCK' ? (
-                    <>
-                      {[
-                        { label: '1분', val: '1m' },
-                        { label: '5분', val: '5m' },
-                        { label: '15분', val: '15m' },
-                        { label: '30분', val: '30m' },
-                        { label: '1시간', val: '1h' },
-                        { label: '일봉', val: '1d' },
-                        { label: '주봉', val: '1w' },
-                        { label: '월봉', val: '1M' }
-                      ].map((item) => (
-                        <button
-                          key={item.val}
-                          onClick={() => setChartInterval(item.val)}
-                          className={`text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2.5 py-0.5 rounded transition-all cursor-pointer ${chartInterval === item.val ? 'bg-cyan-500 text-slate-950 font-black' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </>
-                  ) : (
-                    <>
-                      {[
-                        { label: '1분', val: '1m' },
-                        { label: '5분', val: '5m' },
-                        { label: '15분', val: '15m' },
-                        { label: '30분', val: '30m' },
-                        { label: '1시간', val: '1h' },
-                        { label: '4시간', val: '4h' },
-                        { label: '일봉', val: '1d' },
-                        { label: '주봉', val: '1w' },
-                        { label: '월봉', val: '1M' }
-                      ].map((item) => (
-                        <button
-                          key={item.val}
-                          onClick={() => setChartInterval(item.val)}
-                          className={`text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2.5 py-0.5 rounded transition-all cursor-pointer ${chartInterval === item.val ? 'bg-cyan-500 text-slate-950 font-black' : 'text-slate-400 hover:text-white'}`}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </>
-                  )}
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="flex flex-wrap gap-1 bg-[#1b253b] p-0.5 rounded border border-[#2b395b] justify-end">
+                    {resolvedAssetType === 'STOCK' ? (
+                      <>
+                        {[
+                          { label: '1분', val: '1m' },
+                          { label: '5분', val: '5m' },
+                          { label: '15분', val: '15m' },
+                          { label: '30분', val: '30m' },
+                          { label: '1시간', val: '1h' },
+                          { label: '일봉', val: '1d' },
+                          { label: '주봉', val: '1w' },
+                          { label: '월봉', val: '1M' }
+                        ].map((item) => (
+                          <button
+                            key={item.val}
+                            onClick={() => setChartInterval(item.val)}
+                            className={`text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2.5 py-0.5 rounded transition-all cursor-pointer ${chartInterval === item.val ? 'bg-cyan-500 text-slate-950 font-black' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        {[
+                          { label: '1분', val: '1m' },
+                          { label: '5분', val: '5m' },
+                          { label: '15분', val: '15m' },
+                          { label: '30분', val: '30m' },
+                          { label: '1시간', val: '1h' },
+                          { label: '4시간', val: '4h' },
+                          { label: '일봉', val: '1d' },
+                          { label: '주봉', val: '1w' },
+                          { label: '월봉', val: '1M' }
+                        ].map((item) => (
+                          <button
+                            key={item.val}
+                            onClick={() => setChartInterval(item.val)}
+                            className={`text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2.5 py-0.5 rounded transition-all cursor-pointer ${chartInterval === item.val ? 'bg-cyan-500 text-slate-950 font-black' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsChartExpanded((prev) => !prev)}
+                    className="rounded border border-cyan-500/30 px-3 py-1 text-[10px] font-black text-cyan-300 transition hover:bg-cyan-950/40"
+                  >
+                    {isChartExpanded ? '닫기' : '크게보기'}
+                  </button>
                 </div>
               </div>
 
               {/* 차트 영역 */}
-              <div className="w-full relative min-h-[460px] bg-[#0e1529] rounded-lg overflow-hidden border border-[#1f2945]/60">
+              <div className={chartPanelClassName}>
                 {loadingChart && (
                   <div className="absolute inset-0 flex items-center justify-center bg-[#0e1529]/95 z-10 rounded">
                     <span className="text-xs text-cyan-400 font-mono animate-pulse">시세 차트 로드 중...</span>
                   </div>
                 )}
-                <div ref={chartContainerRef} className="w-full" />
+                <div ref={chartContainerRef} className="h-full w-full" />
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+                <p className="text-[10px] font-bold tracking-[0.08em] text-slate-500">보유 현황</p>
+                <p className="mt-2 font-mono text-sm font-black text-white">{holdingSummaryLabel}</p>
+                <p className="mt-1 text-[10px] text-slate-500">현재 선택 계좌 기준</p>
+              </div>
+              <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+                <p className="text-[10px] font-bold tracking-[0.08em] text-slate-500">주문 가능 금액</p>
+                <p className="mt-2 font-mono text-sm font-black text-cyan-300">{availableCashLabel}</p>
+                <p className="mt-1 text-[10px] text-slate-500">주문 입력 시 사전검증 반영</p>
+              </div>
+              <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+                <p className="text-[10px] font-bold tracking-[0.08em] text-slate-500">주문 관리</p>
+                <p className="mt-2 font-mono text-sm font-black text-amber-300">{openOrders.length}건 미체결</p>
+                <p className="mt-1 text-[10px] text-slate-500">현재 종목 취소/정정 가능</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+              <div className="mb-3 flex flex-col gap-3 border-b border-[#1f2945] pb-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-3 rounded-full bg-amber-300" />
+                    <span className="text-xs font-bold text-white">미체결 주문 관리</span>
+                  </div>
+                  <p className="mt-1 text-[10px] text-slate-500">
+                    현재 종목과 선택 계좌 기준으로 취소/정정을 처리합니다.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSyncOpenOrders}
+                  disabled={Boolean(orderActionLoadingId)}
+                  className="rounded border border-cyan-500/30 px-3 py-2 text-[10px] font-black text-cyan-300 transition hover:bg-cyan-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {orderActionLoadingId === 'sync-open-orders' ? '갱신 중' : '상태 새로고침'}
+                </button>
+              </div>
+
+              {orderManagementMessage.text ? (
+                <div className={`mb-3 rounded border px-3 py-2 text-[11px] leading-5 ${
+                  orderManagementMessage.isError
+                    ? 'border-rose-900/60 bg-rose-950/30 text-rose-300'
+                    : 'border-cyan-900/60 bg-cyan-950/20 text-cyan-300'
+                }`}>
+                  {orderManagementMessage.text}
+                </div>
+              ) : null}
+
+              {openOrdersLoading ? (
+                <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-6 text-center text-[11px] font-mono text-cyan-300">
+                  미체결 주문을 불러오는 중...
+                </div>
+              ) : openOrders.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {openOrders.map((order) => {
+                    const isEditing = modifyOrderId === order.id
+                    const orderSideLabel = getOrderSideLabel(order.side)
+                    const orderStatusLabel = getOrderStatusLabel(order.status)
+                    const isCancelReplace = isCancelReplaceExchange(order.exchange)
+
+                    return (
+                      <div key={order.id} className="rounded-lg border border-[#1f2945] bg-[#070b19]/90 p-3">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded px-2 py-1 text-[10px] font-black ${
+                                String(order.side || '').toUpperCase() === 'SELL'
+                                  ? 'bg-blue-500/15 text-blue-300'
+                                  : 'bg-red-500/15 text-red-300'
+                              }`}>
+                                {orderSideLabel}
+                              </span>
+                              <span className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300">
+                                {orderStatusLabel}
+                              </span>
+                              <span className="font-mono text-[10px] text-slate-500">
+                                {order.exchange} · {order.broker_env || brokerEnv}
+                              </span>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-4">
+                              <div>
+                                <p className="text-slate-500">가격</p>
+                                <p className="font-mono font-bold text-white">{formatUnitPrice(order.price)}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">수량</p>
+                                <p className="font-mono font-bold text-white">{Number(order.volume || 0).toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">유형</p>
+                                <p className="font-mono font-bold text-white">{order.ord_type || 'LIMIT'}</p>
+                              </div>
+                              <div>
+                                <p className="text-slate-500">주문번호</p>
+                                <p className="max-w-[120px] truncate font-mono font-bold text-slate-300">{order.external_order_id || '-'}</p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenModifyOrder(order)}
+                              disabled={Boolean(orderActionLoadingId)}
+                              className="rounded border border-cyan-500/30 px-3 py-1.5 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isCancelReplace ? '취소 후 재주문' : '정정'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelOpenOrder(order)}
+                              disabled={Boolean(orderActionLoadingId)}
+                              className="rounded border border-rose-500/30 px-3 py-1.5 text-[10px] font-bold text-rose-300 transition hover:bg-rose-950/30 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {orderActionLoadingId === `cancel-${order.id}` ? '취소 중' : '취소'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {isEditing ? (
+                          <div className="mt-3 rounded border border-cyan-900/40 bg-cyan-950/10 p-3">
+                            <div className="mb-2 text-[10px] font-bold text-cyan-300">
+                              {isCancelReplace ? '새 주문 값 입력' : '정정 값 입력'}
+                            </div>
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-400">
+                                가격
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={modifyDraft.price}
+                                  onChange={(event) => setModifyDraft((prev) => ({ ...prev, price: event.target.value }))}
+                                  className="rounded border border-slate-700 bg-[#070b19] px-2 py-2 font-mono text-xs text-white outline-none focus:border-cyan-400"
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 text-[10px] font-bold text-slate-400">
+                                수량
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={modifyDraft.quantity}
+                                  onChange={(event) => setModifyDraft((prev) => ({ ...prev, quantity: event.target.value }))}
+                                  className="rounded border border-slate-700 bg-[#070b19] px-2 py-2 font-mono text-xs text-white outline-none focus:border-cyan-400"
+                                />
+                              </label>
+                            </div>
+                            <div className="mt-3 flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setModifyOrderId('')
+                                  setModifyDraft({ price: '', quantity: '' })
+                                }}
+                                className="rounded border border-slate-700 px-3 py-1.5 text-[10px] font-bold text-slate-300 transition hover:text-white"
+                              >
+                                닫기
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSubmitModifyOrder(order)}
+                                disabled={Boolean(orderActionLoadingId)}
+                                className="rounded border border-cyan-500/40 bg-cyan-950/30 px-3 py-1.5 text-[10px] font-black text-cyan-300 transition hover:bg-cyan-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {orderActionLoadingId === `modify-${order.id}` ? '처리 중' : isCancelReplace ? '재주문 요청' : '정정 요청'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-6 text-center text-[11px] text-slate-500">
+                  현재 선택한 계좌의 미체결 주문이 없습니다.
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+              <div className="mb-3 flex flex-col gap-3 border-b border-[#1f2945] pb-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-3 rounded-full bg-emerald-300" />
+                    <span className="text-xs font-bold text-white">조건감시 상태</span>
+                  </div>
+                  <p className="mt-1 text-[10px] text-slate-500">
+                    익절/손절 감시 규칙은 백그라운드 워커가 조건 도달 여부를 확인합니다.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadAutoTradingRules}
+                  disabled={autoRulesLoading}
+                  className="rounded border border-emerald-500/30 px-3 py-2 text-[10px] font-black text-emerald-300 transition hover:bg-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {autoRulesLoading ? '조회 중' : '감시 새로고침'}
+                </button>
+              </div>
+
+              {autoRulesMessage ? (
+                <div className="mb-3 rounded border border-amber-900/60 bg-amber-950/20 px-3 py-2 text-[11px] leading-5 text-amber-300">
+                  {autoRulesMessage}
+                </div>
+              ) : null}
+
+              {autoRulesLoading ? (
+                <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-6 text-center text-[11px] font-mono text-emerald-300">
+                  조건감시 규칙을 확인하는 중...
+                </div>
+              ) : autoRules.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {autoRules.map((rule) => {
+                    const entryPrice = Number(rule.entry_price || 0)
+                    const targetRate = Number(rule.target_profit_rate || 0)
+                    const stopRate = Number(rule.stop_loss_rate || 0)
+                    const targetPrice = entryPrice > 0 ? entryPrice * (1 + targetRate / 100) : 0
+                    const stopPrice = entryPrice > 0 ? entryPrice * (1 + stopRate / 100) : 0
+                    const isRunning = String(rule.status || '').toUpperCase() === 'RUNNING'
+
+                    return (
+                      <div key={rule.id} className="rounded-lg border border-[#1f2945] bg-[#070b19]/90 p-3">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`rounded px-2 py-1 text-[10px] font-black ${
+                              isRunning
+                                ? 'bg-emerald-500/15 text-emerald-300'
+                                : 'bg-slate-700/50 text-slate-300'
+                            }`}>
+                              {getAutoRuleStatusLabel(rule.status)}
+                            </span>
+                            <span className="font-mono text-[10px] text-slate-500">
+                              {rule.exchange} · {rule.broker_env || brokerEnv} · {rule.asset_type || resolvedAssetType}
+                            </span>
+                            <span className={`rounded px-2 py-1 text-[10px] font-black ${
+                              String(rule.execution_mode || '').toUpperCase() === 'AUTO'
+                                ? 'bg-rose-500/15 text-rose-300'
+                                : 'bg-cyan-500/15 text-cyan-300'
+                            }`}>
+                              {getAutoExecutionModeLabel(rule.execution_mode)}
+                            </span>
+                          </div>
+                          <span className="font-mono text-[10px] text-slate-500">
+                            {rule.created_at ? new Date(rule.created_at).toLocaleString('ko-KR') : '-'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+                          <div>
+                            <p className="text-slate-500">진입가</p>
+                            <p className="font-mono font-bold text-white">{entryPrice > 0 ? formatUnitPrice(entryPrice) : '-'}</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500">익절 조건</p>
+                            <p className="font-mono font-bold text-emerald-300">+{targetRate.toLocaleString()}%</p>
+                            <p className="font-mono text-[10px] text-slate-500">{targetPrice > 0 ? formatUnitPrice(targetPrice) : '-'}</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500">손절 조건</p>
+                            <p className="font-mono font-bold text-rose-300">{stopRate.toLocaleString()}%</p>
+                            <p className="font-mono text-[10px] text-slate-500">{stopPrice > 0 ? formatUnitPrice(stopPrice) : '-'}</p>
+                          </div>
+                          <div>
+                            <p className="text-slate-500">감시 금액</p>
+                            <p className="font-mono font-bold text-white">
+                              {Number(rule.investment_amount || 0) > 0
+                                ? `${getCurrencySign()}${Number(rule.investment_amount).toLocaleString(undefined, { maximumFractionDigits: getCurrencyDigits() })}`
+                                : '-'}
+                            </p>
+                            <p className="font-mono text-[10px] text-slate-500">
+                              수량 {Number(rule.quantity || 0) > 0 ? Number(rule.quantity).toLocaleString(undefined, { maximumFractionDigits: 8 }) : '-'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-2 border-t border-[#1f2945] pt-3 text-[10px] text-slate-500 sm:grid-cols-3">
+                          <div>
+                            <p>마지막 확인</p>
+                            <p className="font-mono text-slate-300">
+                              {rule.last_checked_at ? new Date(rule.last_checked_at).toLocaleString('ko-KR') : '-'}
+                            </p>
+                          </div>
+                          <div>
+                            <p>트리거</p>
+                            <p className="font-mono text-slate-300">
+                              {getAutoTriggerLabel(rule.trigger_side)}
+                              {Number(rule.trigger_price || 0) > 0 ? ` · ${formatUnitPrice(rule.trigger_price)}` : ''}
+                            </p>
+                          </div>
+                          <div>
+                            <p>최근 오류</p>
+                            <p className="truncate text-amber-300">{rule.last_error || '-'}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-6 text-center text-[11px] text-slate-500">
+                  현재 종목에 등록된 조건감시 규칙이 없습니다.
+                </div>
+              )}
             </div>
 
             {/* 하단 RAG 뉴스 / 종목 정보 탭 카드 */}
@@ -1635,44 +2324,73 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               </div>
 
               {activeTab === 'news' && (
-                <div className="max-h-[280px] overflow-y-auto pr-1">
+                <div className="max-h-[360px] overflow-y-auto pr-1">
                   <section className="min-h-[220px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
-                    <div className="mb-3 flex items-center justify-between border-b border-[#1f2945]/50 pb-2">
-                      <h3 className="text-xs font-bold text-cyan-300">뉴스</h3>
-                      <span className="text-[10px] font-mono text-slate-500">{newsList.length}건</span>
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-[#1f2945]/50 pb-2">
+                      <h3 className="text-sm font-bold text-cyan-200">뉴스</h3>
+                      <span className="rounded-full border border-cyan-500/30 bg-cyan-950/30 px-2.5 py-1 text-[11px] font-bold text-cyan-100">
+                        총 {Math.min(newsList.length, 10)}개
+                      </span>
                     </div>
 
                     <div className="flex flex-col gap-3">
                       {loadingNews ? (
                         <div className="py-8 text-center text-xs text-cyan-400/80 font-mono animate-pulse">
-                          실시간 크롤링 뉴스 분석 중...
+                          뉴스 로드 중...
                         </div>
                       ) : newsList.length > 0 ? (
                         <>
-                          <div className="border-l-2 border-cyan-500 pl-3 py-1.5 bg-cyan-950/20 rounded-r">
-                            <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider">AI RAG 뉴스 핵심 요약</span>
-                            <p className="text-xs text-[#e2e2ec] mt-1 leading-relaxed">
-                              {newsList.find(n => n.ai_summary)?.ai_summary || newsList[0]?.summary || `${symbol} 종목에 대한 실시간 수집 뉴스를 분석 중입니다.`}
-                            </p>
-                          </div>
-                          {newsList.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs py-2 border-b border-[#1f2945]/30 hover:bg-slate-800/10 px-1 rounded transition-all">
-                              <a
-                                href={item.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-[#e2e2ec] truncate max-w-[80%] hover:underline cursor-pointer"
-                              >
-                                {item.title}
-                              </a>
-                              <span className="text-[10px] text-slate-500 font-mono">{formatTime(item.published_at)}</span>
+                          {newsList.slice(0, 10).map(item => (
+                            <div key={item.id} className="flex flex-col gap-2 border-b border-[#1f2945]/30 px-1 py-2 transition-all hover:bg-slate-800/10">
+                              <div className="flex min-w-0 flex-col gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleNewsSummary(item)}
+                                  className="block w-full min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
+                                >
+                                  <span className="block w-full max-w-full overflow-hidden text-ellipsis whitespace-nowrap pr-2 font-bold leading-5">
+                                    {item.title}
+                                  </span>
+                                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                    <span className="rounded border border-cyan-500/25 bg-cyan-950/25 px-1.5 py-0.5 text-[10px] font-bold text-cyan-200">
+                                      {formatNewsSource(item.source)}
+                                    </span>
+                                    <span className="rounded border border-slate-600/60 bg-slate-900/50 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-200">
+                                      {formatTime(item.published_at)}
+                                    </span>
+                                  </span>
+                                </button>
+                                <div className="flex shrink-0 items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleNewsSummary(item)}
+                                    disabled={summaryLoadingId === item.id}
+                                    className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {summaryLoadingId === item.id ? '\uc0dd\uc131 \uc911' : selectedNewsId === item.id ? '\uc811\uae30' : '\uc694\uc57d \ubcf4\uae30'}
+                                  </button>
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white"
+                                  >
+                                    {'\uc6d0\ubb38 \uc5f4\uae30'}
+                                  </a>
+                                </div>
+                              </div>
+                              {selectedNewsId === item.id ? (
+                                <p className="rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-2 text-[11px] leading-5 text-slate-300">
+                                  {item.ai_summary || (summaryLoadingId === item.id ? '\uc694\uc57d\uc744 \uc0dd\uc131\ud558\ub294 \uc911\uc785\ub2c8\ub2e4...' : '\uc694\uc57d \ubcf4\uae30 \ubc84\ud2bc\uc744 \ub20c\ub7ec 3\uc904 \uc694\uc57d\uc744 \uc0dd\uc131\ud558\uc138\uc694.')}
+                                </p>
+                              ) : null}
                             </div>
                           ))}
                         </>
                       ) : (
                         <div className="flex flex-col items-center gap-3 py-8 text-center">
                           <p className="text-xs text-slate-500 font-mono">
-                            해당 종목의 실시간 수집 뉴스가 존재하지 않습니다.
+                            해당 종목의 저장된 뉴스가 없습니다.
                           </p>
                           <button
                             type="button"
@@ -1695,7 +2413,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               )}
 
               {activeTab === 'disclosure' && (
-                <div className="max-h-[280px] overflow-y-auto pr-1">
+                <div className="max-h-[360px] overflow-y-auto pr-1">
                   <section className="min-h-[220px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
                     <div className="mb-3 flex items-center justify-between border-b border-[#1f2945]/50 pb-2">
                       <h3 className="text-xs font-bold text-cyan-300">공시</h3>
@@ -1708,39 +2426,40 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                         </div>
                       ) : disclosureList.length > 0 ? (
                         <>
-                          <div className="border-l-2 border-cyan-500 pl-3 py-1.5 bg-cyan-950/20 rounded-r">
-                            <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider">DART 공시 요약보기</span>
-                            <p className="text-xs text-[#e2e2ec] mt-1 leading-relaxed">
-                              {selectedDisclosure?.summary || selectedDisclosure?.report_nm || `${symbol} 종목의 최근 공시를 확인 중입니다.`}
-                            </p>
-                          </div>
-                          {disclosureList.map(item => (
-                            <div key={item.id} className="flex flex-col gap-2 border-b border-[#1f2945]/30 px-1 py-2 transition-all hover:bg-slate-800/10 sm:flex-row sm:items-center sm:justify-between">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedDisclosureId(item.id)}
-                                className="min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
-                              >
-                                <span className="block truncate font-bold">{item.report_nm}</span>
-                                <span className="mt-0.5 block text-[10px] font-mono text-slate-500">{item.corp_name} · {item.rcept_dt}</span>
-                              </button>
-                              <div className="flex shrink-0 items-center gap-2">
+                          {disclosureList.slice(0, 10).map(item => (
+                            <div key={item.id} className="flex flex-col gap-2 border-b border-[#1f2945]/30 px-1 py-2 transition-all hover:bg-slate-800/10">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                 <button
                                   type="button"
-                                  onClick={() => setSelectedDisclosureId(item.id)}
-                                  className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30"
+                                  onClick={() => setSelectedDisclosureId((prev) => prev === item.id ? '' : item.id)}
+                                  className="min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
                                 >
-                                  요약 보기
+                                  <span className="block truncate font-bold">{item.report_nm}</span>
+                                  <span className="mt-0.5 block text-[10px] font-mono text-slate-500">{item.corp_name} · {item.rcept_dt}</span>
                                 </button>
-                                <a
-                                  href={item.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white"
-                                >
-                                  원문 열기
-                                </a>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedDisclosureId((prev) => prev === item.id ? '' : item.id)}
+                                    className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30"
+                                  >
+                                    요약 보기
+                                  </button>
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white"
+                                  >
+                                    원문 열기
+                                  </a>
+                                </div>
                               </div>
+                              {selectedDisclosureId === item.id ? (
+                                <p className="rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-2 text-[11px] leading-5 text-slate-300">
+                                  {item.summary || item.report_nm || '저장된 요약이 없습니다.'}
+                                </p>
+                              ) : null}
                             </div>
                           ))}
                         </>
@@ -1790,8 +2509,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
             </div>
           </div>
 
-          {/* [3열: 우측 - 주문 패널 & 내 보유 주식 (3/12 cols)] */}
-          <div className={`${showLevel2Panel ? 'lg:col-span-3' : 'lg:col-span-3'} flex flex-col gap-5`}>
+          {/* [2열: 우측 - 주문 패널 & 내 보유 주식] */}
+          <div className={`${showLevel2Panel ? 'lg:col-span-3' : 'lg:col-span-4'} flex flex-col gap-5`}>
 
             {/* AI 시그널 카드 */}
             <div className="bg-[#0e1529]/90 border border-cyan-500/30 rounded-xl p-4 flex flex-col gap-3 backdrop-blur-md">
@@ -2255,6 +2974,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                           <span className="text-white">{Number(orderPrecheck.holding_qty).toLocaleString()}</span>
                         </div>
                       )}
+                      {orderPrecheck.exchange_order_test && (
+                        <div className="rounded border border-emerald-900/60 bg-emerald-950/20 px-2 py-1.5 leading-relaxed text-emerald-300">
+                          거래소 테스트 주문 검증 통과
+                          {orderPrecheck.exchange_order_test.commission_rates_requested ? ' · 수수료율 조회 완료' : ''}
+                        </div>
+                      )}
                       <div className={`rounded border px-2 py-1 leading-relaxed ${
                         isOrderBlocked
                           ? 'border-red-900/60 bg-red-950/30 text-red-300'
@@ -2267,14 +2992,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                     </>
                   )}
                   {!orderPrecheck && precheckMessage && (
-                    <div className="rounded border border-amber-900/60 bg-amber-950/20 px-2 py-1 leading-relaxed text-amber-300">
+                    <div className="whitespace-pre-line rounded border border-amber-900/60 bg-amber-950/20 px-2 py-1 leading-relaxed text-amber-300">
                       {precheckMessage}
                     </div>
                   )}
                 </div>
 
                 {/* 5. 자동 감시 조건 체크박스 */}
-                {!isFuturesOrder && side === 'BUY' && (
+                {((!isFuturesOrder && side === 'BUY') || (isFuturesOrder && futuresIntent === 'LONG_OPEN')) && (
                   <div className="border-t border-[#1f2945] pt-3 mt-1 flex flex-col gap-2.5">
                     <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer select-none">
                       <input
@@ -2289,7 +3014,33 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                     {autoExit && (
                       <div className="flex flex-col gap-2">
                         <div className="rounded border border-amber-900/50 bg-amber-950/20 px-2 py-1.5 text-[9px] leading-relaxed text-amber-300">
-                          현재 구현은 주문 체결 확정 이후가 아니라 주문 전송 성공 직후 감시 규칙을 등록합니다.
+                          주문 전송 성공 직후 감시 규칙을 등록합니다. 실거래 자동매도는 1회 주문 한도와 거래소/API 권한 검증을 통과해야 실행됩니다.
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={() => setAutoExitExecutionMode('PROPOSAL')}
+                            className={`rounded border px-3 py-2 text-left transition ${
+                              autoExitExecutionMode === 'PROPOSAL'
+                                ? 'border-cyan-400 bg-cyan-950/30 text-cyan-200'
+                                : 'border-[#1f2945] bg-[#070b19] text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            <span className="block text-[10px] font-black">매도 제안만 생성</span>
+                            <span className="mt-1 block text-[9px] leading-relaxed">조건 도달 시 승인 카드만 만들고 직접 주문은 보내지 않습니다.</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAutoExitExecutionMode('AUTO')}
+                            className={`rounded border px-3 py-2 text-left transition ${
+                              autoExitExecutionMode === 'AUTO'
+                                ? 'border-rose-400 bg-rose-950/25 text-rose-200'
+                                : 'border-[#1f2945] bg-[#070b19] text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            <span className="block text-[10px] font-black">조건 도달 시 자동 매도</span>
+                            <span className="mt-1 block text-[9px] leading-relaxed">감시 워커가 조건 충족 시 매도 주문을 직접 전송합니다.</span>
+                          </button>
                         </div>
                         <div className="grid grid-cols-2 gap-2 bg-[#070b19] border border-[#1f2945] rounded p-2.5">
                           <div className="flex flex-col gap-1">
@@ -2359,9 +3110,20 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
             {/* 내 보유 주식 카드 (토스 WTS 스타일) */}
             <div className="bg-[#0e1529]/90 border border-[#1f2945] rounded-xl p-4 flex flex-col gap-3 backdrop-blur-md font-mono">
-              <div className="flex items-center gap-2 border-b border-[#1f2945] pb-2">
-                <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
-                <span className="text-xs font-bold text-white">내 보유 현황</span>
+              <div className="flex items-center justify-between gap-3 border-b border-[#1f2945] pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
+                  <span className="text-xs font-bold text-white">내 보유 현황</span>
+                </div>
+                {(myHoldingAbsQty > 0 || dbEstimatedHolding?.estimatedQty > 0) && (
+                  <button
+                    type="button"
+                    onClick={handleFillFullExitOrder}
+                    className="rounded border border-rose-500/30 px-2.5 py-1 text-[10px] font-black text-rose-300 transition hover:bg-rose-950/30"
+                  >
+                    {exchange === 'BINANCE_UM_FUTURES' ? '전량 청산 입력' : '전량 매도 입력'}
+                  </button>
+                )}
               </div>
 
               {myHolding && myHoldingAbsQty > 0 ? (
@@ -2424,7 +3186,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                   </p>
                 </div>
               ) : balanceMessage ? (
-                <div className="rounded border border-amber-900/50 bg-amber-950/20 px-3 py-3 text-[11px] leading-relaxed text-amber-300">
+                <div className="whitespace-pre-line rounded border border-amber-900/50 bg-amber-950/20 px-3 py-3 text-[11px] leading-relaxed text-amber-300">
                   {balanceMessage}
                 </div>
               ) : (

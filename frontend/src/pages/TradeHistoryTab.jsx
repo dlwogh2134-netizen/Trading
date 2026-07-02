@@ -568,7 +568,7 @@ export default function TradeHistoryTab() {
       {actionNotice ? (
         <section className="rounded-lg border border-ai-cyan/30 bg-ai-cyan/10 px-4 py-3 text-sm font-bold text-ai-cyan">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <span>{actionNotice}</span>
+            <span className="whitespace-pre-line">{actionNotice}</span>
             <button
               className="h-8 rounded border border-ai-cyan/40 px-3 text-xs text-slate-100 transition hover:bg-ai-cyan/10"
               type="button"

@@ -564,7 +564,7 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
 
           {/* 에러/성공 메시지 알림 카드 */}
           {message.text && (
-            <div className={`p-3 rounded text-xs border transition-all ${message.isError
+            <div className={`whitespace-pre-line p-3 rounded text-xs border transition-all ${message.isError
                 ? 'bg-red-950/20 border-red-800 text-red-300'
                 : 'bg-emerald-950/20 border-emerald-800 text-emerald-300'
               }`}>

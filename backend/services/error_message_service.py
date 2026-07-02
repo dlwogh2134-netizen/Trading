@@ -34,64 +34,40 @@ ERROR_GUIDES = {
         },
         "306": {
             "title": "코인원 최소 주문금액보다 작은 주문입니다.",
-            "message": "코인원이 허용하는 최소 주문금액보다 낮아 주문이 거절되었습니다.",
-            "action": "주문 금액을 최소 5,000원 이상으로 조정한 뒤 다시 시도하세요. 수수료와 호가 단위 때문에 여유 있게 입력하는 것이 안전합니다.",
+            "message": "코인원 최소 주문금액보다 작은 주문입니다.",
+            "action": "주문 금액을 최소 5,000원 이상으로 조정한 뒤 다시 시도하세요.\n수수료와 호가 단위 때문에 여유 있게 입력하는 것이 안전합니다.",
             "severity": "warning",
         },
     },
     "BINANCE": {
-        "-4061": {
-            "title": "바이낸스 선물 포지션 모드와 주문 방향이 맞지 않습니다.",
-            "message": "현재 계정의 포지션 모드가 주문의 LONG/SHORT/BOTH 설정과 맞지 않아 Binance가 주문을 거절했습니다.",
-            "action": "바이낸스 선물 계정이 One-way 모드라면 BOTH를 선택하세요. LONG/SHORT를 쓰려면 Binance Futures에서 Hedge Mode를 먼저 켜야 합니다.",
+        "-1003": {
+            "title": "바이낸스 요청 한도를 초과했습니다.",
+            "message": "짧은 시간에 너무 많은 요청을 보내 바이낸스가 일시적으로 제한했습니다.",
+            "action": "잠시 후 다시 시도하세요. 반복되면 차트/잔고/주문 상태 자동 새로고침 주기를 줄여야 합니다.",
             "severity": "warning",
         },
-        "-4059": {
-            "title": "바이낸스 선물 포지션 모드 변경이 필요 없습니다.",
-            "message": "요청한 포지션 모드가 이미 계정에 적용되어 있습니다.",
-            "action": "현재 설정 그대로 다시 주문하세요.",
+        "-1007": {
+            "title": "바이낸스 주문 응답이 지연되었습니다.",
+            "message": "바이낸스 서버 응답 시간이 초과되어 주문 처리 결과가 즉시 확인되지 않았습니다.",
+            "action": "같은 주문을 바로 다시 보내지 말고 거래내역 또는 바이낸스 앱에서 체결 여부를 먼저 확인하세요.",
             "severity": "warning",
         },
-        "-4046": {
-            "title": "바이낸스 선물 마진 모드가 이미 적용되어 있습니다.",
-            "message": "요청한 교차/격리 마진 모드가 이미 해당 심볼에 적용되어 있습니다.",
-            "action": "마진 모드를 그대로 두고 다시 주문하세요.",
+        "-1013": {
+            "title": "바이낸스 주문 필터 조건을 통과하지 못했습니다.",
+            "message": "최소 주문금액, 가격 단위, 수량 단위, 허용 가격 범위 중 하나가 바이낸스 심볼 규칙과 맞지 않습니다.",
+            "action": "주문 수량과 가격을 현재 호가 기준으로 다시 입력하세요. 반복되면 해당 심볼의 최소 주문금액과 수량 단위를 확인해야 합니다.",
             "severity": "warning",
         },
-        "-4028": {
-            "title": "바이낸스 선물 레버리지 배수가 허용 범위를 벗어났습니다.",
-            "message": "선택한 심볼 또는 계정에서 해당 레버리지 배수를 사용할 수 없어 Binance가 주문을 거절했습니다.",
-            "action": "레버리지 배수를 낮춰 다시 시도하세요. 코인별 최대 배율은 다르며 DOGE 같은 알트코인은 75x가 제한될 수 있습니다.",
+        "-1015": {
+            "title": "바이낸스 신규 주문 한도를 초과했습니다.",
+            "message": "짧은 시간에 신규 주문을 너무 많이 제출해 바이낸스가 주문을 제한했습니다.",
+            "action": "열린 주문을 정리하고 잠시 후 다시 시도하세요. 자동 주문/상태 동기화 주기도 함께 점검해야 합니다.",
             "severity": "warning",
         },
-        "-2019": {
-            "title": "바이낸스 선물 증거금이 부족합니다.",
-            "message": "주문에 필요한 선물 증거금이 현재 사용 가능 잔고보다 큽니다.",
-            "action": "수량 또는 레버리지를 조정하거나 선물 지갑의 사용 가능 USDT를 확인하세요.",
-            "severity": "warning",
-        },
-        "-2015": {
-            "title": "바이낸스 API 키 권한을 확인해야 합니다.",
-            "message": "API Key, IP 제한, 권한 설정 중 하나가 바이낸스 요청을 차단했습니다.",
-            "action": "바이낸스 API 관리 화면에서 선물 거래 권한, IP 제한, Testnet/실거래 키 구분을 확인한 뒤 키를 다시 저장하세요.",
-            "severity": "error",
-        },
-        "-2022": {
-            "title": "바이낸스 Reduce Only 주문이 거절되었습니다.",
-            "message": "현재 포지션과 주문 방향/수량이 Reduce Only 조건에 맞지 않습니다.",
-            "action": "보유 포지션 방향과 수량을 확인하고, 신규 진입이면 Reduce Only를 끄세요.",
-            "severity": "warning",
-        },
-        "-1111": {
-            "title": "바이낸스 주문 가격 또는 수량 단위가 맞지 않습니다.",
-            "message": "입력한 가격/수량의 소수점 정밀도가 해당 선물 심볼의 허용 단위와 맞지 않습니다.",
-            "action": "수량과 가격 소수점 자릿수를 줄여 다시 시도하세요. DOGEUSDT는 수량을 정수 단위로 입력하는 편이 안전합니다.",
-            "severity": "warning",
-        },
-        "-4164": {
-            "title": "바이낸스 선물 최소 주문금액보다 작습니다.",
-            "message": "주문 명목 금액이 Binance Futures 최소 주문 기준보다 작습니다.",
-            "action": "주문 수량을 늘리거나 가격을 확인한 뒤 다시 시도하세요.",
+        "-1021": {
+            "title": "바이낸스 요청 시간이 서버 시간과 맞지 않습니다.",
+            "message": "로컬 서버 시간과 바이낸스 서버 시간 차이가 커서 서명 요청이 거절되었습니다.",
+            "action": "서버 시간을 자동 동기화한 뒤 다시 시도하세요. 로컬 개발 환경이면 시스템 시간 설정을 확인하세요.",
             "severity": "warning",
         },
         "-1022": {
@@ -100,14 +76,248 @@ ERROR_GUIDES = {
             "action": "바이낸스 Secret Key를 다시 확인해 저장하세요. 새 키 발급이 가장 빠를 수 있습니다.",
             "severity": "error",
         },
-        "-1003": {
-            "title": "바이낸스 요청 한도를 초과했습니다.",
-            "message": "짧은 시간에 너무 많은 요청을 보내 바이낸스가 일시적으로 제한했습니다.",
-            "action": "잠시 후 다시 시도하세요. 반복되면 자동 새로고침 주기를 늘려야 합니다.",
+        "-1102": {
+            "title": "바이낸스 주문 필수값이 누락되었거나 형식이 맞지 않습니다.",
+            "message": "주문에 필요한 심볼, 방향, 수량, 가격, 포지션 옵션 중 일부가 비어 있거나 잘못된 형식입니다.",
+            "action": "주문 폼을 새로고침한 뒤 심볼, 주문 유형, 수량, 가격, 선물 옵션을 다시 확인하세요.",
+            "severity": "warning",
+        },
+        "-1111": {
+            "title": "바이낸스 주문 가격 또는 수량 단위가 맞지 않습니다.",
+            "message": "입력한 가격/수량의 소수점 정밀도가 해당 심볼의 허용 단위와 맞지 않습니다.",
+            "action": "수량과 가격 소수점 자릿수를 줄여 다시 시도하세요. 알트코인은 수량 단위가 심볼마다 다를 수 있습니다.",
+            "severity": "warning",
+        },
+        "-1116": {
+            "title": "바이낸스 주문 유형이 올바르지 않습니다.",
+            "message": "선택한 주문 유형이 해당 거래소 또는 심볼에서 지원되지 않습니다.",
+            "action": "지정가 또는 시장가처럼 지원되는 주문 유형으로 다시 선택하세요.",
+            "severity": "warning",
+        },
+        "-1117": {
+            "title": "바이낸스 주문 방향이 올바르지 않습니다.",
+            "message": "BUY/SELL 주문 방향 값이 바이낸스 규격과 맞지 않습니다.",
+            "action": "매수 또는 매도 탭을 다시 선택한 뒤 주문을 재시도하세요.",
+            "severity": "warning",
+        },
+        "-1121": {
+            "title": "바이낸스에서 지원하지 않는 심볼입니다.",
+            "message": "입력한 종목 코드가 바이낸스 현물/선물 시장에 없거나 현재 거래 가능한 상태가 아닙니다.",
+            "action": "DOGEUSDT처럼 바이낸스에서 실제 거래되는 심볼인지 확인하고, 현물/선물 시장 구분도 다시 선택하세요.",
+            "severity": "warning",
+        },
+        "-2010": {
+            "title": "바이낸스 주문이 거래소에서 거절되었습니다.",
+            "message": "거래소 매칭 엔진이 주문을 거절했습니다. 보통 잔고, 최소 주문금액, 가격 범위, 계정 상태 중 하나가 원인입니다.",
+            "action": "주문 수량/가격/잔고를 확인하고, 바이낸스 앱에서 해당 계정의 거래 제한 여부를 확인하세요.",
+            "severity": "warning",
+        },
+        "-2011": {
+            "title": "바이낸스 주문 취소에 실패했습니다.",
+            "message": "취소하려는 주문이 이미 체결/취소되었거나 거래소에서 찾을 수 없습니다.",
+            "action": "거래내역을 새로고침해 현재 주문 상태를 다시 확인하세요.",
+            "severity": "warning",
+        },
+        "-2013": {
+            "title": "바이낸스 주문을 찾을 수 없습니다.",
+            "message": "조회하려는 주문 번호가 존재하지 않거나 이미 정리된 주문입니다.",
+            "action": "거래내역을 다시 동기화한 뒤 주문 ID가 올바른지 확인하세요.",
+            "severity": "warning",
+        },
+        "-2014": {
+            "title": "바이낸스 API 키 형식이 올바르지 않습니다.",
+            "message": "저장된 API Key 형식이 바이낸스가 요구하는 형식과 맞지 않습니다.",
+            "action": "설정 화면에서 바이낸스 API Key와 Secret Key를 다시 저장하세요.",
+            "severity": "error",
+        },
+        "-2015": {
+            "title": "바이낸스 API 키 권한을 확인해야 합니다.",
+            "message": "API Key, IP 제한, 권한 설정 중 하나가 바이낸스 요청을 차단했습니다.",
+            "action": "바이낸스 API 관리 화면에서 현물/선물 거래 권한, IP 제한, Testnet/실거래 키 구분을 확인한 뒤 키를 다시 저장하세요.",
+            "severity": "error",
+        },
+        "-2018": {
+            "title": "바이낸스 잔고가 부족합니다.",
+            "message": "주문 또는 포지션 변경에 필요한 사용 가능 잔고가 부족합니다.",
+            "action": "주문 수량을 줄이거나 바이낸스 지갑의 사용 가능 잔고를 확인하세요.",
+            "severity": "warning",
+        },
+        "-2019": {
+            "title": "바이낸스 선물 증거금이 부족합니다.",
+            "message": "주문에 필요한 선물 증거금이 현재 사용 가능 잔고보다 큽니다.",
+            "action": "수량을 줄이거나 레버리지/마진 모드를 조정하고, 선물 지갑의 사용 가능 USDT를 확인하세요.",
+            "severity": "warning",
+        },
+        "-2021": {
+            "title": "바이낸스 조건 주문이 즉시 발동될 가격입니다.",
+            "message": "입력한 스탑/트리거 가격이 현재가와 맞지 않아 주문이 즉시 실행될 수 있는 상태입니다.",
+            "action": "현재가를 기준으로 트리거 가격을 다시 설정하세요.",
+            "severity": "warning",
+        },
+        "-2022": {
+            "title": "바이낸스 Reduce Only 주문이 거절되었습니다.",
+            "message": "현재 포지션과 주문 방향/수량이 Reduce Only 조건에 맞지 않거나 기존 열린 주문과 충돌합니다.",
+            "action": "보유 포지션 방향과 수량을 확인하고, 신규 진입이면 Reduce Only를 끄세요. 기존 청산 주문이 있으면 먼저 취소해야 할 수 있습니다.",
+            "severity": "warning",
+        },
+        "-2024": {
+            "title": "바이낸스 선물 포지션 수량이 부족합니다.",
+            "message": "줄이거나 청산하려는 수량이 현재 보유 포지션보다 큽니다.",
+            "action": "현재 포지션 수량을 새로고침한 뒤 청산 수량을 보유 수량 이하로 조정하세요.",
+            "severity": "warning",
+        },
+        "-2025": {
+            "title": "바이낸스 열린 주문 한도를 초과했습니다.",
+            "message": "해당 계정 또는 심볼의 미체결 주문 개수가 허용 한도에 도달했습니다.",
+            "action": "미체결 주문을 일부 취소한 뒤 다시 주문하세요.",
+            "severity": "warning",
+        },
+        "-2027": {
+            "title": "현재 레버리지에서 허용되는 최대 포지션 한도를 초과했습니다.",
+            "message": "주문 후 예상 포지션 명목금액이 현재 레버리지 단계에서 바이낸스가 허용하는 최대 한도보다 큽니다.",
+            "action": "주문 수량을 줄이거나 기존 포지션을 일부 줄이세요. 높은 레버리지일수록 허용 포지션 한도가 작아질 수 있으므로 레버리지를 낮춘 뒤 다시 사전검증하는 것도 방법입니다.",
+            "severity": "warning",
+        },
+        "-2028": {
+            "title": "바이낸스 선물 레버리지 설정에 필요한 증거금이 부족합니다.",
+            "message": "요청한 레버리지/포지션 조합을 유지하기에 사용 가능 증거금이 부족합니다.",
+            "action": "주문 수량을 줄이거나 선물 지갑 잔고를 늘린 뒤 다시 시도하세요.",
+            "severity": "warning",
+        },
+        "-4003": {
+            "title": "바이낸스 주문 수량은 0보다 커야 합니다.",
+            "message": "주문 수량이 0 이하로 전달되어 거래소가 거절했습니다.",
+            "action": "수량을 다시 입력한 뒤 주문하세요.",
+            "severity": "warning",
+        },
+        "-4004": {
+            "title": "바이낸스 최소 주문 수량보다 작습니다.",
+            "message": "입력한 수량이 해당 선물 심볼의 최소 수량보다 작습니다.",
+            "action": "수량을 늘리거나 심볼의 최소 주문 수량을 확인하세요.",
+            "severity": "warning",
+        },
+        "-4005": {
+            "title": "바이낸스 최대 주문 수량을 초과했습니다.",
+            "message": "입력한 수량이 해당 선물 심볼의 단일 주문 최대 수량보다 큽니다.",
+            "action": "주문 수량을 줄이거나 여러 주문으로 나누세요. 단, 포지션 한도와 레버리지 한도도 함께 확인해야 합니다.",
+            "severity": "warning",
+        },
+        "-4013": {
+            "title": "바이낸스 최소 주문 가격보다 낮습니다.",
+            "message": "입력한 지정가가 해당 심볼의 허용 최소 가격보다 낮습니다.",
+            "action": "현재 호가와 가격 단위를 확인해 주문 가격을 다시 입력하세요.",
+            "severity": "warning",
+        },
+        "-4014": {
+            "title": "바이낸스 주문 가격 단위가 맞지 않습니다.",
+            "message": "입력한 가격이 해당 심볼의 틱 사이즈 단위와 맞지 않습니다.",
+            "action": "가격 소수점 자릿수를 호가 단위에 맞게 조정하세요.",
+            "severity": "warning",
+        },
+        "-4016": {
+            "title": "바이낸스 허용 가격 상단을 초과했습니다.",
+            "message": "입력한 주문 가격이 현재 기준가 대비 허용 상단보다 높습니다.",
+            "action": "현재가에 더 가까운 가격으로 다시 주문하세요.",
+            "severity": "warning",
+        },
+        "-4023": {
+            "title": "바이낸스 주문 수량 단위가 맞지 않습니다.",
+            "message": "입력한 수량이 해당 심볼의 step size 단위와 맞지 않습니다.",
+            "action": "수량 소수점 자릿수 또는 정수 단위를 심볼 규칙에 맞춰 조정하세요.",
+            "severity": "warning",
+        },
+        "-4024": {
+            "title": "바이낸스 허용 가격 하단보다 낮습니다.",
+            "message": "입력한 주문 가격이 현재 기준가 대비 허용 하단보다 낮습니다.",
+            "action": "현재가에 더 가까운 가격으로 다시 주문하세요.",
+            "severity": "warning",
+        },
+        "-4028": {
+            "title": "바이낸스 선물 레버리지 배수가 허용 범위를 벗어났습니다.",
+            "message": "선택한 심볼 또는 계정에서 해당 레버리지 배수를 사용할 수 없어 Binance가 주문을 거절했습니다.",
+            "action": "레버리지 배수를 낮춰 다시 시도하세요. 코인별 최대 배율은 다르며 알트코인은 높은 배율이 제한될 수 있습니다.",
+            "severity": "warning",
+        },
+        "-4046": {
+            "title": "바이낸스 선물 마진 모드가 이미 적용되어 있습니다.",
+            "message": "요청한 교차/격리 마진 모드가 이미 해당 심볼에 적용되어 있습니다.",
+            "action": "마진 모드를 그대로 두고 다시 주문하세요.",
+            "severity": "warning",
+        },
+        "-4047": {
+            "title": "미체결 주문이 있어 마진 모드를 바꿀 수 없습니다.",
+            "message": "해당 심볼에 열린 주문이 남아 있어 바이낸스가 교차/격리 마진 모드 변경을 거절했습니다.",
+            "action": "해당 심볼의 미체결 주문을 취소한 뒤 마진 모드를 변경하거나, 현재 마진 모드 그대로 주문하세요.",
+            "severity": "warning",
+        },
+        "-4048": {
+            "title": "보유 포지션이 있어 마진 모드를 바꿀 수 없습니다.",
+            "message": "해당 심볼에 보유 포지션이 남아 있어 바이낸스가 교차/격리 마진 모드 변경을 거절했습니다.",
+            "action": "포지션을 먼저 정리한 뒤 마진 모드를 변경하거나, 현재 적용된 마진 모드 그대로 주문하세요.",
+            "severity": "warning",
+        },
+        "-4050": {
+            "title": "바이낸스 교차 마진 잔고가 부족합니다.",
+            "message": "교차 마진 주문 또는 설정 변경에 필요한 잔고가 부족합니다.",
+            "action": "수량을 줄이거나 선물 지갑 잔고를 확인하세요.",
+            "severity": "warning",
+        },
+        "-4051": {
+            "title": "바이낸스 격리 마진 잔고가 부족합니다.",
+            "message": "격리 마진 주문 또는 설정 변경에 필요한 잔고가 부족합니다.",
+            "action": "수량을 줄이거나 해당 심볼의 격리 마진 잔고를 확인하세요.",
+            "severity": "warning",
+        },
+        "-4059": {
+            "title": "바이낸스 선물 포지션 모드 변경이 필요 없습니다.",
+            "message": "요청한 포지션 모드가 이미 계정에 적용되어 있습니다.",
+            "action": "현재 설정 그대로 다시 주문하세요.",
+            "severity": "warning",
+        },
+        "-4060": {
+            "title": "바이낸스 선물 포지션 방향 값이 올바르지 않습니다.",
+            "message": "positionSide 값이 바이낸스가 허용하는 BOTH, LONG, SHORT 중 하나로 전달되지 않았습니다.",
+            "action": "포지션 방향을 다시 선택한 뒤 주문하세요.",
+            "severity": "warning",
+        },
+        "-4061": {
+            "title": "바이낸스 선물 포지션 모드와 주문 방향이 맞지 않습니다.",
+            "message": "현재 계정의 포지션 모드가 주문의 LONG/SHORT/BOTH 설정과 맞지 않아 Binance가 주문을 거절했습니다.",
+            "action": "바이낸스 선물 계정이 One-way 모드라면 BOTH를 선택하세요. LONG/SHORT를 쓰려면 Binance Futures에서 Hedge Mode를 먼저 켜야 합니다.",
+            "severity": "warning",
+        },
+        "-4164": {
+            "title": "바이낸스 선물 최소 주문금액보다 작습니다.",
+            "message": "주문 명목 금액이 Binance Futures 최소 주문 기준보다 작습니다.",
+            "action": "주문 수량을 늘리거나 가격을 확인한 뒤 다시 시도하세요.",
             "severity": "warning",
         },
     },
     "KIS": {
+        "MARKET_CLOSED": {
+            "title": "주문 전송 실패",
+            "message": "장이 마감되었습니다.",
+            "action": "",
+            "severity": "warning",
+        },
+        "AUTH": {
+            "title": "KIS API 인증 정보를 확인해야 합니다.",
+            "message": "KIS AppKey, AppSecret, 계좌번호 또는 모의/실전 환경 설정이 올바르지 않을 수 있습니다.",
+            "action": "설정 화면에서 KIS API 키와 계좌번호, 계좌상품코드, 모의/실전 구분을 다시 확인한 뒤 연결 테스트를 실행하세요.",
+            "severity": "error",
+        },
+        "ACCOUNT": {
+            "title": "KIS 계좌 상태를 확인해야 합니다.",
+            "message": "KIS 계좌번호, 계좌상품코드 또는 계좌의 주문 가능 상태가 주문 요청과 맞지 않습니다.",
+            "action": "한국투자증권 계좌가 주식 주문 가능한 상태인지 확인하고, 앱에 저장된 계좌번호와 상품코드가 실제 계좌와 일치하는지 확인하세요.",
+            "severity": "warning",
+        },
+        "INSUFFICIENT": {
+            "title": "KIS 주문 가능 잔고가 부족합니다.",
+            "message": "주문 수량 또는 금액이 현재 KIS 계좌의 주문 가능 잔고보다 큽니다.",
+            "action": "예수금과 보유 수량을 확인한 뒤 주문 수량 또는 단가를 낮춰 다시 시도하세요.",
+            "severity": "warning",
+        },
         "EGW00201": {
             "title": "KIS API 호출 한도를 초과했습니다.",
             "message": "한국투자증권 API가 너무 잦은 요청을 제한했습니다.",
@@ -116,6 +326,48 @@ ERROR_GUIDES = {
         },
     },
     "TOSS": {
+        "MARKET_CLOSED": {
+            "title": "주문 전송 실패",
+            "message": "장이 마감되었습니다.",
+            "action": "",
+            "severity": "warning",
+        },
+        "invalid-request": {
+            "title": "Toss 주문 요청 형식이 올바르지 않습니다.",
+            "message": "Toss Open API가 주문 요청 본문의 필드명, 주문유형, 가격 또는 수량 형식을 거절했습니다.",
+            "action": "주문 수량, 지정가 단가, 국내/해외 주식 구분과 주문유형을 확인한 뒤 다시 시도하세요.",
+            "severity": "warning",
+        },
+        "invalid-client": {
+            "title": "Toss API 인증 정보를 확인해야 합니다.",
+            "message": "Toss client_id 또는 client_secret이 올바르지 않거나 토큰 발급 권한이 없습니다.",
+            "action": "설정 화면에서 Toss API 키를 다시 저장하고 계좌 연결 테스트를 실행하세요.",
+            "severity": "error",
+        },
+        "account-not-found": {
+            "title": "Toss 계좌 정보를 찾을 수 없습니다.",
+            "message": "저장된 Toss accountSeq가 없거나 현재 API 키로 조회 가능한 계좌와 일치하지 않습니다.",
+            "action": "Toss 계좌 목록을 다시 조회해 accountSeq를 갱신한 뒤 주문을 다시 시도하세요.",
+            "severity": "warning",
+        },
+        "opposite-pending-order-exists": {
+            "title": "반대 포지션 미체결 주문이 있습니다.",
+            "message": "반대 방향의 미체결 주문이 남아 있어 Toss가 새 주문을 거절했습니다.",
+            "action": "거래내역에서 기존 미체결 주문을 취소하거나 체결 상태를 확인한 뒤 다시 주문하세요.",
+            "severity": "warning",
+        },
+        "modify-restricted": {
+            "title": "Toss 주문 정정 가능 수량이 부족합니다.",
+            "message": "이미 체결되었거나 정정 가능한 잔여 수량이 없어 주문 정정을 할 수 없습니다.",
+            "action": "거래내역을 새로고침해 실제 주문 상태를 확인하고, 체결된 주문은 새 주문으로 처리하세요.",
+            "severity": "warning",
+        },
+        "cancel-restricted": {
+            "title": "Toss 주문 취소 가능 수량이 부족합니다.",
+            "message": "이미 체결되었거나 취소 가능한 잔여 수량이 없어 주문 취소를 할 수 없습니다.",
+            "action": "거래내역을 새로고침해 실제 주문 상태를 확인하세요.",
+            "severity": "warning",
+        },
         "401": {
             "title": "Toss 인증 토큰을 갱신해야 합니다.",
             "message": "Toss API 인증이 만료되었거나 키가 올바르지 않습니다.",
@@ -141,6 +393,50 @@ ERROR_GUIDES = {
 
 
 KEYWORD_GUIDES = [
+    (
+        "MARKET_CLOSED",
+        [
+            "장 마감",
+            "장마감",
+            "장 종료",
+            "장종료",
+            "장운영",
+            "거래시간",
+            "주문 가능 시간",
+            "주문가능시간",
+            "주문 가능한 시간",
+            "주문 가능한 시간이 아닙니다",
+            "주문 시간이 아닙니다",
+            "거래 가능 시간",
+            "거래 가능한 시간이 아닙니다",
+            "주문 불가 시간",
+            "거래 불가 시간",
+            "market-closed",
+            "market_closed",
+            "not-trading-hours",
+            "not_trading_hours",
+            "market closed",
+            "market is closed",
+            "not trading hours",
+            "outside trading hours",
+        ],
+        {
+            "title": "주문 전송 실패",
+            "message": "장이 마감되었습니다.",
+            "action": "",
+            "severity": "warning",
+        },
+    ),
+    (
+        "ACCOUNT",
+        ["accountSeq", "account seq", "계좌", "account not found", "account-not-found", "계좌번호", "CANO", "ACNT_PRDT_CD"],
+        {
+            "title": "거래 계좌 정보를 확인해야 합니다.",
+            "message": "저장된 계좌 정보가 없거나 현재 API 키로 주문 가능한 계좌와 일치하지 않습니다.",
+            "action": "설정 화면에서 거래소 계좌 목록을 다시 조회하고 계좌번호/accountSeq를 갱신한 뒤 다시 시도하세요.",
+            "severity": "warning",
+        },
+    ),
     (
         "NO_MODULE",
         ["No module named", "ModuleNotFoundError"],
@@ -210,6 +506,10 @@ def extract_exchange_error(error: Exception | str) -> dict[str, Any]:
     if binance_match:
         code = binance_match.group(1)
 
+    string_code_match = re.search(r"[\"']code[\"']\s*[:=]\s*[\"']([^\"']+)[\"']", raw_message, re.IGNORECASE)
+    if string_code_match:
+        code = string_code_match.group(1)
+
     egw_match = re.search(r"(EGW\d+)", raw_message, re.IGNORECASE)
     if egw_match:
         code = egw_match.group(1).upper()
@@ -237,9 +537,29 @@ def extract_exchange_error(error: Exception | str) -> dict[str, Any]:
     }
 
 
+def normalize_exchange_key(exchange: str | None) -> str | None:
+    """
+    내부 거래소 식별자를 사용자 친화 에러 가이드의 상위 브로커 키로 정규화합니다.
+    """
+    if not exchange:
+        return None
+    normalized = exchange.upper()
+    if "BINANCE" in normalized:
+        return "BINANCE"
+    if "COINONE" in normalized:
+        return "COINONE"
+    if "TOSS" in normalized:
+        return "TOSS"
+    if "KIS" in normalized or "한국투자" in normalized:
+        return "KIS"
+    if "SUPABASE" in normalized:
+        return "SUPABASE"
+    return normalized
+
+
 def infer_exchange(raw_message: str, explicit_exchange: str | None = None) -> str | None:
     if explicit_exchange:
-        return explicit_exchange.upper()
+        return normalize_exchange_key(explicit_exchange)
     lowered = raw_message.lower()
     if "coinone" in lowered or "코인원" in raw_message:
         return "COINONE"
@@ -270,6 +590,40 @@ def format_error_payload(
 
     if inferred_exchange == "TOSS" and "zstd" in raw_message.lower():
         code = "ZSTD_DECODE"
+
+    if inferred_exchange in ("KIS", "TOSS") and any(keyword in raw_message.lower() for keyword in (
+        "장 마감",
+        "장마감",
+        "장 종료",
+        "장종료",
+        "장운영",
+        "거래시간",
+        "주문 가능 시간",
+        "주문가능시간",
+        "주문 가능한 시간",
+        "주문가능한시간",
+        "주문 시간이 아닙니다",
+        "주문시간이 아닙니다",
+        "주문 가능한 시간이 아닙니다",
+        "주문가능한시간이아닙니다",
+        "거래 가능 시간",
+        "거래가능시간",
+        "거래 가능한 시간이 아닙니다",
+        "거래가능한시간이아닙니다",
+        "주문 불가 시간",
+        "주문불가시간",
+        "거래 불가 시간",
+        "거래불가시간",
+        "market-closed",
+        "market_closed",
+        "not-trading-hours",
+        "not_trading_hours",
+        "market closed",
+        "market is closed",
+        "not trading hours",
+        "outside trading hours",
+    )):
+        code = "MARKET_CLOSED"
 
     guide = None
     if inferred_exchange and code:

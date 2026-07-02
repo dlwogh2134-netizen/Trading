@@ -1,5 +1,52 @@
 from abc import ABC, abstractmethod
 
+
+MARKET_CLOSED_ORDER_MESSAGE = "주문 전송 실패\n장이 마감되었습니다."
+
+
+class MarketClosedError(Exception):
+    """거래소가 장 마감 또는 주문 불가 시간으로 주문을 거절했을 때 사용합니다."""
+
+    def __init__(self, message: str = MARKET_CLOSED_ORDER_MESSAGE):
+        super().__init__(message)
+
+
+def is_market_closed_order_error(message: str | None) -> bool:
+    text = str(message or "").lower()
+    return any(keyword in text for keyword in (
+        "장 마감",
+        "장마감",
+        "장 종료",
+        "장종료",
+        "장운영",
+        "거래시간",
+        "주문 가능 시간",
+        "주문가능시간",
+        "주문 가능한 시간",
+        "주문가능한시간",
+        "주문 시간이 아닙니다",
+        "주문시간이 아닙니다",
+        "주문 가능한 시간이 아닙니다",
+        "주문가능한시간이아닙니다",
+        "거래 가능 시간",
+        "거래가능시간",
+        "거래 가능한 시간이 아닙니다",
+        "거래가능한시간이아닙니다",
+        "주문 불가 시간",
+        "주문불가시간",
+        "거래 불가 시간",
+        "거래불가시간",
+        "market-closed",
+        "market_closed",
+        "not-trading-hours",
+        "not_trading_hours",
+        "market closed",
+        "market is closed",
+        "not trading hours",
+        "outside trading hours",
+    ))
+
+
 class ExchangeClient(ABC):
     @abstractmethod
     def get_price(self, symbol: str) -> dict:

@@ -44,7 +44,7 @@ export default function SearchNotFound({ isLoggedIn, userEmail, handleLogout }) 
 
             <Link
               to="/"
-              className="inline-flex shrink-0 items-center justify-center rounded border border-ai-cyan/70 bg-ai-cyan px-4 py-2 text-xs font-black text-[#071018] transition-all hover:bg-cyan-300"
+              className="inline-flex shrink-0 items-center justify-center rounded border border-blue-600/70 bg-blue-600 px-4 py-2 text-xs font-black text-[#071018] transition-all hover:bg-blue-600"
             >
               홈으로 이동
             </Link>

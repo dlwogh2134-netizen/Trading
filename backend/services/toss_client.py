@@ -7,7 +7,7 @@ import logging
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from backend.services.exchange_client import ExchangeClient
+from backend.services.exchange_client import ExchangeClient, MarketClosedError, is_market_closed_order_error
 
 logger = logging.getLogger(__name__)
 
@@ -783,9 +783,12 @@ class TossClient(ExchangeClient):
                 error = (res.json() or {}).get("error") or {}
             except ValueError:
                 error = {}
+            error_code = str(error.get("code") or "")
+            error_message = error.get("message")
+            if is_market_closed_order_error(error_code) or is_market_closed_order_error(error_message) or is_market_closed_order_error(res.text):
+                raise MarketClosedError()
             if error.get("code") == "opposite-pending-order-exists":
                 raise Exception("주문 전송 실패\n토스 주문 접수 실패 : 반대 포지션 미체결 주문이 존재합니다.")
-            error_message = error.get("message")
             if error_message:
                 raise Exception(f"토스 주문 접수 실패 : {error_message}")
             raise Exception(f"토스 주문 접수 실패: {res.text}")
