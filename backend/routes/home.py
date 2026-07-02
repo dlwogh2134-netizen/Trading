@@ -38,10 +38,7 @@ def get_home_market():
             "data": overview
         })
     except Exception as error:
-        return jsonify({
-            "success": False,
-            "message": f"홈 화면 시장 조회 실패: {str(error)}",
-        }), 500
+        return jsonify(format_error_payload(error, "홈 화면 시장 조회 실패")), 500
 
 @home_bp.route("/api/home/overview", methods=["POST"] )
 def get_home_overview():
@@ -73,7 +70,8 @@ def get_home_overview():
     try:
         result["coins"] = fetch_coinone_overview()
     except Exception as coin_error:
-        result["message"] = f"Coinone 조회 실패: {str(coin_error)}"
+        formatted = format_error_payload(coin_error, "Coinone 홈 코인 조회 실패", exchange="COINONE")
+        result["message"] = formatted["error"]["title"]
 
     has_kis_credentials = bool(appkey and appsecret and cano)
     if not has_kis_credentials:
@@ -109,11 +107,9 @@ def get_home_overview():
             "data": result
         })
     except Exception as kis_error:
-        return jsonify({
-            "success": False,
-            "message": f"KIS 조회 실패: {str(kis_error)}",
-            "data": result,
-        }), 500
+        formatted = format_error_payload(kis_error, "KIS 홈 계좌 조회 실패", exchange="KIS")
+        formatted["data"] = result
+        return jsonify(formatted), 500
 
 @home_bp.route("/api/market/kis/sync", methods=["POST"] )
 def sync_kis_market_universe():
@@ -187,10 +183,7 @@ def sync_kis_market_universe():
             "data": result,
         })
     except Exception as error:
-        return jsonify({
-            "success": False,
-            "message": f"KIS 종목 마스터 동기화 실패: {str(error)}",
-        }), 500
+        return jsonify(format_error_payload(error, "KIS 종목 마스터 동기화 실패", exchange="KIS")), 500
 
 @home_bp.route("/api/market/rankings", methods=["GET"] )
 def get_market_rankings():
@@ -216,10 +209,7 @@ def get_market_rankings():
             }
         })
     except Exception as error:
-        return jsonify({
-            "success": False,
-            "message": f"거래대금 순위 조회 실패: {str(error)}",
-        }), 500
+        return jsonify(format_error_payload(error, "거래대금 순위 조회 실패", exchange="KIS")), 500
 
 @home_bp.route("/api/dashboard/balance", methods=["POST"])
 def get_dashboard_balance():

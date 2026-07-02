@@ -2,6 +2,8 @@ import os
 
 from flask import Blueprint, current_app, jsonify, request
 
+from backend.services.error_message_service import format_error_payload
+
 
 disclosures_bp = Blueprint("disclosures", __name__)
 
@@ -36,7 +38,7 @@ def get_disclosures():
             }
         )
     except Exception as error:
-        return jsonify({"success": False, "message": f"Failed to retrieve disclosures: {str(error)}"}), 500
+        return jsonify(format_error_payload(error, "공시 목록 조회 실패")), 500
 
 
 @disclosures_bp.route("/api/disclosures/sync", methods=["POST"])
@@ -57,7 +59,7 @@ def sync_disclosures():
 
         return jsonify({"success": True, "data": result})
     except Exception as error:
-        return jsonify({"success": False, "message": f"Failed to sync disclosures: {str(error)}"}), 500
+        return jsonify(format_error_payload(error, "공시 수집 실패")), 500
 
 
 def _is_admin_sync_request() -> bool:

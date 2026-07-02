@@ -172,7 +172,4 @@ def ensure_news_summaries():
             }
         })
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "message": f"Failed to ensure news summaries: {str(e)}"
-        }), 500
+        return jsonify(format_error_payload(e, "뉴스 요약 생성 실패")), 500

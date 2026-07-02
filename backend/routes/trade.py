@@ -1403,7 +1403,8 @@ def place_manual_order():
                 query_supabase(auth_header, "auto_trading_rules", "POST", json_data=legacy_rule_data)
                 auto_exit_result = "감시 조건 등록 완료 - DB 마이그레이션 적용 전이라 자동매도 실행 모드는 저장되지 않았습니다."
         except Exception as e:
-            auto_exit_result = f"감시 조건 등록 실패: {str(e)}"
+            current_app.logger.warning("자동감시 조건 등록 실패: %s", e)
+            auto_exit_result = "감시 조건 등록 실패 - 주문은 접수되었지만 익절/손절 감시 규칙은 저장되지 않았습니다."
 
     # 6. 주문 이력 trade_proposals에 EXECUTED 상태로 등록 (수동 거래 히스토리 기록용)
     try:
@@ -1476,7 +1477,7 @@ def sync_kis_order_statuses():
             },
         ) or []
     except Exception as e:
-        return jsonify({"success": False, "message": f"거래내역 조회 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "거래내역 조회 실패", exchange="KIS")), 500
 
     clients = {}
     synced_count = 0
@@ -1677,7 +1678,7 @@ def get_estimated_holdings():
             },
         ) or []
     except Exception as e:
-        return jsonify({"success": False, "message": f"거래내역 조회 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "거래내역 조회 실패")), 500
 
     grouped = {}
     account_lookup_clients = {}
@@ -1830,7 +1831,7 @@ def cancel_manual_order():
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 404
     except Exception as e:
-        return jsonify({"success": False, "message": f"거래내역 조회 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "거래내역 조회 실패")), 500
 
     status = str(proposal.get("status") or "").upper()
     if status in {"EXECUTED", "CANCELED", "REJECTED", "FAILED"}:
@@ -1896,7 +1897,7 @@ def cancel_manual_order():
         _patch_trade_proposal(auth_header, proposal_id, {
             "failure_reason": f"주문 취소 실패: {str(e)[:500]}",
         })
-        return jsonify({"success": False, "message": f"주문 취소 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "주문 취소 실패", exchange=exchange)), 500
 
 
 @trade_bp.route("/api/trade/order/modify", methods=["POST"])
@@ -1929,7 +1930,7 @@ def modify_manual_order():
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 404
     except Exception as e:
-        return jsonify({"success": False, "message": f"거래내역 조회 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "거래내역 조회 실패")), 500
 
     status = str(proposal.get("status") or "").upper()
     if status in {"EXECUTED", "CANCELED", "REJECTED", "FAILED"}:
@@ -2051,7 +2052,7 @@ def modify_manual_order():
         _patch_trade_proposal(auth_header, proposal_id, {
             "failure_reason": f"주문 정정 실패: {str(e)[:500]}",
         })
-        return jsonify({"success": False, "message": f"주문 정정 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "주문 정정 실패", exchange=exchange)), 500
 
 
 @trade_bp.route("/api/trade/order/cancel-replace", methods=["POST"])
@@ -2083,7 +2084,7 @@ def cancel_replace_order():
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 404
     except Exception as e:
-        return jsonify({"success": False, "message": f"거래내역 조회 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "거래내역 조회 실패")), 500
 
     exchange = proposal.get("exchange")
     if exchange not in ("COINONE", "BINANCE", "BINANCE_UM_FUTURES"):
@@ -2176,7 +2177,7 @@ def cancel_replace_order():
         _patch_trade_proposal(auth_header, proposal_id, {
             "failure_reason": f"취소 후 재주문 실패: {str(e)[:500]}",
         })
-        return jsonify({"success": False, "message": f"취소 후 재주문 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "취소 후 재주문 실패", exchange=exchange)), 500
 
 @trade_bp.route("/api/chart/candles", methods=["GET"])
 def get_chart_candles():
@@ -2369,7 +2370,11 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
             url = f"https://api.coinone.co.kr/public/v2/chart/KRW/{clean_symbol}"
             res = requests.get(url, params={"interval": coinone_interval})
             if res.status_code != 200:
-                return jsonify({"success": False, "message": f"Coinone 차트 조회 실패: {res.text}"}), 500
+                return jsonify(format_error_payload(
+                    f"Coinone chart API failed status={res.status_code}: {res.text}",
+                    "Coinone 차트 조회 실패",
+                    exchange="COINONE",
+                )), 502
                 
             data = res.json()
             if data.get("result") != "success":
@@ -2424,7 +2429,11 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
             }
             res = requests.get(url, params=params)
             if res.status_code != 200:
-                return jsonify({"success": False, "message": f"Binance 차트 조회 실패: {res.text}"}), 500
+                return jsonify(format_error_payload(
+                    f"Binance chart API failed status={res.status_code}: {res.text}",
+                    "Binance 차트 조회 실패",
+                    exchange=exchange,
+                )), 502
                 
             data = res.json()
             candles = []
@@ -2460,7 +2469,7 @@ def _fetch_candles_uncached(cache_key, exchange, symbol, interval, count, broker
     except Exception as e:
         import traceback
         current_app.logger.error(f"시세 차트 조회 에러 발생: {str(e)}\n{traceback.format_exc()}")
-        return jsonify({"success": False, "message": f"시세 차트 조회 실패: {str(e)}"}), 500
+        return jsonify(format_error_payload(e, "시세 차트 조회 실패", exchange=exchange)), 500
 
 
 def generate_mock_orderbook(symbol, base_price=150000):
@@ -3270,7 +3279,7 @@ def sync_toss_trade_history():
         return jsonify({"success": True, "data": result})
     except Exception as error:
         current_app.logger.exception("토스 주문내역 동기화 실패")
-        return jsonify({"success": False, "message": str(error)}), 400
+        return jsonify(format_error_payload(error, "토스 주문내역 동기화 실패", exchange="TOSS")), 400
 
 
 @trade_bp.route("/api/trade/history/broker", methods=["GET"])
@@ -3292,7 +3301,7 @@ def get_broker_trade_history():
         return jsonify({"success": True, "data": rows})
     except Exception as error:
         current_app.logger.exception("브로커 주문 원장 조회 실패")
-        return jsonify({"success": False, "message": str(error)}), 400
+        return jsonify(format_error_payload(error, "브로커 주문 원장 조회 실패")), 400
 
 
 @trade_bp.route("/api/symbol/search", methods=["GET"])
