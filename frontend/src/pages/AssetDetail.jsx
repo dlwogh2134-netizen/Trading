@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
-import { supabase, deleteUserWatchlistItem, fetchUserWatchlist, upsertUserWatchlistItem } from '../supabaseClient'
+import { supabase, deleteUserWatchlistItem, ensureNewsSummaries, fetchUserWatchlist, upsertUserWatchlistItem } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
 
@@ -97,6 +97,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [loadingNews, setLoadingNews] = useState(false)
   const [newsSyncing, setNewsSyncing] = useState(false)
   const [newsSyncMessage, setNewsSyncMessage] = useState({ text: '', isError: false })
+  const [selectedNewsId, setSelectedNewsId] = useState('')
+  const [summaryLoadingId, setSummaryLoadingId] = useState('')
   const [disclosureList, setDisclosureList] = useState([])
   const [loadingDisclosures, setLoadingDisclosures] = useState(false)
   const [selectedDisclosureId, setSelectedDisclosureId] = useState('')
@@ -139,8 +141,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       ? 'USD'
       : (/^\d+$/.test(symbol) ? 'KRW' : 'USD')
   const showLevel2Panel = false
-  const selectedDisclosure = disclosureList.find((item) => item.id === selectedDisclosureId) || disclosureList[0] || null
-
   const [isMarketClosed, setIsMarketClosed] = useState(false)
   const chartPollMs = isMarketClosed
     ? 60000
@@ -343,7 +343,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const fetchNewsList = async () => {
     setLoadingNews(true)
     try {
-      const response = await fetch(`${API_BASE_URL}/api/news?symbol=${symbol}&limit=6`)
+      const response = await fetch(`${API_BASE_URL}/api/news?symbol=${symbol}&limit=10`)
       const resData = await response.json()
       if (resData.success && resData.data && resData.data.items) {
         setNewsList(resData.data.items)
@@ -352,6 +352,52 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       console.error("뉴스 로드 실패:", e)
     } finally {
       setLoadingNews(false)
+    }
+  }
+
+  const handleToggleNewsSummary = async (item) => {
+    const articleId = item?.id
+    if (!articleId) return
+
+    if (selectedNewsId === articleId) {
+      setSelectedNewsId('')
+      return
+    }
+
+    setSelectedNewsId(articleId)
+
+    if (item.ai_summary) {
+      return
+    }
+
+    setSummaryLoadingId(articleId)
+
+    try {
+      const response = await ensureNewsSummaries({ articleIds: [articleId] })
+      const updatedItem = response?.items?.find((newsItem) => newsItem.id === articleId) || response?.items?.[0]
+
+      if (updatedItem) {
+        setNewsList((current) =>
+          current.map((newsItem) =>
+            newsItem.id === articleId
+              ? {
+                  ...newsItem,
+                  ai_summary: updatedItem.ai_summary || newsItem.ai_summary,
+                  ai_summary_model: updatedItem.ai_summary_model || newsItem.ai_summary_model,
+                  ai_summary_generated_at: updatedItem.ai_summary_generated_at || newsItem.ai_summary_generated_at,
+                  ai_summary_prompt_version: updatedItem.ai_summary_prompt_version || newsItem.ai_summary_prompt_version,
+                }
+              : newsItem,
+          ),
+        )
+      }
+    } catch (error) {
+      setNewsSyncMessage({
+        text: error.message || '뉴스 요약을 불러오지 못했습니다.',
+        isError: true,
+      })
+    } finally {
+      setSummaryLoadingId('')
     }
   }
 
@@ -523,6 +569,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     } catch (e) {
       return '';
     }
+  }
+
+  const formatNewsSource = (source) => {
+    const normalized = String(source || '').trim().toUpperCase()
+    if (normalized === 'NAVER') return '네이버'
+    if (normalized === 'FINNHUB') return 'Finnhub'
+    return source || 'NEWS'
   }
 
   const formatTimestamp = (value) => {
@@ -1635,44 +1688,73 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               </div>
 
               {activeTab === 'news' && (
-                <div className="max-h-[280px] overflow-y-auto pr-1">
+                <div className="max-h-[360px] overflow-y-auto pr-1">
                   <section className="min-h-[220px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
-                    <div className="mb-3 flex items-center justify-between border-b border-[#1f2945]/50 pb-2">
-                      <h3 className="text-xs font-bold text-cyan-300">뉴스</h3>
-                      <span className="text-[10px] font-mono text-slate-500">{newsList.length}건</span>
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-[#1f2945]/50 pb-2">
+                      <h3 className="text-sm font-bold text-cyan-200">뉴스</h3>
+                      <span className="rounded-full border border-cyan-500/30 bg-cyan-950/30 px-2.5 py-1 text-[11px] font-bold text-cyan-100">
+                        총 {Math.min(newsList.length, 10)}개
+                      </span>
                     </div>
 
                     <div className="flex flex-col gap-3">
                       {loadingNews ? (
                         <div className="py-8 text-center text-xs text-cyan-400/80 font-mono animate-pulse">
-                          실시간 크롤링 뉴스 분석 중...
+                          뉴스 로드 중...
                         </div>
                       ) : newsList.length > 0 ? (
                         <>
-                          <div className="border-l-2 border-cyan-500 pl-3 py-1.5 bg-cyan-950/20 rounded-r">
-                            <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider">AI RAG 뉴스 핵심 요약</span>
-                            <p className="text-xs text-[#e2e2ec] mt-1 leading-relaxed">
-                              {newsList.find(n => n.ai_summary)?.ai_summary || newsList[0]?.summary || `${symbol} 종목에 대한 실시간 수집 뉴스를 분석 중입니다.`}
-                            </p>
-                          </div>
-                          {newsList.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs py-2 border-b border-[#1f2945]/30 hover:bg-slate-800/10 px-1 rounded transition-all">
-                              <a
-                                href={item.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-[#e2e2ec] truncate max-w-[80%] hover:underline cursor-pointer"
-                              >
-                                {item.title}
-                              </a>
-                              <span className="text-[10px] text-slate-500 font-mono">{formatTime(item.published_at)}</span>
+                          {newsList.slice(0, 10).map(item => (
+                            <div key={item.id} className="flex flex-col gap-2 border-b border-[#1f2945]/30 px-1 py-2 transition-all hover:bg-slate-800/10">
+                              <div className="flex min-w-0 flex-col gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleNewsSummary(item)}
+                                  className="block w-full min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
+                                >
+                                  <span className="block w-full max-w-full overflow-hidden text-ellipsis whitespace-nowrap pr-2 font-bold leading-5">
+                                    {item.title}
+                                  </span>
+                                  <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                    <span className="rounded border border-cyan-500/25 bg-cyan-950/25 px-1.5 py-0.5 text-[10px] font-bold text-cyan-200">
+                                      {formatNewsSource(item.source)}
+                                    </span>
+                                    <span className="rounded border border-slate-600/60 bg-slate-900/50 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-200">
+                                      {formatTime(item.published_at)}
+                                    </span>
+                                  </span>
+                                </button>
+                                <div className="flex shrink-0 items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleNewsSummary(item)}
+                                    disabled={summaryLoadingId === item.id}
+                                    className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {summaryLoadingId === item.id ? '\uc0dd\uc131 \uc911' : selectedNewsId === item.id ? '\uc811\uae30' : '\uc694\uc57d \ubcf4\uae30'}
+                                  </button>
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white"
+                                  >
+                                    {'\uc6d0\ubb38 \uc5f4\uae30'}
+                                  </a>
+                                </div>
+                              </div>
+                              {selectedNewsId === item.id ? (
+                                <p className="rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-2 text-[11px] leading-5 text-slate-300">
+                                  {item.ai_summary || (summaryLoadingId === item.id ? '\uc694\uc57d\uc744 \uc0dd\uc131\ud558\ub294 \uc911\uc785\ub2c8\ub2e4...' : '\uc694\uc57d \ubcf4\uae30 \ubc84\ud2bc\uc744 \ub20c\ub7ec 3\uc904 \uc694\uc57d\uc744 \uc0dd\uc131\ud558\uc138\uc694.')}
+                                </p>
+                              ) : null}
                             </div>
                           ))}
                         </>
                       ) : (
                         <div className="flex flex-col items-center gap-3 py-8 text-center">
                           <p className="text-xs text-slate-500 font-mono">
-                            해당 종목의 실시간 수집 뉴스가 존재하지 않습니다.
+                            해당 종목의 저장된 뉴스가 없습니다.
                           </p>
                           <button
                             type="button"
@@ -1695,7 +1777,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               )}
 
               {activeTab === 'disclosure' && (
-                <div className="max-h-[280px] overflow-y-auto pr-1">
+                <div className="max-h-[360px] overflow-y-auto pr-1">
                   <section className="min-h-[220px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
                     <div className="mb-3 flex items-center justify-between border-b border-[#1f2945]/50 pb-2">
                       <h3 className="text-xs font-bold text-cyan-300">공시</h3>
@@ -1708,39 +1790,40 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                         </div>
                       ) : disclosureList.length > 0 ? (
                         <>
-                          <div className="border-l-2 border-cyan-500 pl-3 py-1.5 bg-cyan-950/20 rounded-r">
-                            <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider">DART 공시 요약보기</span>
-                            <p className="text-xs text-[#e2e2ec] mt-1 leading-relaxed">
-                              {selectedDisclosure?.summary || selectedDisclosure?.report_nm || `${symbol} 종목의 최근 공시를 확인 중입니다.`}
-                            </p>
-                          </div>
-                          {disclosureList.map(item => (
-                            <div key={item.id} className="flex flex-col gap-2 border-b border-[#1f2945]/30 px-1 py-2 transition-all hover:bg-slate-800/10 sm:flex-row sm:items-center sm:justify-between">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedDisclosureId(item.id)}
-                                className="min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
-                              >
-                                <span className="block truncate font-bold">{item.report_nm}</span>
-                                <span className="mt-0.5 block text-[10px] font-mono text-slate-500">{item.corp_name} · {item.rcept_dt}</span>
-                              </button>
-                              <div className="flex shrink-0 items-center gap-2">
+                          {disclosureList.slice(0, 10).map(item => (
+                            <div key={item.id} className="flex flex-col gap-2 border-b border-[#1f2945]/30 px-1 py-2 transition-all hover:bg-slate-800/10">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                 <button
                                   type="button"
-                                  onClick={() => setSelectedDisclosureId(item.id)}
-                                  className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30"
+                                  onClick={() => setSelectedDisclosureId((prev) => prev === item.id ? '' : item.id)}
+                                  className="min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
                                 >
-                                  요약 보기
+                                  <span className="block truncate font-bold">{item.report_nm}</span>
+                                  <span className="mt-0.5 block text-[10px] font-mono text-slate-500">{item.corp_name} · {item.rcept_dt}</span>
                                 </button>
-                                <a
-                                  href={item.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white"
-                                >
-                                  원문 열기
-                                </a>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedDisclosureId((prev) => prev === item.id ? '' : item.id)}
+                                    className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30"
+                                  >
+                                    요약 보기
+                                  </button>
+                                  <a
+                                    href={item.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white"
+                                  >
+                                    원문 열기
+                                  </a>
+                                </div>
                               </div>
+                              {selectedDisclosureId === item.id ? (
+                                <p className="rounded border border-cyan-500/20 bg-cyan-950/20 px-3 py-2 text-[11px] leading-5 text-slate-300">
+                                  {item.summary || item.report_nm || '저장된 요약이 없습니다.'}
+                                </p>
+                              ) : null}
                             </div>
                           ))}
                         </>
