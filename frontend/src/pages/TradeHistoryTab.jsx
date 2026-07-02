@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabaseClient'
 import { buildApiErrorText } from '../lib/apiError.js'
 
@@ -70,6 +70,7 @@ const TRADE_HISTORY_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,p
 const BROKER_HISTORY_SELECT_FIELDS = 'id,exchange,broker_env,symbol,market_country,side,price,quantity,order_amount,status,raw_status,currency,client_order_id,external_order_id,filled_quantity,average_filled_price,filled_amount,commission,tax,ordered_at,filled_at,settlement_date'
 
 const isCancelReplaceExchange = (exchange) => ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(String(exchange || '').toUpperCase())
+const symbolDisplayNameCache = new Map()
 
 const fetchSymbolDisplayNames = async (proposals = []) => {
   const symbols = Array.from(new Set(
@@ -80,20 +81,28 @@ const fetchSymbolDisplayNames = async (proposals = []) => {
 
   if (symbols.length === 0) return {}
 
+  const cachedPairs = symbols
+    .filter((symbol) => symbolDisplayNameCache.has(symbol))
+    .map((symbol) => [symbol, symbolDisplayNameCache.get(symbol)])
+  const uncachedSymbols = symbols.filter((symbol) => !symbolDisplayNameCache.has(symbol))
+
   const pairs = await Promise.all(
-    symbols.map(async (symbol) => {
+    uncachedSymbols.map(async (symbol) => {
       try {
         const response = await fetch(`${API_BASE_URL}/api/symbol/lookup?query=${encodeURIComponent(symbol)}`)
         const payload = await response.json()
         const displayName = payload?.success ? payload.data?.display_name : ''
-        return [symbol, displayName || symbol]
+        const resolvedName = displayName || symbol
+        symbolDisplayNameCache.set(symbol, resolvedName)
+        return [symbol, resolvedName]
       } catch {
+        symbolDisplayNameCache.set(symbol, symbol)
         return [symbol, symbol]
       }
     }),
   )
 
-  return Object.fromEntries(pairs)
+  return Object.fromEntries([...cachedPairs, ...pairs])
 }
 
 const hydrateTradeProposals = async (proposals = []) => {
@@ -224,6 +233,7 @@ export default function TradeHistoryTab() {
     start: '',
     end: '',
   })
+  const realtimeRefreshTimerRef = useRef(null)
   const exchangeTone = {
     TOSS: 'border-blue-500/40 bg-blue-500/15 text-blue-300',
     KIS: 'border-rose-500/40 bg-rose-500/15 text-rose-300',
@@ -249,45 +259,67 @@ export default function TradeHistoryTab() {
     let proposalChannel = null
     let brokerChannel = null
 
-    const loadTradeHistory = async () => {
-      setLoading(true)
+    const loadTradeHistory = async ({ runSync = false, showLoading = false } = {}) => {
+      if (showLoading) {
+        setLoading(true)
+      }
       setTradeError('')
 
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-      if (sessionError || !session?.user?.id) {
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+        if (sessionError || !session?.user?.id) {
+          if (!ignore) {
+            setTradeHistory([])
+            setTradeError('로그인 세션을 확인할 수 없습니다.')
+          }
+          return
+        }
+
+        if (runSync) {
+          await syncTradeStatuses()
+        }
+
+        const [
+          { data: proposalRows, error: proposalError },
+          { data: brokerRows, error: brokerError },
+        ] = await Promise.all([
+          supabase
+            .from('trade_proposals')
+            .select(TRADE_HISTORY_SELECT_FIELDS)
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('broker_order_history')
+            .select(BROKER_HISTORY_SELECT_FIELDS)
+            .order('ordered_at', { ascending: false }),
+        ])
+
+        if (ignore) return
+
+        if (proposalError || (brokerError && !isMissingBrokerHistoryTableError(brokerError))) {
+          setTradeHistory([])
+          setTradeError('거래내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+        } else {
+          setTradeHistory(await mergeTrades(proposalRows || [], brokerError ? [] : (brokerRows || [])))
+        }
+      } catch {
         if (!ignore) {
           setTradeHistory([])
-          setTradeError('로그인 세션을 확인할 수 없습니다.')
+          setTradeError('거래내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+        }
+      } finally {
+        if (showLoading && !ignore) {
           setLoading(false)
         }
-        return
       }
+    }
 
-      await syncTradeStatuses()
-
-      const [
-        { data: proposalRows, error: proposalError },
-        { data: brokerRows, error: brokerError },
-      ] = await Promise.all([
-        supabase
-          .from('trade_proposals')
-          .select(TRADE_HISTORY_SELECT_FIELDS)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('broker_order_history')
-          .select(BROKER_HISTORY_SELECT_FIELDS)
-          .order('ordered_at', { ascending: false }),
-      ])
-
-      if (ignore) return
-
-      if (proposalError || (brokerError && !isMissingBrokerHistoryTableError(brokerError))) {
-        setTradeHistory([])
-        setTradeError('거래내역을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
-      } else {
-        setTradeHistory(await mergeTrades(proposalRows || [], brokerError ? [] : (brokerRows || [])))
+    const scheduleRealtimeRefresh = () => {
+      if (realtimeRefreshTimerRef.current) {
+        window.clearTimeout(realtimeRefreshTimerRef.current)
       }
-      setLoading(false)
+      realtimeRefreshTimerRef.current = window.setTimeout(() => {
+        loadTradeHistory({ runSync: false, showLoading: false })
+      }, 250)
     }
 
     const subscribeTradeHistory = async () => {
@@ -305,7 +337,7 @@ export default function TradeHistoryTab() {
             filter: `user_id=eq.${session.user.id}`,
           },
           () => {
-            loadTradeHistory()
+            scheduleRealtimeRefresh()
           },
         )
         .subscribe()
@@ -321,17 +353,24 @@ export default function TradeHistoryTab() {
             filter: `user_id=eq.${session.user.id}`,
           },
           () => {
-            loadTradeHistory()
+            scheduleRealtimeRefresh()
           },
         )
         .subscribe()
     }
 
-    loadTradeHistory()
-    subscribeTradeHistory()
+    const initializeTradeHistory = async () => {
+      await loadTradeHistory({ runSync: true, showLoading: true })
+      await subscribeTradeHistory()
+    }
+
+    initializeTradeHistory()
 
     return () => {
       ignore = true
+      if (realtimeRefreshTimerRef.current) {
+        window.clearTimeout(realtimeRefreshTimerRef.current)
+      }
       if (proposalChannel) {
         supabase.removeChannel(proposalChannel)
       }
