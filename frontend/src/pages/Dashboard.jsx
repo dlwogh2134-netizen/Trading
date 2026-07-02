@@ -23,21 +23,21 @@ const formatKrw = (value) => `₩${Math.round(toNumber(value)).toLocaleString()}
 const formatCurrency = (value, currency, displayCurrency = 'KRW', exchangeRate = 1500) => {
   const numeric = toNumber(value)
   const rate = toNumber(exchangeRate) || 1500
-  
+
   if (displayCurrency === 'KRW') {
     if (currency === 'USD' || currency === 'USDT') {
       return `₩${Math.round(numeric * rate).toLocaleString()}`
     }
     return `₩${Math.round(numeric).toLocaleString()}`
   }
-  
+
   if (displayCurrency === 'USD') {
     if (currency === 'KRW') {
       return `$${(numeric / rate).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     }
     return `$${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
-  
+
   if (currency === 'USD' || currency === 'USDT') {
     return `$${numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
@@ -135,11 +135,11 @@ const getWatchlistCurrentPrice = (item = {}) => {
   const payload = item.sourcePayload || {}
   return parsePriceNumber(
     item.currentPrice
-      ?? payload.current_price
-      ?? payload.currentPrice
-      ?? payload.live_price
-      ?? payload.livePrice
-      ?? payload.price,
+    ?? payload.current_price
+    ?? payload.currentPrice
+    ?? payload.live_price
+    ?? payload.livePrice
+    ?? payload.price,
   )
 }
 
@@ -155,14 +155,14 @@ const getDashboardWatchlistChartConfig = (item = {}) => {
   const sourcePayload = item.sourcePayload || {}
   const exchange = String(
     item.exchange
-      || item.account
-      || sourcePayload.exchange
-      || (assetType === 'CRYPTO' ? 'COINONE' : 'TOSS'),
+    || item.account
+    || sourcePayload.exchange
+    || (assetType === 'CRYPTO' ? 'COINONE' : 'TOSS'),
   ).toUpperCase()
   const brokerEnv = String(
     sourcePayload.broker_env
-      || sourcePayload.env
-      || (exchange === 'KIS' ? 'REAL' : 'REAL'),
+    || sourcePayload.env
+    || (exchange === 'KIS' ? 'REAL' : 'REAL'),
   ).toUpperCase()
 
   return {
@@ -282,7 +282,7 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
   const validItems = items.filter(Boolean)
   const filteredItems = validItems.filter((item) => showMockAssets || item.env !== 'MOCK')
   const representativeRate = filteredItems.find((item) => item.exchange_rate)?.exchange_rate || 1500
-  
+
   let totalEvaluationKrw = 0
   let availableCashKrw = 0
   let hasCashValue = false
@@ -290,19 +290,19 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
   const cashUnavailableSources = []
   const cashBreakdown = {}
   const cashBreakdownEntries = []
-  
+
   const holdings = filteredItems.flatMap((item) => {
     const exchange = item.exchange
     const rate = toNumber(item.exchange_rate) || representativeRate
     const itemCurrency = item.currency || 'KRW'
     const cashCurrency = item.available_cash_currency || itemCurrency
-    
+
     let itemEval = toNumber(item.total_evaluation)
-    
+
     if (itemCurrency === 'USD' || itemCurrency === 'USDT') {
       itemEval = itemEval * rate
     }
-    
+
     totalEvaluationKrw += itemEval
 
     if (item.available_cash !== null && item.available_cash !== undefined && item.available_cash !== '' && Number.isFinite(Number(item.available_cash))) {
@@ -322,7 +322,7 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
       cashBreakdown[entry.currency] = (cashBreakdown[entry.currency] || 0) + entry.amount
       cashBreakdownEntries.push(entry)
     }
-    
+
     return (item.holdings || []).map((holding) => ({
       ...holding,
       exchange: holding.exchange || exchange,
@@ -533,6 +533,8 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
   const [dashboardWatchlist, setDashboardWatchlist] = useState([])
   const [watchlistLoading, setWatchlistLoading] = useState(false)
   const [watchlistError, setWatchlistError] = useState('')
+  const [watchlistRefreshCooldown, setWatchlistRefreshCooldown] = useState(0)
+  const [balanceRefreshCooldown, setBalanceRefreshCooldown] = useState(0)
 
   const [holdingsSort, setHoldingsSort] = useState({ key: null, direction: 'asc' })
 
@@ -750,6 +752,14 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
     }
   }
 
+  const handleBalanceRefresh = () => {
+    if (balanceRefreshCooldown > 0 || balanceLoading)
+
+      return
+    setBalanceRefreshCooldown(60)
+    loadAccountBalance()
+  }
+
   useEffect(() => {
     loadAccountBalance()
   }, [isLoggedIn])
@@ -758,11 +768,29 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
     loadDashboardWatchlist()
   }, [isLoggedIn, activeTab])
 
-  const loadDashboardWatchlist = async () => {
+
+
+  useEffect(() => {
+    if (watchlistRefreshCooldown <= 0) return undefined
+
+    const timerId = window.setInterval(() => {
+      setWatchlistRefreshCooldown((seconds) => Math.max(seconds - 1, 0))
+    }, 1000)
+
+    return () => window.clearInterval(timerId)
+  }, [watchlistRefreshCooldown])
+
+  const loadDashboardWatchlist = async ({ manual = false } = {}) => {
+    if (manual && watchlistRefreshCooldown > 0) return
+
     if (!isLoggedIn) {
       setDashboardWatchlist([])
       setWatchlistError('')
       return
+    }
+
+    if (manual) {
+      setWatchlistRefreshCooldown(60)
     }
 
     setWatchlistLoading(true)
@@ -789,6 +817,16 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
       setWatchlistLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (balanceRefreshCooldown <= 0) return undefined
+
+    const timerId = window.setInterval(() => {
+      setBalanceRefreshCooldown((seconds) => Math.max(seconds - 1, 0))
+    }, 1000)
+
+    return () => window.clearInterval(timerId)
+  }, [balanceRefreshCooldown])
 
   useEffect(() => {
     if (rawBalances.length > 0) {
@@ -928,22 +966,20 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                   <div className="inline-flex rounded-md bg-[#0f172a] p-1 border border-slate-700/80">
                     <button
                       onClick={() => setShowMockAssets(true)}
-                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${
-                        showMockAssets
+                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${showMockAssets
                           ? 'bg-slate-700 text-white shadow'
                           : 'text-slate-400 hover:text-white'
-                      }`}
+                        }`}
                       type="button"
                     >
                       모의계좌 포함
                     </button>
                     <button
                       onClick={() => setShowMockAssets(false)}
-                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${
-                        !showMockAssets
+                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${!showMockAssets
                           ? 'bg-slate-700 text-white shadow'
                           : 'text-slate-400 hover:text-white'
-                      }`}
+                        }`}
                       type="button"
                     >
                       실거래 전용
@@ -954,22 +990,20 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                   <div className="inline-flex rounded-md bg-[#0f172a] p-1 border border-slate-700/80">
                     <button
                       onClick={() => setDisplayCurrency('USD')}
-                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${
-                        displayCurrency === 'USD'
+                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${displayCurrency === 'USD'
                           ? 'bg-slate-700 text-white shadow'
                           : 'text-slate-400 hover:text-white'
-                      }`}
+                        }`}
                       type="button"
                     >
                       $
                     </button>
                     <button
                       onClick={() => setDisplayCurrency('KRW')}
-                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${
-                        displayCurrency === 'KRW'
+                      className={`px-3 py-1 text-xs font-bold rounded transition-all cursor-pointer ${displayCurrency === 'KRW'
                           ? 'bg-slate-700 text-white shadow'
                           : 'text-slate-400 hover:text-white'
-                      }`}
+                        }`}
                       type="button"
                     >
                       원
@@ -1054,11 +1088,15 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                       <button
                         className="inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-400 transition-all hover:border-ai-cyan hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                         type="button"
-                        disabled={watchlistLoading}
-                        onClick={loadDashboardWatchlist}
+                        disabled={watchlistLoading || watchlistRefreshCooldown > 0}
+                        onClick={() => loadDashboardWatchlist({ manual: true })}
                       >
                         <RefreshIcon className={`h-3 w-3 ${watchlistLoading ? 'animate-spin' : ''}`} />
-                        {watchlistLoading ? '갱신 중' : '새로 고침'}
+                        {watchlistLoading
+                          ? '갱신 중'
+                          : watchlistRefreshCooldown > 0
+                            ? `${watchlistRefreshCooldown}초`
+                            : '새로 고침'}
                       </button>
                       <button
                         className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-400 transition-all hover:border-ai-cyan hover:text-white"
@@ -1134,12 +1172,16 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                   </h2>
                   <button
                     type="button"
-                    onClick={loadAccountBalance}
-                    disabled={!isLoggedIn || balanceLoading}
+                    onClick={handleBalanceRefresh}
+                    disabled={!isLoggedIn || balanceLoading || balanceRefreshCooldown > 0}
                     className="inline-flex items-center gap-1 text-xs border border-slate-700 hover:border-ai-cyan hover:text-white rounded px-2.5 py-1 text-slate-300 font-medium transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <RefreshIcon className={`h-3.5 w-3.5 ${balanceLoading ? 'animate-spin' : ''}`} />
-                    {balanceLoading ? '갱신 중' : '새로 고침'}
+                    {balanceLoading
+                      ? '갱신 중'
+                      : balanceRefreshCooldown > 0
+                        ? `${balanceRefreshCooldown}초`
+                        : '새로 고침'}
                   </button>
                 </div>
 

@@ -41,7 +41,7 @@ export default function Header({ isLoggedIn, userEmail, handleLogout }) {
               to={to}
               className={`px-3 py-1.5 rounded text-xs font-semibold border transition-all ${
                 pathname === to
-                  ? 'bg-ai-cyan text-black border-ai-cyan'
+                  ? 'bg-blue-600 text-black border-blue-600'
                   : 'text-slate-300 border-slate-700 hover:border-slate-500'
               }`}
             >
