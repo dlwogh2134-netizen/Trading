@@ -495,6 +495,20 @@ export default function TradeHistoryTab() {
     }
   }
 
+  const handleSyncOrderStatuses = async () => {
+    setActionLoadingId('sync-order-statuses')
+    setActionNotice('')
+    try {
+      const payload = await requestOrderAction('/api/trade/orders/sync-status', {})
+      setActionNotice(`거래소 주문상태 갱신 완료: 확인 ${payload.checked_count ?? 0}건 / 반영 ${payload.synced_count ?? 0}건`)
+      await refreshTradeHistory()
+    } catch (error) {
+      setActionNotice(error.message)
+    } finally {
+      setActionLoadingId('')
+    }
+  }
+
   const handleOpenCancel = async (trade) => {
     setSelectedTrade(trade)
     const confirmed = window.confirm(`${trade.ticker} ${trade.side} 주문을 취소할까요?`)
@@ -610,7 +624,7 @@ export default function TradeHistoryTab() {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
               <span>Exchange:</span>
-              {['ALL', 'TOSS', 'KIS', 'COINONE', 'BINANCE'].map((item) => (
+              {['ALL', 'TOSS', 'KIS', 'COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].map((item) => (
                 <button
                   key={item}
                   className={`rounded px-3 py-2 text-xs font-bold transition ${selectedExchange === item
@@ -643,6 +657,14 @@ export default function TradeHistoryTab() {
             onClick={handleSyncBrokerHistory}
           >
             {actionLoadingId === 'sync-broker-history' ? '토스 동기화 중' : '토스 원장 동기화'}
+          </button>
+          <button
+            className="h-10 rounded border border-cyan-500/40 bg-cyan-500/10 px-4 text-sm font-bold text-cyan-300 transition hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+            disabled={Boolean(actionLoadingId)}
+            onClick={handleSyncOrderStatuses}
+          >
+            {actionLoadingId === 'sync-order-statuses' ? '상태 갱신 중' : '거래소 상태 갱신'}
           </button>
         </div>
         {isMoreFiltersOpen ? (

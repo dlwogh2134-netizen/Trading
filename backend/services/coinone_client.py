@@ -32,6 +32,13 @@ class CoinoneClient:
             return normalized[:-3]
         return normalized
 
+    @staticmethod
+    def _to_float(value, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def _get_headers(self, payload: dict) -> tuple:
         """
         코인원 API v2.1 전용 Signature 및 Payload 헤더를 생성합니다.
@@ -108,14 +115,34 @@ class CoinoneClient:
             raise Exception(f"코인원 현재가 조회 실패 (상태 코드 {res.status_code}): {res.text}")
 
         data = res.json()
-        if data.get("result") != "success" or not data.get("tickers"):
+        if data.get("result") != "success":
             raise Exception(f"코인원 현재가 에러 응답: {data}")
 
-        ticker = data["tickers"][0]
-        current_price = float(ticker.get("last") or 0.0)
-        yesterday_last = float(ticker.get("yesterday_last") or current_price or 0.0)
+        if isinstance(data.get("data"), dict):
+            ticker = data["data"]
+        elif isinstance(data.get("tickers"), list) and data["tickers"]:
+            ticker = data["tickers"][0]
+        else:
+            raise Exception(f"코인원 현재가 에러 응답: {data}")
+
+        current_price = self._to_float(
+            ticker.get("last")
+            or ticker.get("close")
+            or ticker.get("close_24h")
+            or ticker.get("price")
+        )
+        if current_price <= 0:
+            raise Exception(f"코인원 현재가 에러 응답: {data}")
+
+        yesterday_last = self._to_float(
+            ticker.get("yesterday_last")
+            or ticker.get("open_24h")
+            or current_price
+        )
         change_rate = 0.0
-        if yesterday_last > 0:
+        if ticker.get("change_rate_24h") is not None:
+            change_rate = self._to_float(ticker.get("change_rate_24h"))
+        elif yesterday_last > 0:
             change_rate = ((current_price - yesterday_last) / yesterday_last) * 100.0
 
         return {

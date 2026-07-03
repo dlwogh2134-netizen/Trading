@@ -28,15 +28,15 @@ def _normalize_execution_mode(value: str | None) -> str:
 
 
 def _extract_price(price_payload: dict) -> float:
-    for key in ("current_price", "price", "close"):
-        value = price_payload.get(key)
-        if value is not None:
-            return float(value)
     raw = price_payload.get("raw") or {}
-    for key in ("price", "stck_prpr", "lastPrice"):
-        value = raw.get(key)
-        if value is not None:
-            return float(value)
+    raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    for source in (price_payload, raw, raw_data):
+        if not isinstance(source, dict):
+            continue
+        for key in ("current_price", "price", "close", "close_24h", "last", "stck_prpr", "lastPrice"):
+            value = source.get(key)
+            if value is not None:
+                return float(value)
     raise ValueError("현재가 응답에서 가격을 확인할 수 없습니다.")
 
 

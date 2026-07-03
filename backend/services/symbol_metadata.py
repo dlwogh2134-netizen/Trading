@@ -185,43 +185,85 @@ def get_cached_crypto_symbols() -> dict:
     return _crypto_cache
 
 
+def normalize_crypto_base_symbol(symbol: object) -> str:
+    """
+    거래소별 마켓 심볼(BTCUSDT, KRW-BTC 등)을 사용자 기준 기본 심볼(BTC)로 정규화합니다.
+    """
+    normalized = str(symbol or "").strip().upper().replace("_", "-").replace("/", "-")
+    if not normalized:
+        return ""
+    parts = [part for part in normalized.split("-") if part]
+    if len(parts) == 2:
+        if parts[0] in {"KRW", "USDT", "BUSD", "USDC"}:
+            return parts[1]
+        if parts[1] in {"KRW", "USDT", "BUSD", "USDC"}:
+            return parts[0]
+    for suffix in ("USDT", "BUSD", "USDC", "KRW"):
+        if normalized.endswith(suffix) and len(normalized) > len(suffix):
+            return normalized[:-len(suffix)]
+    return normalized
+
+
 def search_crypto_symbols(query: str, limit: int = 10) -> list[dict]:
     """
-    검색어(query)를 기반으로 코인원/바이낸스 상장 코인을 실시간 검색합니다.
+    검색어(query)를 기반으로 코인원/바이낸스 상장 코인을 기본 심볼 단위로 병합 검색합니다.
     """
-    query = query.upper()
+    query = str(query or "").strip().upper()
     cache = get_cached_crypto_symbols()
-    results = []
-    seen = set()
+    merged = {}
+
+    def ensure_entry(base_symbol: str) -> dict:
+        if base_symbol not in merged:
+            merged[base_symbol] = {
+                "symbol": base_symbol,
+                "display_name": COIN_DISPLAY_NAMES.get(base_symbol, base_symbol),
+                "asset_type": "CRYPTO",
+                "market": "",
+                "markets": [],
+                "exchanges": [],
+                "aliases": [base_symbol],
+            }
+        return merged[base_symbol]
+
+    def append_unique(values: list, value: str):
+        if value and value not in values:
+            values.append(value)
+
+    def matches(base_symbol: str, market_symbol: str, korean_name: str) -> bool:
+        return (
+            query in base_symbol
+            or query in market_symbol
+            or bool(korean_name and query in korean_name.upper())
+        )
 
     # 1. 코인원 검색
     for sym in cache["coinone"]:
-        korean_name = COIN_DISPLAY_NAMES.get(sym, "")
-        if query in sym or (korean_name and query in korean_name):
-            if sym not in seen:
-                seen.add(sym)
-                results.append({
-                    "symbol": sym,
-                    "display_name": korean_name or sym,
-                    "asset_type": "CRYPTO",
-                    "market": "KRW"
-                })
+        base_sym = normalize_crypto_base_symbol(sym)
+        korean_name = COIN_DISPLAY_NAMES.get(base_sym, "")
+        if base_sym and matches(base_sym, sym, korean_name):
+            entry = ensure_entry(base_sym)
+            append_unique(entry["markets"], "KRW")
+            append_unique(entry["exchanges"], "COINONE")
+            append_unique(entry["aliases"], sym)
+            append_unique(entry["aliases"], f"KRW-{base_sym}")
+            append_unique(entry["aliases"], f"{base_sym}KRW")
 
     # 2. 바이낸스 검색
     for sym in cache["binance"]:
-        # USDT 접미사를 제거한 기본 심볼 파악 (예: BTCUSDT -> BTC)
-        base_sym = sym[:-4] if sym.endswith("USDT") else sym
+        base_sym = normalize_crypto_base_symbol(sym)
         korean_name = COIN_DISPLAY_NAMES.get(base_sym, "")
-        
-        if query in sym or (korean_name and query in korean_name) or query in base_sym:
-            if sym not in seen:
-                seen.add(sym)
-                results.append({
-                    "symbol": sym,
-                    "display_name": korean_name or base_sym,
-                    "asset_type": "CRYPTO",
-                    "market": "USDT"
-                })
+        if base_sym and matches(base_sym, sym, korean_name):
+            entry = ensure_entry(base_sym)
+            append_unique(entry["markets"], "USDT")
+            append_unique(entry["exchanges"], "BINANCE")
+            append_unique(entry["aliases"], sym)
+
+    results = []
+    for entry in merged.values():
+        entry["market"] = " · ".join(entry["markets"]) if entry["markets"] else ""
+        results.append(entry)
+
+    results.sort(key=lambda item: (0 if item["symbol"] == query else 1, len(item["symbol"]), item["symbol"]))
 
     return results[:limit]
 

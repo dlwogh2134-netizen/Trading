@@ -43,7 +43,7 @@ const getAutoTriggerLabel = (triggerSide) => {
   const normalized = String(triggerSide || '').toUpperCase()
   if (normalized === 'TAKE_PROFIT') return '익절 도달'
   if (normalized === 'STOP_LOSS') return '손절 도달'
-  return '-'
+  return '아직 미도달'
 }
 
 export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userProfile }) {
@@ -235,6 +235,58 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     return `Bearer ${session.access_token}`
   }
 
+  const normalizeCryptoBaseSymbol = (value) => {
+    let normalized = String(value || '').trim().toUpperCase()
+    if (!normalized) return ''
+    normalized = normalized.replace('_', '-').replace('/', '-')
+    const parts = normalized.split('-').filter(Boolean)
+    if (parts.length === 2) {
+      if (['KRW', 'USDT', 'BUSD', 'USDC'].includes(parts[0])) return parts[1]
+      if (['KRW', 'USDT', 'BUSD', 'USDC'].includes(parts[1])) return parts[0]
+    }
+    for (const suffix of ['USDT', 'BUSD', 'USDC', 'KRW']) {
+      if (normalized.endsWith(suffix) && normalized.length > suffix.length) {
+        return normalized.slice(0, -suffix.length)
+      }
+    }
+    return normalized
+  }
+
+  const getDetailBaseSymbol = () => (
+    resolvedAssetType === 'CRYPTO'
+      ? normalizeCryptoBaseSymbol(symbol)
+      : String(symbol || '').trim().toUpperCase()
+  )
+
+  const getExchangeSymbol = (targetExchange = exchange) => {
+    if (resolvedAssetType !== 'CRYPTO') return String(symbol || '').trim().toUpperCase()
+    const baseSymbol = getDetailBaseSymbol()
+    if (!baseSymbol) return ''
+    if (targetExchange === 'COINONE') return baseSymbol
+    if (['BINANCE', 'BINANCE_UM_FUTURES'].includes(targetExchange)) return `${baseSymbol}USDT`
+    return baseSymbol
+  }
+
+  const getSymbolQueryCandidates = () => {
+    const rawSymbol = String(symbol || '').trim().toUpperCase()
+    if (resolvedAssetType !== 'CRYPTO') {
+      return [...new Set([rawSymbol, rawSymbol.replace(/^A(?=\d{6}$)/, '')].filter(Boolean))]
+    }
+    const baseSymbol = normalizeCryptoBaseSymbol(rawSymbol)
+    return [...new Set([
+      baseSymbol,
+      `${baseSymbol}USDT`,
+      `KRW-${baseSymbol}`,
+      `${baseSymbol}KRW`,
+      `${baseSymbol}/USDT`,
+      `${baseSymbol}/KRW`,
+    ].filter(Boolean))]
+  }
+
+  const buildSymbolOrFilter = () => getSymbolQueryCandidates()
+    .flatMap((candidate) => [`symbol.eq.${candidate}`, `ticker.eq.${candidate}`])
+    .join(',')
+
   const loadOpenOrders = async () => {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session?.user?.id || !symbol) {
@@ -244,13 +296,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
     setOpenOrdersLoading(true)
     try {
-      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
       let query = supabase
         .from('trade_proposals')
         .select(OPEN_ORDER_SELECT_FIELDS)
         .eq('exchange', exchange)
         .in('status', ACTIONABLE_ORDER_STATUSES)
-        .or(`symbol.eq.${normalizedSymbol},ticker.eq.${normalizedSymbol}`)
+        .or(buildSymbolOrFilter())
         .order('created_at', { ascending: false })
         .limit(8)
 
@@ -282,12 +333,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
     setAutoRulesLoading(true)
     try {
-      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
       const primaryResult = await supabase
         .from('auto_trading_rules')
         .select(AUTO_RULE_SELECT_FIELDS)
         .eq('exchange', exchange)
-        .or(`symbol.eq.${normalizedSymbol},ticker.eq.${normalizedSymbol}`)
+        .or(buildSymbolOrFilter())
         .order('created_at', { ascending: false })
         .limit(5)
 
@@ -296,7 +346,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           .from('auto_trading_rules')
           .select('id,exchange,asset_type,ticker,entry_price,investment_amount,target_profit_rate,stop_loss_rate,status,created_at,updated_at')
           .eq('exchange', exchange)
-          .eq('ticker', normalizedSymbol)
+          .in('ticker', getSymbolQueryCandidates())
           .order('created_at', { ascending: false })
           .limit(5)
         if (legacyResult.error) throw primaryResult.error
@@ -455,11 +505,10 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return
     }
 
-    const normalizedSymbol = String(symbol).trim().toUpperCase()
     const { data, error } = await supabase
       .from('trade_proposals')
       .select('id,exchange,broker_env,symbol,ticker,side,status,volume,price,created_at')
-      .or(`symbol.eq.${normalizedSymbol},ticker.eq.${normalizedSymbol}`)
+      .or(buildSymbolOrFilter())
       .order('created_at', { ascending: false })
 
     if (error || !data?.length) {
@@ -1017,6 +1066,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     return `${(numberValue * 100).toFixed(digits)}%`
   }
 
+  const formatSignedPercentValue = (value, digits = 2) => {
+    if (value === null || value === undefined || value === '') return '-'
+    const numberValue = Number(value)
+    if (Number.isNaN(numberValue)) return '-'
+    const sign = numberValue > 0 ? '+' : ''
+    return `${sign}${numberValue.toFixed(digits)}%`
+  }
+
   const normalizeCandleTime = (rawTime) => {
     if (typeof rawTime === 'number' && !Number.isNaN(rawTime)) {
       return rawTime
@@ -1053,6 +1110,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     const normalized = String(value || '').trim().toUpperCase()
     if (/^A\d{6}$/.test(normalized)) {
       return normalized.slice(1)
+    }
+    if (resolvedAssetType === 'CRYPTO') {
+      return normalizeCryptoBaseSymbol(normalized)
     }
     return normalized
   }
@@ -1119,7 +1179,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     try {
       const chartEx = exchange;
       const chartEnv = brokerEnv;
-      const url = `${API_BASE_URL}/api/chart/candles?exchange=${chartEx}&symbol=${symbol}&interval=${chartInterval}&broker_env=${chartEnv}&count=300`
+      const chartSymbol = getExchangeSymbol(chartEx)
+      const url = `${API_BASE_URL}/api/chart/candles?exchange=${chartEx}&symbol=${chartSymbol}&interval=${chartInterval}&broker_env=${chartEnv}&count=300`
       const headers = {}
       if (authHeader) {
         headers['Authorization'] = authHeader
@@ -1369,7 +1430,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         },
         body: JSON.stringify({
           exchange,
-          symbol,
+          symbol: getExchangeSymbol(exchange),
           action: effectiveSide,
           order_type: orderType,
           quantity: Number(quantity),
@@ -1508,17 +1569,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return
     }
     
-    const symUpper = String(symbol || '').toUpperCase()
-    const isUsdtMarket = symUpper.endsWith('USDT') || symUpper.endsWith('BUSD')
-
-    if (isUsdtMarket) {
-      if (!['BINANCE', 'BINANCE_UM_FUTURES'].includes(exchange)) {
-        setExchange('BINANCE')
-      }
-    } else {
-      if (!['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(exchange)) {
-        setExchange('COINONE')
-      }
+    if (!['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(exchange)) {
+      const routeSymbol = String(symbol || '').toUpperCase()
+      setExchange(routeSymbol.endsWith('USDT') || routeSymbol.endsWith('BUSD') ? 'BINANCE' : 'COINONE')
     }
 
     if (exchange !== 'BINANCE_UM_FUTURES' && brokerEnv !== 'REAL') {
@@ -1766,7 +1819,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     try {
       const payload = {
         exchange,
-        symbol,
+        symbol: getExchangeSymbol(exchange),
         action: effectiveSide,
         order_type: orderType,
         quantity: parseFloat(quantity),
@@ -1855,13 +1908,37 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const holdingSummaryLabel = myHolding && myHoldingAbsQty > 0
     ? `${myHoldingAbsQty.toLocaleString()} ${exchange === 'BINANCE_UM_FUTURES' ? '계약' : '주'}`
     : dbEstimatedHolding
-      ? `${dbEstimatedHolding.estimatedQty.toLocaleString()} 주 추정`
+      ? `${dbEstimatedHolding.estimatedQty.toLocaleString()} ${dbEstimatedHolding.exchange === 'BINANCE_UM_FUTURES' ? '계약' : resolvedAssetType === 'CRYPTO' ? '개' : '주'} 추정`
       : '보유 없음'
   const availableCashLabel = orderPrecheck?.available_cash != null
     ? `${getCurrencySign()}${Number(orderPrecheck.available_cash).toLocaleString(undefined, { maximumFractionDigits: getCurrencyDigits() })}`
     : Number.isFinite(baseAvailableCash)
       ? `${getCurrencySign()}${baseAvailableCash.toLocaleString(undefined, { maximumFractionDigits: getCurrencyDigits() })}`
       : '잔고 조회 필요'
+  const getEstimatedHoldingUnit = (holding) => {
+    if (holding?.exchange === 'BINANCE_UM_FUTURES') return '계약'
+    if (resolvedAssetType === 'CRYPTO') return '개'
+    return '주'
+  }
+  const getEstimatedHoldingCurrencySign = (holding) => (
+    ['BINANCE', 'BINANCE_UM_FUTURES'].includes(String(holding?.exchange || '').toUpperCase()) ? '$' : getCurrencySign()
+  )
+  const getEstimatedHoldingNotice = (holding) => {
+    const estimatedExchange = String(holding?.exchange || exchange || '').toUpperCase()
+    if (estimatedExchange === 'BINANCE_UM_FUTURES') {
+      return '거래내역에는 선물 주문 기록이 있지만, 현재 선택 계좌의 실제 선물 포지션 API에서는 확인되지 않았습니다. 청산 주문은 실제 바이낸스 선물 포지션 수량이 있어야 성공합니다. 거래내역 상태 동기화를 먼저 실행해 보세요.'
+    }
+    if (estimatedExchange === 'BINANCE') {
+      return '거래내역에는 체결 매수 기록이 있지만, 현재 선택 계좌의 실제 바이낸스 현물 잔고 API에서는 확인되지 않았습니다. 매도 주문은 실제 바이낸스 현물 잔고에 수량이 있어야 성공합니다.'
+    }
+    if (estimatedExchange === 'COINONE') {
+      return '거래내역에는 체결 매수 기록이 있지만, 현재 선택 계좌의 실제 코인원 잔고 API에서는 확인되지 않았습니다. 매도 주문은 실제 코인원 잔고에 수량이 있어야 성공합니다.'
+    }
+    if (estimatedExchange === 'TOSS') {
+      return '거래내역에는 체결 매수 기록이 있지만, 현재 선택 계좌의 실제 토스증권 잔고 API에서는 확인되지 않았습니다. 매도 주문은 실제 토스증권 잔고에 수량이 있어야 성공합니다.'
+    }
+    return '거래내역에는 체결 매수 기록이 있지만, 현재 선택 계좌의 실제 KIS 잔고 API에서는 확인되지 않았습니다. 매도 주문은 실제 KIS 잔고에 수량이 있어야 성공합니다.'
+  }
 
   const handleFillFullExitOrder = () => {
     const exitQty = myHoldingAbsQty || dbEstimatedHolding?.estimatedQty || 0
@@ -2254,6 +2331,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                   </div>
                   <p className="mt-1 text-[10px] text-slate-500">
                     익절/손절 감시 규칙은 백그라운드 워커가 조건 도달 여부를 확인합니다.
+                    트리거는 조건이 실제로 발동된 사유입니다.
                   </p>
                 </div>
                 <button
@@ -2285,6 +2363,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                     const targetPrice = entryPrice > 0 ? entryPrice * (1 + targetRate / 100) : 0
                     const stopPrice = entryPrice > 0 ? entryPrice * (1 + stopRate / 100) : 0
                     const isRunning = String(rule.status || '').toUpperCase() === 'RUNNING'
+                    const currentReturnRate = entryPrice > 0 && currentPrice > 0
+                      ? ((Number(currentPrice) - entryPrice) / entryPrice) * 100
+                      : null
+                    const currentReturnClass = currentReturnRate === null
+                      ? 'text-slate-300'
+                      : currentReturnRate >= 0
+                        ? 'text-rose-300'
+                        : 'text-blue-300'
 
                     return (
                       <div key={rule.id} className="rounded-lg border border-[#1f2945] bg-[#070b19]/90 p-3">
@@ -2339,11 +2425,20 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                             </p>
                           </div>
                         </div>
-                        <div className="mt-3 grid grid-cols-1 gap-2 border-t border-[#1f2945] pt-3 text-[10px] text-slate-500 sm:grid-cols-3">
+                        <div className="mt-3 grid grid-cols-1 gap-2 border-t border-[#1f2945] pt-3 text-[10px] text-slate-500 sm:grid-cols-4">
                           <div>
                             <p>마지막 확인</p>
                             <p className="font-mono text-slate-300">
                               {rule.last_checked_at ? new Date(rule.last_checked_at).toLocaleString('ko-KR') : '-'}
+                            </p>
+                          </div>
+                          <div>
+                            <p>현재 수익률</p>
+                            <p className={`font-mono font-bold ${currentReturnClass}`}>
+                              {formatSignedPercentValue(currentReturnRate)}
+                            </p>
+                            <p className="font-mono text-[10px] text-slate-600">
+                              현재가 {currentPrice > 0 ? formatUnitPrice(currentPrice) : '-'}
                             </p>
                           </div>
                           <div>
@@ -3313,7 +3408,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                   </div>
                   <div className="flex justify-between border-b border-amber-400/20 py-1">
                     <span className="text-slate-300">추정 수량</span>
-                    <span className="font-bold text-white">{dbEstimatedHolding.estimatedQty.toLocaleString()} 주</span>
+                    <span className="font-bold text-white">
+                      {dbEstimatedHolding.estimatedQty.toLocaleString()} {getEstimatedHoldingUnit(dbEstimatedHolding)}
+                    </span>
                   </div>
                   <div className="flex justify-between border-b border-amber-400/20 py-1">
                     <span className="text-slate-300">기록 계좌</span>
@@ -3322,11 +3419,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                   {dbEstimatedHolding.avgPrice > 0 ? (
                     <div className="flex justify-between border-b border-amber-400/20 py-1">
                       <span className="text-slate-300">추정 평균가</span>
-                      <span className="font-bold text-white">₩{dbEstimatedHolding.avgPrice.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}</span>
+                      <span className="font-bold text-white">
+                        {getEstimatedHoldingCurrencySign(dbEstimatedHolding)}
+                        {dbEstimatedHolding.avgPrice.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}
+                      </span>
                     </div>
                   ) : null}
                   <p className="leading-relaxed text-amber-200">
-                    거래내역에는 체결 매수 기록이 있지만, 현재 선택 계좌의 실제 잔고 API에서는 확인되지 않았습니다. 매도 주문은 실제 KIS 잔고에 수량이 있어야 성공합니다.
+                    {getEstimatedHoldingNotice(dbEstimatedHolding)}
                   </p>
                 </div>
               ) : balanceMessage ? (

@@ -76,6 +76,13 @@ export default function SymbolSearch({ className = '' }) {
     setShowSuggestions(false)
   }
 
+  const getMarketLabel = (item) => {
+    if (Array.isArray(item.markets) && item.markets.length > 0) {
+      return item.markets.join(' · ')
+    }
+    return item.market || ''
+  }
+
   return (
     <form
       onSubmit={handleSubmit}
@@ -127,7 +134,9 @@ export default function SymbolSearch({ className = '' }) {
               >
                 <div className="flex flex-col">
                   <span className="text-xs font-bold text-white">{item.display_name}</span>
-                  <span className="text-[9px] text-slate-500 font-mono">{item.symbol}</span>
+                  <span className="text-[9px] text-slate-500 font-mono">
+                    {item.symbol}{getMarketLabel(item) ? ` · ${getMarketLabel(item)}` : ''}
+                  </span>
                 </div>
                 <span className="text-[9px] font-bold text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-900/60 uppercase tracking-widest font-mono">
                   {item.asset_type === 'STOCK' ? '주식' : '코인'}

@@ -121,12 +121,21 @@ def get_cached_change_rate(exchange, symbol, broker_env, auth_header):
             res = requests.get(url, timeout=3)
             if res.status_code == 200:
                 data = res.json()
-                if data.get("result") == "success" and data.get("tickers"):
-                    ticker = data["tickers"][0]
-                    last = float(ticker.get("last", 0))
-                    yesterday_last = float(ticker.get("yesterday_last", last))
-                    if yesterday_last > 0:
-                        change_rate = ((last - yesterday_last) / yesterday_last) * 100
+                if data.get("result") == "success":
+                    if isinstance(data.get("data"), dict):
+                        ticker = data["data"]
+                    elif isinstance(data.get("tickers"), list) and data["tickers"]:
+                        ticker = data["tickers"][0]
+                    else:
+                        ticker = {}
+
+                    if ticker.get("change_rate_24h") is not None:
+                        change_rate = float(ticker.get("change_rate_24h") or 0.0)
+                    else:
+                        last = float(ticker.get("last") or ticker.get("close") or ticker.get("close_24h") or 0.0)
+                        yesterday_last = float(ticker.get("yesterday_last") or ticker.get("open_24h") or last)
+                        if yesterday_last > 0:
+                            change_rate = ((last - yesterday_last) / yesterday_last) * 100
         elif exchange in ("BINANCE", "BINANCE_UM_FUTURES"):
             url = "https://api.binance.com/api/v3/ticker/24hr"
             res = requests.get(url, params={"symbol": symbol.upper()}, timeout=3)
@@ -1641,6 +1650,86 @@ def sync_kis_order_statuses():
             synced_count += 1
         except Exception as exc:
             errors.append(f"Coinone {symbol}: {str(exc)[:180]}")
+
+    binance_clients = {}
+    for sync_exchange in ("BINANCE", "BINANCE_UM_FUTURES"):
+        try:
+            binance_proposals = query_supabase(
+                auth_header,
+                "trade_proposals",
+                "GET",
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "exchange": f"eq.{sync_exchange}",
+                    "limit": "100",
+                    "order": "created_at.desc",
+                },
+            ) or []
+        except Exception as e:
+            binance_proposals = []
+            errors.append(f"{sync_exchange} order sync query failed: {str(e)[:160]}")
+
+        for proposal in binance_proposals:
+            proposal_id = proposal.get("id")
+            symbol = proposal.get("symbol") or proposal.get("ticker")
+            order_id = proposal.get("external_order_id")
+            status = str(proposal.get("status") or "").upper()
+            if status in {"EXECUTED", "CANCELED", "CANCELLED", "REJECTED", "FAILED", "EXPIRED"}:
+                continue
+            if not proposal_id or not symbol or not order_id:
+                continue
+
+            broker_env = _resolve_proposal_broker_env(proposal)
+            client_key = f"{sync_exchange}:{broker_env}"
+            try:
+                if client_key not in binance_clients:
+                    record, access_key, secret_key = _load_user_exchange_record(
+                        auth_header,
+                        user_id,
+                        sync_exchange,
+                        broker_env,
+                    )
+                    binance_clients[client_key] = _build_exchange_client(sync_exchange, broker_env, record, access_key, secret_key)
+                client = binance_clients[client_key]
+                checked_count += 1
+
+                current_order = client.get_order_status(order_id, symbol=symbol)
+                raw_status = str(current_order.get("status") or "").upper()
+                executed_qty = float(current_order.get("executed_qty") or 0)
+                requested_qty = float(proposal.get("volume") or 0)
+                if raw_status in {"FILLED", "EXECUTED"} or (requested_qty > 0 and executed_qty >= requested_qty):
+                    next_status = "EXECUTED"
+                elif raw_status in {"CANCELED", "CANCELLED"}:
+                    next_status = "CANCELED"
+                elif raw_status in {"REJECTED", "FAILED", "EXPIRED"}:
+                    next_status = "FAILED"
+                elif executed_qty > 0:
+                    next_status = "PARTIALLY_FILLED"
+                else:
+                    next_status = "ORDERED"
+
+                sync_detail = {
+                    "account": {
+                        "exchange": sync_exchange,
+                        "broker_env": broker_env,
+                    },
+                    "order_status": current_order,
+                    "normalized_status": next_status,
+                }
+                patch_payload = {
+                    "status": next_status,
+                    "broker_env": broker_env,
+                    "failure_reason": None,
+                    "raw_order_payload": {"sync_status_check": sync_detail},
+                }
+                if next_status == "CANCELED":
+                    patch_payload["canceled_at"] = datetime.utcnow().isoformat() + "Z"
+                if next_status == "FAILED":
+                    patch_payload["failure_reason"] = f"{sync_exchange} order status: {raw_status or 'FAILED'}"
+                _patch_trade_proposal(auth_header, proposal_id, patch_payload)
+                synced_count += 1
+            except Exception as exc:
+                errors.append(f"{sync_exchange} {symbol}: {str(exc)[:180]}")
 
     return jsonify({
         "success": True,
@@ -3207,28 +3296,31 @@ def lookup_symbol():
     # 2. 가상자산 정밀 매칭 (한글명 맵 또는 코인 캐시 기반)
     for base_sym, name in COIN_DISPLAY_NAMES.items():
         if name.upper() == query or base_sym == query:
-            symbol_to_use = f"{base_sym}USDT"
             return jsonify({
                 "success": True,
                 "data": {
-                    "symbol": symbol_to_use,
+                    "symbol": base_sym,
                     "display_name": name,
                     "asset_type": "CRYPTO",
-                    "market": "USDT"
+                    "market": "KRW · USDT",
+                    "markets": ["KRW", "USDT"],
                 }
             })
 
     # 2.5. 실시간 가상자산 캐시 목록 정밀 검색 및 매칭
     crypto_matches = search_crypto_symbols(query, limit=10)
     for c in crypto_matches:
-        if c["symbol"].upper() == query or c["display_name"].upper() == query:
+        aliases = [str(item).upper() for item in c.get("aliases", [])]
+        if c["symbol"].upper() == query or c["display_name"].upper() == query or query in aliases:
             return jsonify({
                 "success": True,
                 "data": {
                     "symbol": c["symbol"],
                     "display_name": c["display_name"],
                     "asset_type": "CRYPTO",
-                    "market": c["market"]
+                    "market": c.get("market"),
+                    "markets": c.get("markets", []),
+                    "exchanges": c.get("exchanges", []),
                 }
             })
 
