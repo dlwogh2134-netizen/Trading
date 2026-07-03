@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { DASHBOARD_TABS } from '../dashboardConstants.js'
 
 function Rate({ value }) {
@@ -181,7 +181,9 @@ function SectionHeader({ eyebrow, title, action }) {
 
 function SidebarNav({ activeTab, isOpen, isLoggedIn, onClose, onOpen, onTabChange }) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const visibleTabs = DASHBOARD_TABS.filter((tab) => !tab.authOnly || isLoggedIn)
+  const isRouteActive = (route, exact = false) => route && (exact ? pathname === route : pathname === route || pathname.startsWith(`${route}/`))
 
   if (!isOpen) {
     return (
@@ -217,28 +219,57 @@ function SidebarNav({ activeTab, isOpen, isLoggedIn, onClose, onOpen, onTabChang
           </button>
         </div>
 
-        {visibleTabs.map((tab) => (
-          <button
-            key={tab.key}
-            className={`shrink-0 rounded-lg px-4 py-3 text-left text-sm font-bold transition ${activeTab === tab.key
-                ? 'bg-institutional-blue text-white shadow-[0_10px_24px_rgba(0,71,187,0.25)]'
-                : tab.enabled
-                  ? 'text-slate-400 hover:bg-white/5 hover:text-white'
-                  : 'cursor-default text-slate-600'
-              }`}
-            type="button"
-            onClick={() => {
-              if (!tab.enabled) return
-              if (tab.route) {
-                navigate(tab.route)
-                return
-              }
-              onTabChange(tab.key)
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {visibleTabs.map((tab) => {
+          const hasActiveChild = tab.children?.some((child) => isRouteActive(child.route, true))
+          const isActive = activeTab === tab.key || isRouteActive(tab.route) || hasActiveChild
+
+          return (
+            <div key={tab.key} className="shrink-0">
+              <button
+                className={`w-full rounded-lg px-4 py-3 text-left text-sm font-bold transition ${isActive
+                    ? 'bg-institutional-blue text-white shadow-[0_10px_24px_rgba(0,71,187,0.25)]'
+                    : tab.enabled
+                      ? 'text-slate-400 hover:bg-white/5 hover:text-white'
+                      : 'cursor-default text-slate-600'
+                  }`}
+                type="button"
+                onClick={() => {
+                  if (!tab.enabled) return
+                  if (tab.route) {
+                    navigate(tab.route)
+                    return
+                  }
+                  onTabChange(tab.key)
+                }}
+              >
+                {tab.label}
+              </button>
+
+              {tab.children && isActive ? (
+                <div className="mt-2 grid gap-1 pl-4">
+                  {tab.children.map((child) => {
+                    const isChildActive = isRouteActive(child.route, true)
+
+                    return (
+                      <button
+                        key={child.key}
+                        type="button"
+                        className={`rounded-md px-3 py-2 text-left text-xs font-bold transition ${
+                          isChildActive
+                            ? 'bg-ai-cyan text-slate-950 shadow-[0_8px_18px_rgba(0,242,254,0.16)]'
+                            : 'border border-transparent text-slate-500 hover:border-slate-700 hover:bg-[#0f172a] hover:text-slate-200'
+                        }`}
+                        onClick={() => navigate(child.route)}
+                      >
+                        {child.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
 
         <div className="mt-auto hidden rounded-lg border border-ai-cyan/20 bg-white/[0.04] p-4 lg:block">
           <p className="text-xs font-bold text-ai-cyan">AI Layer</p>

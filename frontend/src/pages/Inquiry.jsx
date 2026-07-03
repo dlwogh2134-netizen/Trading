@@ -1,10 +1,8 @@
 import { useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Header from '../components/Header.jsx'
-
-const inquiryMenuItems = [
-  { key: 'home', label: '문의 홈', icon: 'message' },
-  { key: 'history', label: '문의 내역', icon: 'document' },
-]
+import { SidebarNav } from '../components/DashboardComponents.jsx'
+import { DASHBOARD_QUERY_TABS, DASHBOARD_ROUTE, INQUIRY_ROUTES } from '../dashboardConstants.js'
 
 const inquiryTypes = [
   { value: '', label: '문의 유형을 선택해주세요' },
@@ -19,15 +17,15 @@ const inquiryTypes = [
 ]
 
 const inquiryStatusItems = [
-  { key: 'all', label: '전체', dot: 'bg-blue-400' },
-  { key: 'received', label: '접수 완료', dot: 'bg-blue-400' },
+  { key: 'all', label: '전체', dot: 'bg-ai-cyan' },
+  { key: 'received', label: '접수 완료', dot: 'bg-ai-cyan' },
   { key: 'waiting', label: '답변 대기', dot: 'bg-amber-400' },
   { key: 'completed', label: '답변 완료', dot: 'bg-emerald-400' },
   { key: 'need-more', label: '추가 확인 필요', dot: 'bg-violet-400' },
 ]
 
 const summaryItems = [
-  { key: 'total', label: '전체 문의', icon: 'inbox', tone: 'text-blue-400' },
+  { key: 'total', label: '전체 문의', icon: 'inbox', tone: 'text-ai-cyan' },
   { key: 'waiting', label: '답변 대기', icon: 'clock', tone: 'text-amber-400' },
   { key: 'completed', label: '답변 완료', icon: 'check', tone: 'text-emerald-400' },
   { key: 'needMore', label: '추가 확인 필요', icon: 'question', tone: 'text-violet-400' },
@@ -63,33 +61,14 @@ const inquiryHomeSections = {
   },
 }
 
-const faqItems = [
-  {
-    question: '문의 답변은 어디에서 확인하나요?',
-    answer: '문의 내역에서 접수된 문의와 답변 상태를 확인할 수 있습니다.',
-  },
-  {
-    question: '첨부파일은 꼭 등록해야 하나요?',
-    answer: '첨부파일은 선택 항목이며, 오류 화면이나 주문 내역이 있을 때만 첨부하면 됩니다.',
-  },
-  {
-    question: '주문/체결 문의에는 어떤 정보가 필요한가요?',
-    answer: '종목명, 주문 시간, 주문 구분을 함께 남기면 확인이 더 빠릅니다.',
-  },
-]
-
-const guideItems = [
-  '운영시간은 평일 09:00-18:00 기준으로 안내됩니다.',
-  '개인정보와 계좌 비밀번호는 문의 내용에 직접 입력하지 마세요.',
-  '답변이 필요한 문의는 문의 내역에서 상태가 갱신됩니다.',
-]
-
 const initialFormState = {
   type: '',
   title: '',
   content: '',
   fileName: '',
 }
+
+const dashboardQueryTabs = new Set(DASHBOARD_QUERY_TABS)
 
 function Icon({ name, className = 'h-5 w-5' }) {
   const icons = {
@@ -144,7 +123,7 @@ function Icon({ name, className = 'h-5 w-5' }) {
 
 function Widget({ children, className = '' }) {
   return (
-    <section className={`min-h-0 rounded-lg border border-slate-700/80 bg-[#0c1019]/72 p-3 ${className}`}>
+    <section className={`min-h-0 rounded-lg border border-slate-700/80 bg-slate-surface p-5 ${className}`}>
       {children}
     </section>
   )
@@ -155,7 +134,7 @@ function WidgetTitle({ title, icon, action }) {
     <div className="mb-3 flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         {icon ? (
-          <span className="grid h-8 w-8 place-items-center rounded-lg border border-blue-500/25 bg-blue-500/10 text-blue-400">
+          <span className="grid h-8 w-8 place-items-center rounded-lg border border-ai-cyan/25 bg-ai-cyan/10 text-ai-cyan">
             <Icon name={icon} className="h-4.5 w-4.5" />
           </span>
         ) : null}
@@ -170,7 +149,7 @@ function EmptyState({ message, icon = 'inbox' }) {
   return (
     <div className="grid h-full min-h-24 place-items-center border-t border-slate-800 px-4 py-5 text-center text-sm text-slate-500">
       <div>
-        <span className="mx-auto mb-2 grid h-11 w-11 place-items-center rounded-lg border border-slate-700/70 bg-[#07111f] text-slate-500">
+        <span className="mx-auto mb-2 grid h-11 w-11 place-items-center rounded-lg border border-slate-700/70 bg-[#0f172a] text-slate-500">
           <Icon name={icon} className="h-6 w-6" />
         </span>
         <p>{message}</p>
@@ -184,7 +163,7 @@ function InquiryTable({ inquiries, emptyMessage, emptyIcon = 'inbox' }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-slate-800">
-      <div className="grid grid-cols-[minmax(180px,1.5fr)_120px_130px_120px] bg-[#07111f] text-xs font-bold text-slate-400">
+      <div className="grid grid-cols-[minmax(180px,1.5fr)_120px_130px_120px] bg-[#0f172a] text-xs font-bold text-slate-400">
         {inquiryColumns.map((column) => (
           <div key={column.key} className="px-4 py-2.5">
             {column.label}
@@ -215,20 +194,20 @@ function InquiryTable({ inquiries, emptyMessage, emptyIcon = 'inbox' }) {
                 </button>
 
                 {isExpanded ? (
-                  <div className="grid gap-3 bg-[#07111f]/70 px-4 py-4 text-xs leading-5 text-slate-300 md:grid-cols-2">
-                    <div className="rounded-lg border border-slate-800 bg-[#0c1019] p-3">
+                  <div className="grid gap-3 bg-[#0f172a]/70 px-4 py-4 text-xs leading-5 text-slate-300 md:grid-cols-2">
+                    <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                       <p className="font-bold text-slate-500">문의 내용</p>
                       <p className="mt-2 whitespace-pre-wrap">{item.content || '등록된 문의 내용이 없습니다.'}</p>
                     </div>
-                    <div className="rounded-lg border border-slate-800 bg-[#0c1019] p-3">
+                    <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                       <p className="font-bold text-slate-500">답변 내용</p>
                       <p className="mt-2 whitespace-pre-wrap">{item.answer || '아직 등록된 답변이 없습니다.'}</p>
                     </div>
-                    <div className="rounded-lg border border-slate-800 bg-[#0c1019] p-3">
+                    <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                       <p className="font-bold text-slate-500">첨부파일</p>
                       <p className="mt-2">{item.fileName || '첨부파일 없음'}</p>
                     </div>
-                    <div className="rounded-lg border border-slate-800 bg-[#0c1019] p-3">
+                    <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                       <p className="font-bold text-slate-500">처리 상태</p>
                       <p className="mt-2">{item.status || '-'}</p>
                     </div>
@@ -246,11 +225,14 @@ function InquiryTable({ inquiries, emptyMessage, emptyIcon = 'inbox' }) {
 }
 
 export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
-  const [activeMenu, setActiveMenu] = useState('home')
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
   const [formState, setFormState] = useState(initialFormState)
   const [formErrors, setFormErrors] = useState({})
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
   const inquiries = useMemo(() => [], [])
+  const isFaqView = pathname === INQUIRY_ROUTES.faq
+  const isHistoryView = pathname === INQUIRY_ROUTES.history
 
   const waitingInquiries = useMemo(
     () => inquiries.filter((item) => item.status === '답변 대기' || item.status === '접수 완료'),
@@ -273,6 +255,14 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
     setFormErrors((prev) => ({ ...prev, [field]: '' }))
   }
 
+  const handleDashboardTabChange = (tabKey) => {
+    if (dashboardQueryTabs.has(tabKey)) {
+      navigate(`${DASHBOARD_ROUTE}?tab=${tabKey}`)
+      return
+    }
+    navigate(DASHBOARD_ROUTE)
+  }
+
   const handleSubmit = (event) => {
     event.preventDefault()
 
@@ -286,14 +276,14 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
   const renderInquiryForm = () => (
     <Widget className="h-full">
       <WidgetTitle title="문의 작성" />
-      <form className="grid h-[calc(100%-40px)] min-h-0 grid-rows-[auto_auto_minmax(74px,1fr)_auto_auto] gap-2.5" onSubmit={handleSubmit}>
+      <form className="grid min-h-0 gap-3 lg:grid-cols-2" onSubmit={handleSubmit}>
         <div className="grid grid-cols-[98px_minmax(0,1fr)] items-center gap-3">
           <label className="text-xs font-bold text-slate-400" htmlFor="inquiry-type">문의 유형 <span className="text-red-400">*</span></label>
           <select
             id="inquiry-type"
             value={formState.type}
             onChange={(event) => updateField('type', event.target.value)}
-            className="w-full rounded border border-slate-700 bg-[#07111f] px-3 py-1.5 text-sm text-white focus:border-ai-cyan focus:outline-none"
+            className="w-full rounded border border-slate-700 bg-[#0f172a] px-3 py-1.5 text-sm text-white focus:border-ai-cyan focus:outline-none"
             required
           >
             {inquiryTypes.map((item) => (
@@ -304,7 +294,7 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
           </select>
         </div>
 
-        <div className="grid grid-cols-[98px_minmax(0,1fr)] items-center gap-3">
+        <div className="grid grid-cols-[60px_minmax(0,1fr)] items-center gap-1.5">
           <label className="text-xs font-bold text-slate-400" htmlFor="inquiry-title">제목 <span className="text-red-400">*</span></label>
           <input
             id="inquiry-title"
@@ -312,26 +302,26 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
             value={formState.title}
             onChange={(event) => updateField('title', event.target.value)}
             placeholder="제목을 입력해주세요"
-            className="w-full rounded border border-slate-700 bg-[#07111f] px-3 py-1.5 text-sm text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
+            className="w-full rounded border border-slate-700 bg-[#0f172a] px-3 py-1.5 text-sm text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
             required
           />
         </div>
 
-        <div className="grid min-h-0 grid-cols-[98px_minmax(0,1fr)] gap-3">
+        <div className="grid min-h-0 grid-cols-[98px_minmax(0,1fr)] gap-3 lg:col-span-2">
           <label className="pt-2 text-xs font-bold text-slate-400" htmlFor="inquiry-content">문의 내용 <span className="text-red-400">*</span></label>
           <textarea
             id="inquiry-content"
             value={formState.content}
             onChange={(event) => updateField('content', event.target.value)}
             placeholder="문의 내용을 입력해주세요"
-            className="h-full min-h-[74px] resize-none rounded border border-slate-700 bg-[#07111f] px-3 py-2 text-sm leading-5 text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
+            className="h-full min-h-44 resize-none rounded border border-slate-700 bg-[#0f172a] px-3 py-2 text-sm leading-5 text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
             required
           />
         </div>
 
-        <div className="grid grid-cols-[98px_minmax(0,1fr)] items-center gap-3">
+        <div className="grid grid-cols-[98px_minmax(0,1fr)] items-center gap-3 lg:col-span-2">
           <p className="text-xs font-bold text-slate-400">첨부파일</p>
-          <div className="flex items-center gap-3 rounded border border-slate-800 bg-[#07111f] px-3 py-1.5">
+          <div className="flex items-center gap-3 rounded border border-slate-800 bg-[#0f172a] px-3 py-1.5">
             <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-slate-700 px-3 py-1 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white">
               <Icon name="paperclip" className="h-4 w-4" />
               파일 선택
@@ -345,8 +335,8 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
           </div>
         </div>
 
-        <div className="pl-[110px]">
-          <button type="submit" className="w-full rounded bg-blue-600 px-5 py-2 text-sm font-bold text-white transition hover:bg-blue-500">
+        <div className="flex justify-end lg:col-span-2">
+          <button type="submit" className="w-full rounded bg-ai-cyan px-5 py-2 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 sm:w-auto sm:min-w-40">
             문의 등록
           </button>
         </div>
@@ -361,16 +351,16 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
   )
 
   const renderChecklistPanel = () => (
-    <Widget className="grid max-h-[420px] min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+    <Widget className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <WidgetTitle title={inquiryHomeSections.checklist.title} icon={inquiryHomeSections.checklist.icon} />
       {/* 질문이 많아져도 문의 홈 레이아웃은 유지하고, 카드 내부에서만 스크롤되게 한다. */}
-      <div className="min-h-0 space-y-2 overflow-y-auto pr-1">
+      <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
         {checklistItems.map((item) => (
-          <div key={item} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-[#111a29] px-3 py-2">
-            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-blue-500/30 bg-blue-500/10 text-blue-400">
+          <div key={item} className="flex min-h-16 items-center gap-4 rounded-lg border border-slate-800 bg-[#0f172a] px-5 py-4">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-ai-cyan/30 bg-ai-cyan/10 text-ai-cyan">
               <Icon name="info" className="h-4 w-4" />
             </span>
-            <p className="text-xs font-semibold leading-5 text-slate-300">{item}</p>
+            <p className="text-sm font-semibold leading-6 text-slate-300">{item}</p>
           </div>
         ))}
       </div>
@@ -383,7 +373,7 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
         title={inquiryHomeSections.recent.title}
         icon={inquiryHomeSections.recent.icon}
         action={(
-          <select className="rounded border border-slate-700 bg-[#07111f] px-3 py-1.5 text-xs font-bold text-slate-300">
+          <select className="rounded border border-slate-700 bg-[#0f172a] px-3 py-1.5 text-xs font-bold text-slate-300">
             <option>최신순</option>
             <option>과거순</option>
           </select>
@@ -397,8 +387,8 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
               type="button"
               className={`rounded border px-3 py-1.5 text-xs font-bold transition ${
                 item.key === 'all'
-                  ? 'border-blue-600 bg-blue-600 text-white'
-                  : 'border-slate-700 bg-[#07111f] text-slate-400 hover:border-slate-500'
+                  ? 'border-institutional-blue bg-institutional-blue text-white'
+                  : 'border-slate-700 bg-[#0f172a] text-slate-400 hover:border-slate-500'
               }`}
             >
               {item.key !== 'all' ? <span className={`mr-2 inline-block h-2 w-2 rounded-full ${item.dot}`} /> : null}
@@ -414,7 +404,7 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
   const renderInquirySummaryPanel = () => (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {summaryItems.map((item) => (
-        <div key={item.key} className="rounded-lg border border-slate-800 bg-[#07111f] p-3">
+        <div key={item.key} className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
           <div className="flex items-center gap-3">
             <span className={`grid h-9 w-9 place-items-center rounded-full border border-current/30 bg-white/[0.03] ${item.tone}`}>
               <Icon name={item.icon} className="h-4.5 w-4.5" />
@@ -434,7 +424,7 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
       <Widget className="shrink-0">
         <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-400">
+          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-ai-cyan/20 bg-ai-cyan/10 text-ai-cyan">
             <Icon name="message" className="h-7 w-7" />
           </span>
           <div>
@@ -442,20 +432,11 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
             <p className="mt-1 text-sm text-slate-400">계좌, 주문, 입출금, 시스템 문의를 한 곳에서 관리합니다</p>
           </div>
         </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-2">
-          {[ 'DB 연동 예정'].map((label) => (
-            <span key={label} className="rounded border border-ai-cyan/30 bg-ai-cyan/10 px-3 py-1.5 text-xs font-bold text-ai-cyan">
-              {label}
-            </span>
-          ))}
-        </div>
       </div>
       </Widget>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(360px,0.78fr)_minmax(520px,1fr)]">
+      <div className="grid grid-cols-1 gap-6">
         {renderInquiryForm()}
-        {/* 문의 홈 오른쪽 영역은 현황 카드 대신 자주 묻는 질문에 집중해서 보여준다. */}
-        {renderChecklistPanel()}
       </div>
 
       {renderRecentPanel()}
@@ -476,129 +457,40 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout }) {
     </section>
   )
 
-  const renderFaq = () => (
-    <section className="h-full rounded-lg border border-slate-700/80 bg-slate-surface p-4">
-      <h1 className="text-xl font-extrabold text-white">자주 묻는 질문</h1>
-      <div className="mt-4 grid gap-3">
-        {faqItems.map((item) => (
-          <div key={item.question} className="rounded-lg border border-slate-800 bg-[#0c1019] p-4">
-            <p className="text-sm font-bold text-white">{item.question}</p>
-            <p className="mt-2 text-sm leading-6 text-slate-400">{item.answer}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-
-  const renderGuide = () => (
-    <section className="h-full rounded-lg border border-slate-700/80 bg-slate-surface p-4">
-      <h1 className="text-xl font-extrabold text-white">이용 안내</h1>
-      <div className="mt-4 grid gap-3">
-        {guideItems.map((item) => (
-          <div key={item} className="flex gap-3 rounded-lg border border-slate-800 bg-[#0c1019] p-4">
-            <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-ai-cyan" />
-            <p className="text-sm leading-6 text-slate-300">{item}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
-
-  const sectionRenderers = {
-    home: renderHome,
-    history: () => renderTableSection({
+  const renderHistory = () => (
+    <main className="mx-auto grid max-w-7xl grid-cols-1 gap-6">
+      {renderTableSection({
       eyebrow: 'History',
       title: '문의 내역',
       description: '등록한 문의 내역이 DB로 연결되면 이 영역에 표시됩니다.',
       rows: inquiries,
       emptyMessage: '문의 내역이 없습니다.',
       showSummary: true,
-    }),
-    waiting: () => renderTableSection({
-      eyebrow: 'Waiting',
-      title: '답변 대기',
-      description: '접수 완료 또는 답변 대기 상태의 문의만 모아 보여줍니다.',
-      rows: waitingInquiries,
-      emptyMessage: '답변 대기 중인 문의가 없습니다.',
-    }),
-    completed: () => renderTableSection({
-      eyebrow: 'Completed',
-      title: '처리 완료',
-      description: '답변 완료된 문의가 DB로 연결되면 이 영역에 표시됩니다.',
-      rows: completedInquiries,
-      emptyMessage: '처리 완료된 문의가 없습니다.',
-    }),
-    faq: renderFaq,
-    guide: renderGuide,
-  }
+    })}
+    </main>
+  )
+
+  const renderFaq = () => (
+    <main className="mx-auto grid max-w-7xl grid-cols-1 gap-6">
+      {renderChecklistPanel()}
+    </main>
+  )
 
   return (
     <div className="min-h-screen bg-obsidian-bg font-inter text-[#e2e2ec]">
       <div className="flex min-h-screen flex-col lg:flex-row">
-        {!isSidebarOpen ? (
-          <button
-            type="button"
-            aria-label="문의 사이드바 열기"
-            onClick={() => setIsSidebarOpen(true)}
-            className="fixed left-4 top-4 z-40 grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-700 bg-[#0F172A] text-slate-300 shadow-xl transition hover:border-ai-cyan hover:text-ai-cyan"
-          >
-            <Icon name="message" className="h-5 w-5" />
-          </button>
-        ) : null}
-
-        {isSidebarOpen ? (
-        <aside className="shrink-0 border-b border-slate-800 bg-[#0F172A] lg:min-h-screen lg:w-64 lg:border-b-0 lg:border-r">
-          <div className="sticky top-0 flex gap-3 overflow-x-auto p-4 lg:h-screen lg:flex-col lg:overflow-visible lg:p-5">
-          <div className="flex items-center gap-3 lg:pb-5">
-            <span className="grid h-10 w-10 place-items-center overflow-hidden rounded-lg">
-              <img className="h-full w-full object-contain" src="/logo.png" alt="ANTRY" />
-            </span>
-            <div>
-              <p className="text-sm font-extrabold text-white">ANTRY</p>
-              <p className="text-xs text-slate-500">Inquiry Center</p>
-            </div>
-            <button
-              type="button"
-              aria-label="문의 사이드바 닫기"
-              onClick={() => setIsSidebarOpen(false)}
-              className="ml-auto grid h-8 w-8 place-items-center rounded-lg border border-slate-700 text-slate-400 transition hover:border-ai-cyan hover:text-white"
-            >
-              ×
-            </button>
-          </div>
-
-          <nav className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
-            {inquiryMenuItems.map((item) => {
-              const isActive = activeMenu === item.key
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setActiveMenu(item.key)}
-                  className={`inline-flex shrink-0 items-center gap-3 rounded-lg px-4 py-3 text-left text-sm font-bold transition ${
-                    isActive
-                      ? 'bg-institutional-blue text-white shadow-[0_10px_24px_rgba(0,71,187,0.25)]'
-                      : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                  }`}
-                >
-                  <Icon name={item.icon} className="h-5 w-5 shrink-0" />
-                  {item.label}
-                </button>
-              )
-            })}
-          </nav>
-
-          <div className="mt-auto hidden rounded-lg border border-ai-cyan/20 bg-white/[0.04] p-4 lg:block">
-            <p className="text-xs font-bold text-ai-cyan">Support Layer</p>
-            <p className="mt-2 text-sm leading-6 text-slate-300">문의 데이터는 추후 API 응답으로 교체될 수 있습니다.</p>
-          </div>
-          </div>
-        </aside>
-        ) : null}
+        <SidebarNav
+          activeTab="inquiry"
+          isOpen={isSidebarOpen}
+          isLoggedIn={isLoggedIn}
+          onClose={() => setIsSidebarOpen(false)}
+          onOpen={() => setIsSidebarOpen(true)}
+          onTabChange={handleDashboardTabChange}
+        />
 
         <div className={`min-w-0 flex-1 px-6 py-8 ${!isSidebarOpen ? 'pt-20 lg:pt-8' : ''}`}>
           <Header isLoggedIn={isLoggedIn} userEmail={userEmail} handleLogout={handleLogout} />
-          {sectionRenderers[activeMenu]?.()}
+          {isFaqView ? renderFaq() : isHistoryView ? renderHistory() : renderHome()}
         </div>
       </div>
     </div>
