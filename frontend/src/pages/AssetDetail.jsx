@@ -2600,6 +2600,60 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                                 '계약 규모': ['계약금액', '매출액대비'],
                                 '계약 상대': ['계약상대'],
                                 '계약 기간': ['계약기간'],
+                                '해지 규모': ['해지금액', '매출액대비'],
+                                '해지 사유': ['해지사유'],
+                                '사채 규모': ['사채의 권면총액'],
+                                '전환 조건': ['전환가액', '행사가액', '교환가액'],
+                                '청구 기간': ['전환청구기간', '행사청구기간'],
+                                '최종 발행가': ['확정발행가액', '발행가액'],
+                                '발행 주식 수': ['발행주식수', '신주의 수'],
+                                '확정일': ['확정일'],
+                                '주식 배정': ['1주당 배정'],
+                                '신주 규모': ['보통주 신주', '기타주식 신주'],
+                                '상장 일정': ['상장예정일', '배정기준일'],
+                                '조정 기준가': ['기준가'],
+                                '실시일': ['권리락 실시일'],
+                                '권리락 사유': ['사유'],
+                                '배당 규모': ['1주당 배당금', '시가배당율', '배당금총액'],
+                                '환원 규모': ['취득예정금액', '소각예정금액', '취득예정주식'],
+                                '소각 규모': ['소각예정금액', '소각예정주식'],
+                                '소각 일정': ['소각예정일'],
+                                '처분 규모': ['처분예정금액', '처분예정주식'],
+                                '변경 후 대표': ['변경후 대표이사'],
+                                '변경 사유': ['변경사유'],
+                                '투자 규모': ['투자금액', '자기자본대비'],
+                                '투자 목적': ['투자목적', '투자대상'],
+                                '정지 규모': ['영업정지금액', '매출액대비'],
+                                '정지 사유': ['영업정지사유'],
+                                '감자 비율': ['감자비율'],
+                                '감자 일정': ['감자기준일', '상장예정일'],
+                                '분할 비율': ['분할비율'],
+                                '병합 비율': ['병합비율'],
+                                '거래정지 일정': ['매매거래정지기간', '신주권상장예정일'],
+                                '정지 사유': ['거래정지사유'],
+                                '정지 기간': ['거래정지일', '해제일시'],
+                                '위험 사유': ['위험사유', '상장폐지사유'],
+                                '심사 일정': ['심사일정', '개선기간'],
+                                '발생 규모': ['발생금액', '자기자본대비'],
+                                '회사 대응': ['향후대책', '발생사실'],
+                                '신청 사유': ['신청사유'],
+                                '법원 일정': ['관할법원', '신청일자', '결정내용'],
+                                '새 최대주주': ['변경후 최대주주', '지분율'],
+                                '합병 조건': ['합병비율', '합병기일'],
+                                '소송 규모': ['소송가액'],
+                                '보증 규모': ['채무보증금액', '자기자본대비'],
+                                '보증 대상': ['채무자', '채권자'],
+                                '보증 기간': ['채무보증기간'],
+                                '실적 규모': ['매출액', '영업이익', '당기순이익'],
+                                '증감 방향': ['전년동기대비', '직전분기대비'],
+                                '변동 규모': ['영업이익', '당기순이익', '전년대비'],
+                                '변동 사유': ['변동사유'],
+                                '계획 구체성': ['목표지표', '주주환원계획'],
+                                '실행 일정': ['이행기간', '공시주기'],
+                                '핵심 내용': ['주요내용', '계약금액', '전망매출액'],
+                                '실현 가능성': ['추진일정', '계약상대'],
+                                '답변 내용': ['답변내용', '진행사항'],
+                                '후속 일정': ['답변일', '조회공시요구일'],
                               }
                               const visibleCheckItems = checkItems.filter((check) => {
                                 const duplicateMetricLabels = duplicateCheckMetricMap[check?.question] || []
@@ -2615,7 +2669,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                                       onClick={() => handleToggleDisclosureAnalysis(item)}
                                       className="min-w-0 text-left text-xs text-[#e2e2ec] hover:text-cyan-200"
                                     >
-                                      <span className="block truncate font-bold">{item.report_nm}</span>
+                                      <span className="block w-full max-w-full overflow-hidden text-ellipsis whitespace-nowrap pr-2 font-bold leading-5">
+                                        {item.report_nm}
+                                      </span>
                                       <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                         <span className="rounded border border-cyan-500/25 bg-cyan-950/25 px-1.5 py-0.5 text-[11px] font-bold text-cyan-200">
                                           {item.corp_name || 'DART'}
@@ -2669,7 +2725,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                                           ) : null}
                                           {metrics.length > 0 ? (
                                             <div className="grid gap-1 sm:grid-cols-2">
-                                              {metrics.slice(0, 4).map((metric, index) => (
+                                              {metrics.slice(0, 6).map((metric, index) => (
                                                 <div key={`${metric.label}-${index}`} className="rounded border border-[#1f2945]/60 bg-slate-950/30 px-2 py-1">
                                                   <span className="text-cyan-200">{metric.label}</span>
                                                   <span className="mx-1 text-slate-600">·</span>
