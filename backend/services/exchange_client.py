@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
 
-MARKET_CLOSED_ORDER_MESSAGE = "주문 전송 실패\n장이 마감되었습니다."
+MARKET_CLOSED_ORDER_MESSAGE = "주문 전송 실패\n정규장이 마감되었습니다."
 
 
 class MarketClosedError(Exception):

@@ -938,10 +938,25 @@ def _ensure_kis_order_modifiable(auth_header: str, proposal_id: str, proposal: d
     """
     KIS 실제 미체결 잔량을 확인하고 정정/취소 불가 주문이면 차단합니다.
     """
-    current_order = client.get_modifiable_order(
-        proposal.get("external_order_id"),
-        order_org_no=_resolve_order_org_no(proposal),
-    )
+    try:
+        current_order = client.get_modifiable_order(
+            proposal.get("external_order_id"),
+            order_org_no=_resolve_order_org_no(proposal),
+        )
+    except Exception as exc:
+        if getattr(client, "env", "") == "MOCK" and "해당업무가 제공되지 않습니다" in str(exc):
+            return {
+                "order_id": proposal.get("external_order_id"),
+                "order_org_no": _resolve_order_org_no(proposal),
+                "symbol": proposal.get("symbol") or proposal.get("ticker"),
+                "remaining_qty": float(proposal.get("volume") or 0),
+                "is_modifiable": True,
+                "raw": {
+                    "precheck_skipped": True,
+                    "reason": "KIS 모의투자 정정/취소 가능 주문 조회 API 미지원",
+                },
+            }
+        raise
     if current_order.get("is_modifiable"):
         return current_order
 
@@ -2424,6 +2439,7 @@ def modify_manual_order():
                 "message": "정정 가능수량이 없습니다. 이미 체결 또는 종료된 주문으로 보여 거래내역 상태를 갱신했습니다.",
                 "detail": current_status,
             }), 400
+        current_app.logger.exception("주문 정정 실패: exchange=%s proposal_id=%s broker_env=%s", exchange, proposal_id, broker_env)
         _patch_trade_proposal(auth_header, proposal_id, {
             "failure_reason": f"주문 정정 실패: {str(e)[:500]}",
         })

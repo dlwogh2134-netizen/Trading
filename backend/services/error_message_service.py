@@ -302,7 +302,7 @@ ERROR_GUIDES = {
     "KIS": {
         "MARKET_CLOSED": {
             "title": "주문 전송 실패",
-            "message": "장이 마감되었습니다.",
+            "message": "정규장이 마감되었습니다.",
             "action": "",
             "severity": "warning",
         },
@@ -326,15 +326,21 @@ ERROR_GUIDES = {
         },
         "EGW00201": {
             "title": "KIS API 호출 한도를 초과했습니다.",
-            "message": "한국투자증권 API가 너무 잦은 요청을 제한했습니다.",
-            "action": "잠시 후 다시 시도하세요. 반복되면 시세/호가 자동 새로고침 주기를 줄여야 합니다.",
+            "message": "요청건이 너무 많습니다.",
+            "action": "",
+            "severity": "warning",
+        },
+        "MOCK_UNSUPPORTED": {
+            "title": "KIS 모의투자에서 지원하지 않는 기능입니다.",
+            "message": "KIS 모의투자에서 해당 조회 업무를 제공하지 않습니다.",
+            "action": "모의투자에서는 실제 정정/취소 요청으로 처리하거나, 실전 계좌에서 다시 확인하세요.",
             "severity": "warning",
         },
     },
     "TOSS": {
         "MARKET_CLOSED": {
             "title": "주문 전송 실패",
-            "message": "장이 마감되었습니다.",
+            "message": "정규장이 마감되었습니다.",
             "action": "",
             "severity": "warning",
         },
@@ -400,6 +406,16 @@ ERROR_GUIDES = {
 
 KEYWORD_GUIDES = [
     (
+        "EGW00201",
+        ["EGW00201", "초당 거래건수", "거래건수를 초과", "api 호출 한도", "요청 한도"],
+        {
+            "title": "요청 처리 실패",
+            "message": "요청건이 너무 많습니다.",
+            "action": "",
+            "severity": "warning",
+        },
+    ),
+    (
         "MARKET_CLOSED",
         [
             "장 마감",
@@ -428,7 +444,7 @@ KEYWORD_GUIDES = [
         ],
         {
             "title": "주문 전송 실패",
-            "message": "장이 마감되었습니다.",
+            "message": "정규장이 마감되었습니다.",
             "action": "",
             "severity": "warning",
         },
@@ -641,9 +657,14 @@ def format_error_payload(
     )):
         code = "MARKET_CLOSED"
 
+    if inferred_exchange == "KIS" and "모의투자에서는 해당업무가 제공되지 않습니다" in raw_message:
+        code = "MOCK_UNSUPPORTED"
+
     guide = None
     if inferred_exchange and code:
         guide = ERROR_GUIDES.get(inferred_exchange, {}).get(str(code))
+        if inferred_exchange == "KIS" and str(code) == "EGW00201" and guide:
+            guide = {**guide, "title": context}
 
     if not guide:
         lowered = raw_message.lower()
@@ -651,6 +672,8 @@ def format_error_payload(
             if any(keyword.lower() in lowered for keyword in keywords):
                 code = code or keyword_code
                 guide = keyword_guide
+                if inferred_exchange == "KIS" and keyword_code == "EGW00201":
+                    guide = {**guide, "title": context}
                 break
 
     if not guide:
