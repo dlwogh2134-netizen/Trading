@@ -95,12 +95,13 @@ class DartRepository:
         if not self.supabase_url or not self.supabase_anon_key:
             return None
 
+        select_fields = "id,rcept_no,category,sentiment,sentiment_label,sentiment_message,confidence,headline,plain_summary,key_points,risk_points,check_items,metrics,analysis_source,raw_payload,analyzed_at"
         try:
             response = requests.get(
                 f"{self.supabase_url}/rest/v1/dart_disclosure_analyses",
                 headers=self._read_headers(),
                 params={
-                    "select": "id,rcept_no,category,sentiment,sentiment_label,sentiment_message,confidence,headline,key_points,risk_points,metrics,analysis_source,raw_payload,analyzed_at",
+                    "select": select_fields,
                     "rcept_no": f"eq.{str(rcept_no or '').strip()}",
                     "limit": "1",
                 },
@@ -110,7 +111,24 @@ class DartRepository:
         except HTTPError:
             if response.status_code == 404:
                 return None
+            if response.status_code == 400:
+                return self._get_disclosure_analysis_legacy(rcept_no)
             raise
+        rows = response.json()
+        return rows[0] if rows else None
+
+    def _get_disclosure_analysis_legacy(self, rcept_no: str) -> dict[str, Any] | None:
+        response = requests.get(
+            f"{self.supabase_url}/rest/v1/dart_disclosure_analyses",
+            headers=self._read_headers(),
+            params={
+                "select": "id,rcept_no,category,sentiment,sentiment_label,sentiment_message,confidence,headline,key_points,risk_points,metrics,analysis_source,raw_payload,analyzed_at",
+                "rcept_no": f"eq.{str(rcept_no or '').strip()}",
+                "limit": "1",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
         rows = response.json()
         return rows[0] if rows else None
 
@@ -126,10 +144,28 @@ class DartRepository:
         )
         try:
             self._raise_for_status(response, "dart_disclosure_analyses")
-        except RuntimeError:
+        except (RuntimeError, HTTPError):
             if response.status_code == 404:
                 return None
+            if response.status_code == 400:
+                return self._upsert_disclosure_analysis_legacy(row)
             raise
+        rows = response.json()
+        return rows[0] if rows else None
+
+    def _upsert_disclosure_analysis_legacy(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        legacy_row = {
+            key: value
+            for key, value in row.items()
+            if key not in {"plain_summary", "check_items"}
+        }
+        response = requests.post(
+            f"{self.supabase_url}/rest/v1/dart_disclosure_analyses?on_conflict=rcept_no",
+            headers={**self._write_headers(), "Prefer": "resolution=merge-duplicates,return=representation"},
+            json=legacy_row,
+            timeout=30,
+        )
+        self._raise_for_status(response, "dart_disclosure_analyses")
         rows = response.json()
         return rows[0] if rows else None
 

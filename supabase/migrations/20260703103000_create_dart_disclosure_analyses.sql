@@ -7,8 +7,10 @@ CREATE TABLE IF NOT EXISTS public.dart_disclosure_analyses (
     sentiment_message TEXT NOT NULL,
     confidence TEXT NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
     headline TEXT NOT NULL,
+    plain_summary TEXT,
     key_points JSONB NOT NULL DEFAULT '[]'::jsonb,
     risk_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+    check_items JSONB NOT NULL DEFAULT '[]'::jsonb,
     metrics JSONB NOT NULL DEFAULT '[]'::jsonb,
     analysis_source TEXT NOT NULL DEFAULT 'OPENDART_DOCUMENT',
     raw_payload JSONB,
@@ -50,3 +52,9 @@ BEGIN
             WITH CHECK (auth.role() = 'service_role');
     END IF;
 END $$;
+
+ALTER TABLE public.dart_disclosure_analyses
+    ADD COLUMN IF NOT EXISTS plain_summary TEXT;
+
+ALTER TABLE public.dart_disclosure_analyses
+    ADD COLUMN IF NOT EXISTS check_items JSONB NOT NULL DEFAULT '[]'::jsonb;
