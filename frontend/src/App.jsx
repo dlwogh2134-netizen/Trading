@@ -12,6 +12,7 @@ import AdminMlData from './pages/AdminMlData'
 import AssetDetail from './pages/AssetDetail'
 import SearchNotFound from './pages/SearchNotFound'
 import InvestmentSurveyModal from './components/InvestmentSurveyModal'
+import { INQUIRY_ROUTES } from './dashboardConstants.js'
 
 function AppShell({
   isLoggedIn,
@@ -75,6 +76,16 @@ function AppShell({
       setInfoSubmitLoading(false)
     }
   }
+
+  const protectedInquiryElement = isLoggedIn ? (
+    <Inquiry
+      isLoggedIn={isLoggedIn}
+      userEmail={userEmail}
+      handleLogout={handleLogout}
+    />
+  ) : (
+    <Navigate to="/login" replace />
+  )
 
   return (
     <>
@@ -193,20 +204,9 @@ function AppShell({
               />
             )}
           />
-          <Route
-            path="/inquiry"
-            element={
-              isLoggedIn ? (
-                <Inquiry
-                  isLoggedIn={isLoggedIn}
-                  userEmail={userEmail}
-                  handleLogout={handleLogout}
-                />
-              ) : (
-                <Navigate to="/login" replace />
-              )
-            }
-          />
+          {Object.values(INQUIRY_ROUTES).map((path) => (
+            <Route key={path} path={path} element={protectedInquiryElement} />
+          ))}
           <Route
             path="/settings"
             element={(

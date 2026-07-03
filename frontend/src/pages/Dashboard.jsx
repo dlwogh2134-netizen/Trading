@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { fetchUserWatchlist, supabase } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import Settings from './Settings'
@@ -8,10 +9,16 @@ import AssetsTab from './AssetsTab.jsx'
 import TradeHistoryTab from './TradeHistoryTab.jsx'
 import AdminMlData from './AdminMlData.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
+import { DASHBOARD_TAB_KEYS, DEFAULT_DASHBOARD_TAB } from '../dashboardConstants.js'
 
 const DASHBOARD_API_BASE_URL = 'http://localhost:5050'
 const BALANCE_EXCHANGE_ORDER = ['TOSS', 'KIS', 'COINONE', 'BINANCE', 'BINANCE_UM_FUTURES']
 const TRADE_PROPOSAL_HOLDING_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,order_amount,market_country,currency,status,broker_env,created_at'
+const DASHBOARD_TAB_SET = new Set(DASHBOARD_TAB_KEYS)
+
+const normalizeDashboardTab = (tab) => (
+  DASHBOARD_TAB_SET.has(tab) ? tab : DEFAULT_DASHBOARD_TAB
+)
 
 const toNumber = (value) => {
   const numericValue = Number(value)
@@ -513,13 +520,14 @@ const buildBalanceRequests = (keyStatus) =>
   })
 
 export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userProfile }) {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [inputs, setInputs] = useState({
     appkey: '',
     appsecret: '',
     cano: '',
     env: 'MOCK'
   })
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const [activeTab, setActiveTab] = useState(() => normalizeDashboardTab(searchParams.get('tab')))
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
 
   const [encrypted, setEncrypted] = useState(null)
@@ -559,6 +567,17 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
   const [displayCurrency, setDisplayCurrency] = useState('KRW')
   const [isCashDetailModalOpen, setIsCashDetailModalOpen] = useState(false)
+
+  useEffect(() => {
+    const nextTab = normalizeDashboardTab(searchParams.get('tab'))
+    setActiveTab((currentTab) => (currentTab === nextTab ? currentTab : nextTab))
+  }, [searchParams])
+
+  const handleDashboardTabChange = (tabKey) => {
+    const nextTab = normalizeDashboardTab(tabKey)
+    setActiveTab(nextTab)
+    setSearchParams(nextTab === DEFAULT_DASHBOARD_TAB ? {} : { tab: nextTab })
+  }
 
   const handleInputChange = (e) => {
     const { name, value } = e.target
@@ -931,7 +950,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
           isLoggedIn={isLoggedIn}
           onClose={() => setIsSidebarOpen(false)}
           onOpen={() => setIsSidebarOpen(true)}
-          onTabChange={setActiveTab}
+          onTabChange={handleDashboardTabChange}
         />
 
         <div className={`min-w-0 flex-1 px-6 py-8 ${!isSidebarOpen ? 'pt-20 lg:pt-8' : ''}`}>
@@ -1102,7 +1121,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                       <button
                         className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-400 transition-all hover:border-ai-cyan hover:text-white"
                         type="button"
-                        onClick={() => setActiveTab('watchlist')}
+                        onClick={() => handleDashboardTabChange('watchlist')}
                       >
                         관리
                       </button>
