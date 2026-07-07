@@ -204,3 +204,15 @@ ml/reports/stock_v8_v11_comparison_20260630.md
   - `ml/data/ops/job_history.json`
   - `ml/data/ops/model_registry.json`
 - Supabase의 `ml_dataset_jobs`, `ml_training_runs`, `ml_model_registry`는 동기화 대상입니다.
+
+## 3분리 모델 자동화
+
+주식 통합 모델은 안전망으로 유지하며, 신규 shadow 모델은 국내주식, 해외주식, 코인으로 분리해 자동 수집+학습한다.
+
+| 모델 | 유니버스 | raw 파일 | config | 공시 피처 |
+| --- | --- | --- | --- | --- |
+| 국내주식 | `stock_kr_core_45` | `ml/data/raw/kr_stock_candles.csv` | `ml/configs/lgbm_kr_stock_v1.yaml` | DART 사용 |
+| 해외주식 | `stock_us_core_45` | `ml/data/raw/us_stock_candles.csv` | `ml/configs/lgbm_us_stock_v1.yaml` | DART 미사용 |
+| 코인 | `crypto_core_30` | `ml/data/raw/crypto_candles_30m.csv` | `ml/configs/lgbm_crypto_v8.yaml` | 미사용 |
+
+교체 판단은 자동 serving 교체가 아니라 `promotion_candidate` 판정으로 남긴다. 관리자는 composite 순초과수익, 최대낙폭, risk AUC, risk 상위 10% precision을 확인한 뒤 serving 교체 여부를 결정한다.

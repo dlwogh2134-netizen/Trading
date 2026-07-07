@@ -15,6 +15,8 @@ erDiagram
     profiles ||--o{ user_watchlist : "favorites"
     profiles ||--o{ chat_history : "dialogues"
     profiles ||--o{ paper_portfolios : "paper_trading"
+    profiles ||--|| public_profiles : "publishes"
+    profiles ||--o{ community_posts : "writes"
 
     profiles ||--o{ ml_dataset_jobs : "executes"
     profiles ||--o{ ml_training_runs : "runs"
@@ -26,7 +28,7 @@ erDiagram
 
 ---
 
-## 2. 테이블별 상세 정의 (17개 핵심 테이블)
+## 2. 테이블별 상세 정의 (19개 핵심 테이블)
 
 ### 2.1 profiles
 *   **용도**: 서비스 가입 사용자의 기본 정보와 인증 권한의 매핑 테이블 (Supabase Auth와 auth.uid() 연동)
@@ -35,9 +37,22 @@ erDiagram
     *   `email` (TEXT)
     *   `nickname` (TEXT)
     *   `phone` (TEXT)
+    *   `role` (TEXT) - `USER`(일반 사용자) / `ADMIN`(관리자)
     *   `updated_at` (TIMESTAMPTZ)
 *   **RLS (Row Level Security)**:
     *   `auth.uid() = id` 인 사용자만 자신의 프로필 조회 및 수정 가능.
+    *   일반 사용자는 컬럼 권한상 `role`을 직접 수정할 수 없으며, 닉네임/연락처/투자성향 관련 컬럼만 갱신 가능.
+
+### 2.1.1 public_profiles
+*   **용도**: 커뮤니티 화면에서 공개해도 되는 최소 사용자 정보만 분리해 보관하는 공개 프로필 테이블입니다. `profiles.nickname` 또는 `profiles.role` 변경 시 트리거로 자동 동기화되어, 과거 커뮤니티 글도 최신 닉네임을 표시할 수 있습니다.
+*   **주요 컬럼**:
+    *   `id` (UUID, PK/FK) - `profiles.id` 참조
+    *   `nickname` (TEXT) - 커뮤니티 표시용 닉네임
+    *   `role` (TEXT) - `USER` / `ADMIN`
+    *   `updated_at` (TIMESTAMPTZ)
+*   **RLS**:
+    *   로그인 사용자는 공개 프로필을 조회할 수 있습니다.
+    *   생성/수정/삭제는 직접 허용하지 않고 `profiles` 동기화 트리거 또는 `service_role`만 수행합니다.
 
 ### 2.2 user_api_keys
 *   **용도**: Toss증권, KIS(한국투자증권), 코인원, 바이낸스 등 연동 거래소의 API Access/Secret Key 및 계좌 정보를 평문 노출 방지를 위해 양방향 암호화(AES-256-GCM)하여 저장합니다.
@@ -165,19 +180,23 @@ erDiagram
     *   Supabase Realtime publication에 포함되어 거래내역 탭에서 즉시 반영 가능
 
 ### 2.4.2 asset_transfer_proposals
-*   **용도**: 코인원에서 바이낸스로 이동하는 가상자산 출금 요청의 사전검증, 사용자 승인, 외부 거래소 응답, 바이낸스 입금 확인 상태를 추적합니다.
+*   **용도**: 코인원 ↔ 바이낸스 가상자산 출금 요청의 사전검증, 사용자 승인, 외부 거래소 응답, 입금 확인 상태를 추적합니다. 현재 UI는 코인원 → 바이낸스와 XRP 기준 바이낸스 → 코인원 출금을 지원합니다.
 *   **주요 컬럼**:
     *   `id` (UUID, PK)
     *   `user_id` (UUID, FK) - `profiles.id` 참조
-    *   `from_exchange` (TEXT) - 현재 `COINONE`
-    *   `to_exchange` (TEXT) - 현재 `BINANCE`
+    *   `from_exchange` (TEXT) - 현재 `COINONE` 또는 `BINANCE`
+    *   `to_exchange` (TEXT) - 현재 `BINANCE` 또는 `COINONE`
     *   `currency` (TEXT) - 출금 코인 심볼
-    *   `network` (TEXT) - 바이낸스 입금 네트워크
+    *   `network` (TEXT) - 출금 네트워크
     *   `amount` (NUMERIC) - 출금 수량
+    *   `withdraw_fee` (NUMERIC) - 출금 요청 수량과 바이낸스 실제 입금 수량 차이로 계산한 출금 수수료
+    *   `expected_receive_amount` (NUMERIC) - 사전검증 또는 입금 확인 기준 도착 예상 수량
+    *   `received_amount` (NUMERIC) - 바이낸스 입금내역에서 확인된 실제 입금 수량
+    *   `fee_currency` (TEXT) - 출금 수수료 단위 코인 심볼
     *   `address` (TEXT) - 바이낸스 입금 주소
     *   `secondary_address` (TEXT) - XRP/XLM/EOS Destination Tag 또는 Memo
     *   `status` (TEXT) - `PENDING`, `APPROVED`, `SUBMITTED`, `COMPLETED`, `FAILED`, `NEEDS_REVIEW` 등
-    *   `external_transaction_id` (TEXT) - 코인원 출금 거래 식별 ID
+    *   `external_transaction_id` (TEXT) - 출발 거래소 출금 거래 식별 ID
     *   `raw_request` / `precheck_payload` / `raw_response` / `binance_deposit_payload` (JSONB)
     *   `failure_reason` (TEXT)
     *   `approved_at`, `submitted_at`, `completed_at`, `created_at`, `updated_at` (TIMESTAMPTZ)
@@ -187,6 +206,10 @@ erDiagram
 *   **현재 구현 메모**:
     *   실제 출금 API는 `/api/transfer/withdraw/approve`에서만 호출됩니다.
     *   승인 단계에서 바이낸스 API 조회 입금 주소 및 Tag와 입력값이 다르면 출금을 차단합니다.
+    *   `precheck_payload`에는 `withdrawal_fee`, `withdrawal_min_amount`, `estimated_receive_amount`, `withdrawal_fee_source`가 포함됩니다.
+    *   자동 완료 판정은 현재 코인원 → 바이낸스 경로에서 바이낸스 입금 내역 조회 기준으로만 수행합니다.
+    *   바이낸스 입금 완료가 확인되면 `received_amount`, `withdraw_fee`, `expected_receive_amount`를 갱신하고, 대시보드/내 자산은 바이낸스 실제 잔고가 아직 반영되지 않은 경우에만 이 완료 출금분을 보조 보유수량으로 표시합니다.
+
 
 ### 2.5 news_articles
 *   **용도**: 실시간 수집된 뉴스 및 종목 키워드, 그리고 AI 요약(Sentiment, Summary) 정보를 적재하여 RAG 챗봇 및 종목 상세 뉴스에 데이터를 급지함.
@@ -302,6 +325,7 @@ erDiagram
 *   **주요 컬럼**:
     *   `id` (UUID, PK)
     *   `user_id` (UUID, FK) - `profiles.id` 참조
+    *   `parent_id` (UUID, FK, Nullable) - 원댓글 `community_posts.id` 참조. `NULL`이면 원댓글, 값이 있으면 1단계 답글
     *   `asset_type` (TEXT) - `STOCK` / `CRYPTO`
     *   `exchange` (TEXT)
     *   `status` (TEXT) - `running`, `success`, `failed`
@@ -395,3 +419,22 @@ erDiagram
     *   `created_at` (TIMESTAMPTZ)
 *   **RLS**:
     *   `auth.uid() = user_id` 조건으로 자신의 챗 로그에만 보안 격리 적용.
+
+### 2.17 community_posts
+*   **용도**: 종목 디테일 페이지의 커뮤니티 탭에서 종목별 사용자 글을 저장합니다. 작성자 표시명은 글에 스냅샷으로 저장하지 않고 `public_profiles.nickname`을 조회해 최신 닉네임으로 표시합니다.
+*   **주요 컬럼**:
+    *   `id` (UUID, PK)
+    *   `user_id` (UUID, FK) - `profiles.id` 참조
+    *   `asset_type` (TEXT) - `STOCK` / `CRYPTO`
+    *   `symbol` (TEXT) - 종목 코드 또는 코인 심볼
+    *   `exchange` (TEXT) - 표시/필터 보조용 거래소 코드
+    *   `content` (TEXT) - 1~500자 커뮤니티 본문
+    *   `status` (TEXT) - `ACTIVE`(표시), `DELETED`(작성자 삭제), `HIDDEN`(관리자 숨김)
+    *   `created_at` (TIMESTAMPTZ)
+    *   `updated_at` (TIMESTAMPTZ)
+*   **RLS & Realtime**:
+    *   로그인 사용자는 `ACTIVE` 글을 조회할 수 있습니다.
+    *   작성자는 본인 댓글/답글을 작성하고 `DELETED`로 소프트 삭제할 수 있습니다.
+    *   답글은 원댓글 아래 1단계까지만 UI에서 허용하며, `parent_id`가 자기 자신을 참조하지 못하도록 DB 제약조건을 둡니다.
+    *   `profiles.role = 'ADMIN'` 사용자는 댓글/답글을 `HIDDEN` 처리할 수 있습니다.
+    *   Supabase Realtime publication에 등록되어 종목별 새 글을 즉시 반영할 수 있습니다.

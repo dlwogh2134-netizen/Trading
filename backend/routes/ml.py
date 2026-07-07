@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from backend.utils.file_helpers import sanitize_nan
@@ -449,7 +451,8 @@ def run_ml_full_pipeline_job():
                 retry=int(dataset_config.get("retry", 3)),
                 retry_wait_seconds=float(dataset_config.get("retry_wait_seconds", 60.0)),
             )
-            output = os.path.join(project_root_path, "ml", "data", "raw", "stock_candles.csv")
+            raw_output_name = dataset_config.get("raw_output", "stock_candles.csv")
+            output = os.path.join(project_root_path, "ml", "data", "raw", raw_output_name)
         elif dataset_config["exchange"] == "BINANCE" and dataset_config["asset_type"] == "CRYPTO":
             rows, failures = fetch_binance_klines(
                 symbols,
@@ -498,6 +501,27 @@ def run_ml_full_pipeline_job():
                 "dataset_job_id": dataset_job["id"],
             },
         )
+
+        for command in training_config.get("pre_build_commands") or []:
+            resolved_command = [
+                sys.executable if token == "python" else token
+                for token in command
+            ]
+            completed = subprocess.run(
+                resolved_command,
+                cwd=project_root_path,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "사전 피처 생성 명령이 실패했습니다: "
+                    + " ".join(command)
+                    + "\n"
+                    + completed.stderr[-4000:]
+                )
+
         result = run_ml_pipeline(
             config_path=training_config["config"],
             risk_config_path=training_config.get("risk_config"),

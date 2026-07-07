@@ -39,3 +39,5 @@ ml/models/*
 # Custom Local Agent Skills
 .agents/
 
+# SDD (Subagent Driven Development) artifacts
+.superpowers/

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import InvestmentSurveyModal from '../components/InvestmentSurveyModal'
@@ -21,6 +21,11 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState({ text: '', isError: false })
   const [showSurveyModal, setShowSurveyModal] = useState(false)
+  const [profileForm, setProfileForm] = useState({
+    nickname: userProfile?.nickname || '',
+  })
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileMessage, setProfileMessage] = useState({ text: '', isError: false })
   
 
   // Toss 폼 상태
@@ -73,8 +78,6 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
   // 투자성향분석결과 (나중에 DB 연결하면 하드코딩 제거)
   //
 
-  const [newPassword, setNewPassword] = useState('')
-
 
 
   // 세션 헤더 획득 헬퍼 함수
@@ -82,6 +85,54 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return null
     return `Bearer ${session.access_token}`
+  }
+
+  const handleSaveProfile = async (event) => {
+    event.preventDefault()
+    const nickname = profileForm.nickname.trim()
+
+    if (nickname.length < 2 || nickname.length > 16) {
+      setProfileMessage({ text: '닉네임은 2자 이상 16자 이하로 입력해 주세요.', isError: true })
+      return
+    }
+
+    if (!/^[가-힣a-zA-Z0-9_]+$/.test(nickname)) {
+      setProfileMessage({ text: '닉네임은 한글, 영문, 숫자, 밑줄만 사용할 수 있습니다.', isError: true })
+      return
+    }
+
+    setProfileSaving(true)
+    setProfileMessage({ text: '', isError: false })
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.user?.id) {
+        setProfileMessage({ text: '로그인 세션이 만료되었습니다.', isError: true })
+        return
+      }
+
+      const updatedAt = new Date().toISOString()
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          nickname,
+          updated_at: updatedAt,
+        })
+        .eq('id', session.user.id)
+
+      if (error) throw error
+
+      setUserProfile?.((prev) => ({
+        ...(prev || {}),
+        nickname,
+        updated_at: updatedAt,
+      }))
+      setProfileMessage({ text: '닉네임이 저장되었습니다. 커뮤니티 글에도 최신 닉네임이 반영됩니다.', isError: false })
+    } catch (error) {
+      setProfileMessage({ text: error.message || '닉네임 저장에 실패했습니다.', isError: true })
+    } finally {
+      setProfileSaving(false)
+    }
   }
 
   // API Key 등록 현황 로드
@@ -133,8 +184,12 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
 
   useEffect(() => {
     if (isLoggedIn) {
-      loadKeysStatus()
+      const timerId = window.setTimeout(() => {
+        loadKeysStatus()
+      }, 0)
+      return () => window.clearTimeout(timerId)
     }
+    return undefined
   }, [isLoggedIn])
 
   // 연결 테스트 핸들러
@@ -433,6 +488,52 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
       {!hideHeader && <Header isLoggedIn={isLoggedIn} userEmail={userEmail} handleLogout={handleLogout} userProfile={userProfile} />}
 
       <main className="max-w-4xl mx-auto flex flex-col gap-8 mt-6">
+
+        {/* 프로필 설정 */}
+        <section className="ai-glass rounded-lg p-6 flex flex-col gap-4">
+          <div className="flex flex-col gap-2 border-b border-slate-800 pb-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="flex items-center gap-2 text-lg font-bold uppercase tracking-wider text-white">
+                <span className="w-2.5 h-2.5 rounded-full bg-ai-cyan" />
+                Profile
+              </h2>
+              <p className="mt-1 text-xs text-slate-400">
+                커뮤니티와 헤더에 표시되는 공개 닉네임을 관리합니다.
+              </p>
+            </div>
+            <span className="w-fit rounded border border-cyan-500/30 bg-cyan-950/20 px-2.5 py-1 text-[10px] font-bold text-cyan-200">
+              {userProfile?.role === 'ADMIN' ? 'ADMIN' : 'USER'}
+            </span>
+          </div>
+
+          <form onSubmit={handleSaveProfile} className="flex flex-col gap-2">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">닉네임</label>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_88px] sm:items-stretch">
+              <input
+                type="text"
+                value={profileForm.nickname}
+                onChange={(event) => setProfileForm({ nickname: event.target.value })}
+                maxLength={16}
+                placeholder="닉네임 입력"
+                className="h-10 w-full rounded border border-slate-700 bg-[#11131a] px-4 text-sm text-[#e2e2ec] transition-all focus:border-ai-cyan focus:outline-none focus:ring-1 focus:ring-ai-cyan"
+              />
+              <button
+                type="submit"
+                disabled={profileSaving}
+                className="h-10 rounded border border-cyan-500/40 bg-cyan-950/30 px-3 text-[11px] font-bold text-cyan-200 transition hover:bg-cyan-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {profileSaving ? '저장 중...' : '저장'}
+              </button>
+            </div>
+            <p className="text-[11px] leading-5 text-slate-500">한글, 영문, 숫자, 밑줄 조합 2~16자</p>
+          </form>
+
+          {profileMessage.text ? (
+            <p className={`rounded border px-3 py-2 text-xs ${profileMessage.isError ? 'border-rose-500/30 bg-rose-950/20 text-rose-200' : 'border-cyan-500/30 bg-cyan-950/20 text-cyan-200'}`}>
+              {profileMessage.text}
+            </p>
+          ) : null}
+        </section>
 
         {/* 브로커 API 연동 현황판 */}
         <section className="ai-glass rounded-lg p-6 flex flex-col gap-4">
@@ -921,12 +1022,14 @@ export default function Settings({ isLoggedIn, userEmail, handleLogout, userProf
             <InvestmentSurveyModal
               onClose={() => setShowSurveyModal(false)}
               onSuccess={(type, score) => {
-                setUserProfile(prev => prev ? {
-                  ...prev,
-                  invest_type: type,
-                  invest_score: score,
-                  updated_at: new Date().toISOString()
-                } : null);
+                if (typeof setUserProfile === 'function') {
+                  setUserProfile(prev => prev ? {
+                    ...prev,
+                    invest_type: type,
+                    invest_score: score,
+                    updated_at: new Date().toISOString()
+                  } : null);
+                }
 
                 setShowSurveyModal(false);
               }}

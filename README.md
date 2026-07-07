@@ -111,6 +111,7 @@ python src/run_pipeline_bundle.py \
 - `POST /api/home/market`
 - `POST /api/home/overview`
 - `GET /api/market/rankings`
+  - `asset_type=STOCK|CRYPTO`, `region`, `ranking`, `limit` 쿼리를 받아 홈 더보기 화면용 최대 100개 랭킹을 반환합니다.
 - `POST /api/market/kis/sync`
 - `POST /api/dashboard/balance`
 
@@ -140,11 +141,12 @@ python src/run_pipeline_bundle.py \
 ### 가상자산 이동
 
 - `GET /api/transfer/binance/deposit-address`
+- `GET /api/transfer/coinone/deposit-address`
 - `POST /api/transfer/withdraw/precheck`
 - `POST /api/transfer/withdraw/approve`
 - `GET /api/transfer/withdraw/status`
 
-현재 출금 플로우는 대시보드 자산 탭에서 코인원 보유 코인을 바이낸스 입금 주소로 이동하는 경로만 지원합니다. 실제 출금은 사전검증 후 사용자가 최종 승인 체크를 완료했을 때만 실행됩니다.
+현재 출금 플로우는 대시보드 자산 탭에서 코인원 → 바이낸스 이동과 XRP 기준 바이낸스 → 코인원 이동을 지원합니다. 사전검증은 도착 거래소 입금 주소/Tag 일치 여부, 출금 가능 수량, 최소 출금 수량, 출금 수수료, 예상 수령 수량을 함께 반환합니다. 실제 출금은 사전검증 후 사용자가 최종 승인 체크를 완료했을 때만 실행됩니다.
 
 ### 뉴스
 

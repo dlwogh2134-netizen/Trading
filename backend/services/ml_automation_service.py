@@ -102,6 +102,66 @@ AUTOMATION_PRESETS = {
             "skip_build_features": False,
         },
     },
+    "kr-stock-v1-full": {
+        "label": "국내주식 v1 자동 수집+학습 (DART shadow)",
+        "dataset": {
+            "asset_type": "STOCK",
+            "exchange": "TOSS",
+            "preset": "stock_kr_core_45",
+            "symbols": [],
+            "interval": "1d",
+            "count": 700,
+            "sleep_seconds": 2.0,
+            "retry": 3,
+            "retry_wait_seconds": 60.0,
+            "append": True,
+            "include_macro": True,
+            "chunk_size": 0,
+            "chunk_index": 1,
+            "raw_output": "kr_stock_candles.csv",
+        },
+        "training": {
+            "config": "ml/configs/lgbm_kr_stock_v1.yaml",
+            "risk_config": "ml/configs/lgbm_kr_stock_risk_v1.yaml",
+            "summary_output": "ml/data/processed/kr_stock_v1_summary.json",
+            "skip_build_features": False,
+            "pre_build_commands": [
+                [
+                    "python",
+                    "backend/scripts/export_dart_features.py",
+                    "--dates-source-path",
+                    "ml/data/raw/kr_stock_candles.csv",
+                    "--output",
+                    "ml/data/raw/dart_features.csv",
+                ]
+            ],
+        },
+    },
+    "us-stock-v1-full": {
+        "label": "해외주식 v1 자동 수집+학습 (shadow)",
+        "dataset": {
+            "asset_type": "STOCK",
+            "exchange": "TOSS",
+            "preset": "stock_us_core_45",
+            "symbols": [],
+            "interval": "1d",
+            "count": 700,
+            "sleep_seconds": 2.0,
+            "retry": 3,
+            "retry_wait_seconds": 60.0,
+            "append": True,
+            "include_macro": True,
+            "chunk_size": 0,
+            "chunk_index": 1,
+            "raw_output": "us_stock_candles.csv",
+        },
+        "training": {
+            "config": "ml/configs/lgbm_us_stock_v1.yaml",
+            "risk_config": "ml/configs/lgbm_us_stock_risk_v1.yaml",
+            "summary_output": "ml/data/processed/us_stock_v1_summary.json",
+            "skip_build_features": False,
+        },
+    },
 }
 
 

@@ -365,6 +365,95 @@ class BinanceSpotClient:
         data = self._signed_get("/sapi/v1/capital/deposit/hisrec", params)
         return data if isinstance(data, list) else []
 
+    def get_withdraw_network_info(self, coin: str, network: str | None = None) -> dict:
+        """
+        바이낸스 출금 네트워크별 수수료와 최소 출금 수량을 조회합니다.
+        """
+        normalized_coin = str(coin or "").strip().upper()
+        normalized_network = str(network or normalized_coin).strip().upper()
+        if not normalized_coin:
+            raise ValueError("바이낸스 출금 수수료 조회에는 coin이 필요합니다.")
+
+        rows = self._signed_get("/sapi/v1/capital/config/getall")
+        coin_info = next(
+            (
+                item for item in rows
+                if str(item.get("coin") or "").upper() == normalized_coin
+            ),
+            None,
+        )
+        if not coin_info:
+            raise ValueError(f"{normalized_coin} 바이낸스 출금 정보를 찾을 수 없습니다.")
+
+        networks = coin_info.get("networkList") if isinstance(coin_info.get("networkList"), list) else []
+        network_info = next(
+            (
+                item for item in networks
+                if str(item.get("network") or "").upper() == normalized_network
+            ),
+            None,
+        )
+        if not network_info:
+            network_info = next((item for item in networks if item.get("isDefault")), None)
+        if not network_info and networks:
+            network_info = networks[0]
+        if not network_info:
+            raise ValueError(f"{normalized_coin} 바이낸스 출금 네트워크 정보를 찾을 수 없습니다.")
+
+        return {
+            "coin": normalized_coin,
+            "network": network_info.get("network") or normalized_network,
+            "withdrawFee": network_info.get("withdrawFee"),
+            "withdrawMin": network_info.get("withdrawMin"),
+            "withdrawMax": network_info.get("withdrawMax"),
+            "withdrawEnable": bool(network_info.get("withdrawEnable")),
+            "withdrawIntegerMultiple": network_info.get("withdrawIntegerMultiple"),
+            "withdrawTag": bool(network_info.get("withdrawTag")),
+            "busy": bool(network_info.get("busy")),
+            "raw": network_info,
+        }
+
+    def withdraw_coin(
+        self,
+        coin: str,
+        amount: float | str,
+        address: str,
+        network: str | None = None,
+        address_tag: str | None = None,
+    ) -> dict:
+        """
+        바이낸스 현물 지갑에서 외부 주소로 가상자산 출금을 요청합니다.
+        """
+        normalized_coin = str(coin or "").strip().upper()
+        if not normalized_coin:
+            raise ValueError("바이낸스 출금에는 coin이 필요합니다.")
+        if amount is None or float(amount) <= 0:
+            raise ValueError("바이낸스 출금 수량은 0보다 커야 합니다.")
+        if not str(address or "").strip():
+            raise ValueError("바이낸스 출금 주소가 필요합니다.")
+
+        params = {
+            "coin": normalized_coin,
+            "amount": str(amount),
+            "address": str(address).strip(),
+        }
+        if network:
+            params["network"] = str(network).strip().upper()
+        if address_tag is not None and str(address_tag).strip():
+            params["addressTag"] = str(address_tag).strip()
+
+        data = self._signed_request("POST", "/sapi/v1/capital/withdraw/apply", params)
+        transaction_id = data.get("id") or data.get("withdrawOrderId")
+        return {
+            "transaction_id": transaction_id,
+            "status": "WITHDRAWAL_REGISTER",
+            "currency": normalized_coin,
+            "amount": str(amount),
+            "address": str(address).strip(),
+            "secondary_address": address_tag,
+            "raw": data,
+        }
+
 
 class BinanceFuturesClient:
     """

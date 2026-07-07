@@ -11,6 +11,20 @@
     "SNOW", "COIN", "SOFI", "ARM", "RDDT", "QQQ", "SPY", "DIA", "IWM", "SOXX",
     "XLK", "XLF", "XLE", "GLD", "TLT"
   ],
+  "stock_kr_core_45": [
+    "005930", "000660", "035420", "035720", "005380", "000270", "051910", "068270", "373220", "006400",
+    "207940", "105560", "055550", "086790", "012330", "028260", "066570", "096770", "003550", "034020",
+    "011200", "010130", "017670", "009150", "018260", "010950", "032830", "042660", "000810", "316140",
+    "035250", "251270", "361610", "018880", "329180", "259960", "352820", "138040", "267250", "302440",
+    "005387", "090430", "271560", "034730", "097950"
+  ],
+  "stock_us_core_45": [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "AVGO", "LLY",
+    "NFLX", "COST", "JPM", "V", "MA", "XOM", "UNH", "ORCL", "CRM", "ADBE",
+    "QCOM", "INTC", "MU", "PLTR", "SMCI", "PANW", "ASML", "TSM", "UBER", "SHOP",
+    "SNOW", "COIN", "SOFI", "ARM", "RDDT", "QQQ", "SPY", "DIA", "IWM", "SOXX",
+    "XLK", "XLF", "XLE", "GLD", "TLT"
+  ],
   "stock_growth_40": [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "AVGO", "NFLX",
     "ORCL", "CRM", "ADBE", "QCOM", "INTC", "MU", "PLTR", "SMCI", "PANW", "ASML",

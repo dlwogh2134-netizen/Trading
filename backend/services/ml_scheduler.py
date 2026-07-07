@@ -4,6 +4,8 @@ import time
 import threading
 import requests
 import yaml
+import sys
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -35,6 +37,10 @@ PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.absp
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "default-dev-encryption-key-32bytes!")
 crypto = CryptoHelper(ENCRYPTION_KEY)
 logger = logging.getLogger(__name__)
+
+def get_stock_shadow_preset_keys() -> list[str]:
+    """주식 자동화 시 실행할 프리셋 키 목록을 반환합니다."""
+    return ["kr-stock-v1-full", "us-stock-v1-full", "stock-v8-full"]
 
 # 모듈 수준의 전역 상태 변수
 _news_ingest_started = False
@@ -390,117 +396,174 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                                             access_token = token_json.get("access_token")
                                             
                                             if access_token:
-                                                # v8: 잔차 수익률 라벨 + Ridge 앙상블 주식 자동화
-                                                preset = resolve_automation_preset("stock-v8-full")
-                                                dataset_config = preset["dataset"]
-                                                training_config = preset["training"]
-                                                
-                                                # 금요일 16:30 학습 기동 시 Auto-HPO 튜닝 선행 적용
-                                                if now_kr.weekday() == 4:
+                                                for preset_key in get_stock_shadow_preset_keys():
+                                                    dataset_job = None
+                                                    train_job = None
                                                     try:
-                                                        run_ml_tuning(
-                                                            config_path=training_config["config"],
-                                                            trials=15,
-                                                            update_config=True
+                                                        preset = resolve_automation_preset(preset_key)
+                                                        dataset_config = preset["dataset"]
+                                                        training_config = preset["training"]
+                                                        
+                                                        # 금요일 16:30 학습 기동 시 Auto-HPO 튜닝 선행 적용
+                                                        if now_kr.weekday() == 4:
+                                                            try:
+                                                                run_ml_tuning(
+                                                                    config_path=training_config["config"],
+                                                                    trials=15,
+                                                                    update_config=True
+                                                                )
+                                                            except Exception:
+                                                                pass
+                                                        
+                                                        preset_symbols = load_preset_symbols(dataset_config["preset"], DEFAULT_UNIVERSE_PATH)
+                                                        symbols = list(dict.fromkeys([*(dataset_config.get("symbols") or []), *preset_symbols]))
+                                                        
+                                                        dataset_job = create_job(
+                                                            "dataset_export",
+                                                            {
+                                                                "label": preset["label"] + " (Auto)",
+                                                                "asset_type": dataset_config["asset_type"],
+                                                                "exchange": dataset_config["exchange"],
+                                                                "symbols": symbols,
+                                                                "preset_name": dataset_config.get("preset"),
+                                                                "interval": dataset_config["interval"],
+                                                                "count": dataset_config["count"],
+                                                            },
                                                         )
-                                                    except Exception:
-                                                        pass
-                                                
-                                                preset_symbols = load_preset_symbols(dataset_config["preset"], DEFAULT_UNIVERSE_PATH)
-                                                symbols = list(dict.fromkeys([*(dataset_config.get("symbols") or []), *preset_symbols]))
-                                                
-                                                dataset_job = create_job(
-                                                    "dataset_export",
-                                                    {
-                                                        "label": preset["label"] + " (Auto)",
-                                                        "asset_type": dataset_config["asset_type"],
-                                                        "exchange": dataset_config["exchange"],
-                                                        "symbols": symbols,
-                                                        "preset_name": dataset_config.get("preset"),
-                                                        "interval": dataset_config["interval"],
-                                                        "count": dataset_config["count"],
-                                                    },
-                                                )
-                                                
-                                                macro_rows = fetch_macro_indices(int(dataset_config["count"]))
-                                                macro_output = PROJECT_ROOT / "ml" / "data" / "raw" / "macro_indices.csv"
-                                                if macro_rows:
-                                                    write_rows(macro_output, macro_rows, append=bool(dataset_config.get("append", True)))
-                                                
-                                                rows, failures = fetch_toss_candles(
-                                                    symbols,
-                                                    access_token,
-                                                    dataset_config["interval"],
-                                                    int(dataset_config["count"]),
-                                                    sleep_seconds=float(dataset_config.get("sleep_seconds", 2.0)),
-                                                    retry=int(dataset_config.get("retry", 3)),
-                                                    retry_wait_seconds=float(dataset_config.get("retry_wait_seconds", 60.0)),
-                                                )
-                                                output = PROJECT_ROOT / "ml" / "data" / "raw" / "stock_candles.csv"
-                                                write_rows(output, rows, append=bool(dataset_config.get("append", True)))
-                                                
-                                                update_job(
-                                                    dataset_job["id"],
-                                                    {
-                                                        "status": "success",
-                                                        "finished_at": datetime.utcnow().isoformat() + "Z",
-                                                        "output": str(output),
-                                                        "row_count": len(rows),
-                                                        "failure_count": len(failures),
-                                                        "failures": failures[:50],
-                                                        "symbols": symbols,
-                                                    },
-                                                )
-                                                
-                                                train_job = create_job(
-                                                    "training_run",
-                                                    {
-                                                        "label": preset["label"] + " (Auto)",
-                                                        "config": training_config["config"],
-                                                        "risk_config": training_config.get("risk_config"),
-                                                        "summary_output": training_config.get("summary_output"),
-                                                        "skip_build_features": bool(training_config.get("skip_build_features", False)),
-                                                        "dataset_job_id": dataset_job["id"],
-                                                    },
-                                                )
-                                                
-                                                result = run_ml_pipeline(
-                                                    config_path=training_config["config"],
-                                                    risk_config_path=training_config.get("risk_config"),
-                                                    skip_build_features=bool(training_config.get("skip_build_features", False)),
-                                                    summary_output=training_config.get("summary_output"),
-                                                )
-                                                
-                                                update_job(
-                                                    train_job["id"],
-                                                    {
-                                                        "status": "success" if result["success"] else "failed",
-                                                        "finished_at": datetime.utcnow().isoformat() + "Z",
-                                                        "command": result["command"],
-                                                        "returncode": result["returncode"],
-                                                        "stdout": result["stdout"][-8000:],
-                                                        "stderr": result["stderr"][-8000:],
-                                                    },
-                                                )
-                                                
-                                                latest_ds_job = next((j for j in list_jobs(limit=100) if j.get("id") == dataset_job["id"]), None)
-                                                if latest_ds_job:
-                                                    sync_dataset_job_to_supabase(auth_header, latest_ds_job)
-                                                attach_training_audit_to_job(
-                                                    train_job["id"],
-                                                    auth_header,
-                                                    dataset_config["asset_type"],
-                                                    training_config["config"],
-                                                )
-                                                latest_tr_job = next((j for j in list_jobs(limit=100) if j.get("id") == train_job["id"]), None)
-                                                if latest_tr_job:
-                                                    sync_training_job_to_supabase(auth_header, latest_tr_job)
-                                                sync_model_registry_to_supabase(auth_header, training_config.get("summary_output"))
-                                                record_model_audit_jobs(
-                                                    auth_header,
-                                                    "stock",
-                                                    resolve_model_version_from_config(training_config["config"]),
-                                                )
+                                                        
+                                                        if dataset_config.get("include_macro"):
+                                                            macro_rows = fetch_macro_indices(int(dataset_config["count"]))
+                                                            macro_output = PROJECT_ROOT / "ml" / "data" / "raw" / "macro_indices.csv"
+                                                            if macro_rows:
+                                                                write_rows(macro_output, macro_rows, append=bool(dataset_config.get("append", True)))
+                                                        
+                                                        rows, failures = fetch_toss_candles(
+                                                            symbols,
+                                                            access_token,
+                                                            dataset_config["interval"],
+                                                            int(dataset_config["count"]),
+                                                            sleep_seconds=float(dataset_config.get("sleep_seconds", 2.0)),
+                                                            retry=int(dataset_config.get("retry", 3)),
+                                                            retry_wait_seconds=float(dataset_config.get("retry_wait_seconds", 60.0)),
+                                                        )
+                                                        raw_output_name = dataset_config.get("raw_output", "stock_candles.csv")
+                                                        output = PROJECT_ROOT / "ml" / "data" / "raw" / raw_output_name
+                                                        write_rows(output, rows, append=bool(dataset_config.get("append", True)))
+                                                        
+                                                        update_job(
+                                                            dataset_job["id"],
+                                                            {
+                                                                "status": "success",
+                                                                "finished_at": datetime.utcnow().isoformat() + "Z",
+                                                                "output": str(output),
+                                                                "row_count": len(rows),
+                                                                "failure_count": len(failures),
+                                                                "failures": failures[:50],
+                                                                "symbols": symbols,
+                                                            },
+                                                        )
+                                                        
+                                                        train_job = create_job(
+                                                            "training_run",
+                                                            {
+                                                                "label": preset["label"] + " (Auto)",
+                                                                "config": training_config["config"],
+                                                                "risk_config": training_config.get("risk_config"),
+                                                                "summary_output": training_config.get("summary_output"),
+                                                                "skip_build_features": bool(training_config.get("skip_build_features", False)),
+                                                                "dataset_job_id": dataset_job["id"],
+                                                            },
+                                                        )
+                                                        
+                                                        for command in training_config.get("pre_build_commands") or []:
+                                                            resolved_command = [
+                                                                sys.executable if token == "python" else token
+                                                                for token in command
+                                                            ]
+                                                            completed = subprocess.run(
+                                                                resolved_command,
+                                                                cwd=str(PROJECT_ROOT),
+                                                                check=False,
+                                                                capture_output=True,
+                                                                text=True,
+                                                            )
+                                                            if completed.returncode != 0:
+                                                                raise RuntimeError(
+                                                                    "사전 피처 생성 명령이 실패했습니다: "
+                                                                    + " ".join(command)
+                                                                    + "\n"
+                                                                    + completed.stderr[-4000:]
+                                                                )
+                                                        
+                                                        result = run_ml_pipeline(
+                                                            config_path=training_config["config"],
+                                                            risk_config_path=training_config.get("risk_config"),
+                                                            skip_build_features=bool(training_config.get("skip_build_features", False)),
+                                                            summary_output=training_config.get("summary_output"),
+                                                        )
+                                                        
+                                                        update_job(
+                                                            train_job["id"],
+                                                            {
+                                                                "status": "success" if result["success"] else "failed",
+                                                                "finished_at": datetime.utcnow().isoformat() + "Z",
+                                                                "command": result["command"],
+                                                                "returncode": result["returncode"],
+                                                                "stdout": result["stdout"][-8000:],
+                                                                "stderr": result["stderr"][-8000:],
+                                                            },
+                                                        )
+                                                        
+                                                        latest_ds_job = next((j for j in list_jobs(limit=100) if j.get("id") == dataset_job["id"]), None)
+                                                        if latest_ds_job:
+                                                            sync_dataset_job_to_supabase(auth_header, latest_ds_job)
+                                                        attach_training_audit_to_job(
+                                                            train_job["id"],
+                                                            auth_header,
+                                                            dataset_config["asset_type"],
+                                                            training_config["config"],
+                                                        )
+                                                        latest_tr_job = next((j for j in list_jobs(limit=100) if j.get("id") == train_job["id"]), None)
+                                                        if latest_tr_job:
+                                                            sync_training_job_to_supabase(auth_header, latest_tr_job)
+                                                        sync_model_registry_to_supabase(auth_header, training_config.get("summary_output"))
+                                                        record_model_audit_jobs(
+                                                            auth_header,
+                                                            "stock",
+                                                            resolve_model_version_from_config(training_config["config"]),
+                                                        )
+                                                    except Exception as e:
+                                                        logger.exception(f"[StockAutomation] Preset={preset_key} run failed: %s", e)
+                                                        if dataset_job:
+                                                            try:
+                                                                update_job(
+                                                                    dataset_job["id"],
+                                                                    {
+                                                                        "status": "failed",
+                                                                        "finished_at": datetime.utcnow().isoformat() + "Z",
+                                                                        "error": str(e),
+                                                                    }
+                                                                )
+                                                                latest_ds_job = next((j for j in list_jobs(limit=100) if j.get("id") == dataset_job["id"]), None)
+                                                                if latest_ds_job:
+                                                                    sync_dataset_job_to_supabase(auth_header, latest_ds_job)
+                                                            except Exception:
+                                                                pass
+                                                        if train_job:
+                                                            try:
+                                                                update_job(
+                                                                    train_job["id"],
+                                                                    {
+                                                                        "status": "failed",
+                                                                        "finished_at": datetime.utcnow().isoformat() + "Z",
+                                                                        "error": str(e),
+                                                                    }
+                                                                )
+                                                                latest_tr_job = next((j for j in list_jobs(limit=100) if j.get("id") == train_job["id"]), None)
+                                                                if latest_tr_job:
+                                                                    sync_training_job_to_supabase(auth_header, latest_tr_job)
+                                                            except Exception:
+                                                                pass
                                                 
                                     except Exception:
                                         pass

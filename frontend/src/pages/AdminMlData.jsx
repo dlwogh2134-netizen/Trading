@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import Header from '../components/Header.jsx'
 import { supabase } from '../supabaseClient'
+import AdminInquiryPanel from './AdminInquiryPanel.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -160,10 +161,24 @@ const automationPresets = [
     version: 'v8',
     isNew: true,
   },
+  {
+    key: 'kr-stock-v1-full',
+    label: '국내주식 v1 자동 수집+학습',
+    summary: 'stock_kr_core_45 + DART 공시 피처를 포함한 국내주식 shadow 모델',
+    version: 'split-v1',
+    isNew: true,
+  },
+  {
+    key: 'us-stock-v1-full',
+    label: '해외주식 v1 자동 수집+학습',
+    summary: 'stock_us_core_45 기반 해외주식 shadow 모델. DART 피처는 제외합니다.',
+    version: 'split-v1',
+    isNew: true,
+  },
 ]
 
-const operationalAutomationPresets = automationPresets.filter((preset) => preset.version === 'v8')
-const legacyAutomationPresets = automationPresets.filter((preset) => preset.version !== 'v8')
+const operationalAutomationPresets = automationPresets.filter((preset) => ['v8', 'split-v1'].includes(preset.version))
+const legacyAutomationPresets = automationPresets.filter((preset) => !['v8', 'split-v1'].includes(preset.version))
 const v8TuningPresets = tuningPresets.filter((preset) => preset.version === 'v8')
 
 function StatusPanel({ result, error, loading }) {
@@ -1924,6 +1939,7 @@ function ModelResultCard({ title, result }) {
 }
 
 export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideHeader = false }) {
+  const [adminTab, setAdminTab] = useState('ml')
   const [mode, setMode] = useState('crypto')
   const [form, setForm] = useState(presets.crypto)
   const [loading, setLoading] = useState(false)
@@ -2559,6 +2575,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
       await loadJobHistory()
       await loadRegistry()
       await loadServingAudit()
+      // 국내/해외 분리 모델도 현재 registry asset_type은 STOCK으로 동기화합니다.
       await loadActiveSignals(preset.key.includes('crypto') ? 'CRYPTO' : 'STOCK')
       await loadReadiness()
       await loadReportHistory()
@@ -2629,7 +2646,35 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
       )}
 
       <main className="mx-auto flex max-w-7xl flex-col gap-6">
-        <section className="ai-glass rounded-lg p-6">
+        {/* 관리자 내부 탭 */}
+        <div className="flex border-b border-slate-800">
+          <button
+            type="button"
+            onClick={() => setAdminTab('ml')}
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition ${
+              adminTab === 'ml'
+                ? 'border-ai-cyan text-white bg-ai-cyan/5'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            ML 운영 콘솔
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdminTab('inquiries')}
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition ${
+              adminTab === 'inquiries'
+                ? 'border-ai-cyan text-white bg-ai-cyan/5'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            사용자 문의 관리
+          </button>
+        </div>
+
+        {adminTab === 'ml' && (
+          <>
+            <section className="ai-glass rounded-lg p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">ML Operations</p>
@@ -3176,6 +3221,10 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             />
           </div>
         </section>
+        </>
+        )}
+
+        {adminTab === 'inquiries' && <AdminInquiryPanel />}
       </main>
 
       <JobLogModal

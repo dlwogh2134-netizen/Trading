@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom'
 import { supabase } from './supabaseClient'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
@@ -8,6 +8,7 @@ import News from './pages/News'
 import Inquiry from './pages/Inquiry'
 import Settings from './pages/Settings'
 import Home from './pages/Home'
+import MarketRankings from './pages/MarketRankings'
 import AdminMlData from './pages/AdminMlData'
 import AssetDetail from './pages/AssetDetail'
 import SearchNotFound from './pages/SearchNotFound'
@@ -30,8 +31,6 @@ function AppShell({
   setInfoSubmitLoading,
   handleLogout,
 }) {
-  const location = useLocation()
-
   const handlePhoneFormatChange = (e) => {
     const value = e.target.value.replace(/[^0-9]/g, '')
     let formatted = value
@@ -195,6 +194,16 @@ function AppShell({
             )}
           />
           <Route
+            path="/market-rankings"
+            element={(
+              <MarketRankings
+                isLoggedIn={isLoggedIn}
+                userEmail={userEmail}
+                handleLogout={handleLogout}
+              />
+            )}
+          />
+          <Route
             path="/news"
             element={(
               <News
@@ -307,7 +316,7 @@ export default function App() {
         try {
           const { data } = await supabase
             .from('profiles')
-            .select('nickname, phone, invest_type, invest_score, updated_at')
+            .select('nickname, phone, role, invest_type, invest_score, updated_at')
             .eq('id', session.user.id)
             .maybeSingle()
 

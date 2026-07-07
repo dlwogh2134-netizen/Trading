@@ -153,6 +153,45 @@ class CoinoneClient:
             "raw": data,
         }
 
+    def get_currency_info(self, currency: str) -> dict:
+        """
+        코인원 Public API에서 입출금 상태, 출금 수수료, 최소 출금 수량을 조회합니다.
+        """
+        normalized_currency = self._normalize_symbol(currency)
+        if not normalized_currency:
+            raise ValueError("코인원 가상자산 정보 조회에는 심볼이 필요합니다.")
+
+        res = requests.get(f"{self.base_url}/public/v2/currencies/{normalized_currency}", timeout=5)
+        if res.status_code != 200:
+            raise Exception(f"코인원 가상자산 정보 조회 실패 (상태 코드 {res.status_code}): {res.text}")
+
+        data = res.json()
+        if data.get("result") != "success":
+            raise Exception(f"코인원 가상자산 정보 에러 응답: {data}")
+
+        currencies = data.get("currencies") if isinstance(data.get("currencies"), list) else []
+        info = next(
+            (
+                item for item in currencies
+                if str(item.get("symbol") or "").upper() == normalized_currency
+            ),
+            currencies[0] if currencies else {},
+        )
+        if not info:
+            raise ValueError(f"{normalized_currency} 코인원 가상자산 정보를 찾을 수 없습니다.")
+
+        return {
+            "symbol": info.get("symbol") or normalized_currency,
+            "name": info.get("name"),
+            "deposit_status": info.get("deposit_status"),
+            "withdraw_status": info.get("withdraw_status"),
+            "deposit_fee": info.get("deposit_fee"),
+            "withdrawal_fee": info.get("withdrawal_fee"),
+            "withdrawal_min_amount": info.get("withdrawal_min_amount"),
+            "max_precision": info.get("max_precision"),
+            "raw": info,
+        }
+
     def get_balance(self) -> dict:
         """
         코인원 계좌 잔고를 조회하여 연결 상태를 검증하고 자산 현황을 반환합니다.
@@ -218,6 +257,42 @@ class CoinoneClient:
             "currency": "KRW",
             "holdings": holdings,
             "raw": data
+        }
+
+    def get_deposit_address(self, currency: str) -> dict:
+        """
+        코인원 입금 주소와 Destination Tag/Memo를 조회합니다.
+        """
+        normalized_currency = self._normalize_symbol(currency)
+        if not normalized_currency:
+            raise ValueError("코인원 입금 주소 조회에는 심볼이 필요합니다.")
+
+        def find_address(response: dict) -> dict:
+            rows = response.get("deposit_addresses") if isinstance(response.get("deposit_addresses"), list) else []
+            return next(
+                (
+                    item for item in rows
+                    if str(item.get("currency") or "").upper() == normalized_currency
+                ),
+                rows[0] if len(rows) == 1 else {},
+            )
+
+        data = self._private_post("/v2.1/account/deposit_address", {"currencies": [normalized_currency]})
+        address = find_address(data)
+        if not address:
+            data = self._private_post("/v2.1/account/deposit_address", {})
+            address = find_address(data)
+        if not address:
+            raise ValueError(
+                f"{normalized_currency} 코인원 입금 주소를 찾을 수 없습니다. "
+                "코인원에서 해당 자산 입금 주소가 생성되어 있는지, 입금이 일시 중단되어 있지 않은지 확인해 주세요."
+            )
+
+        return {
+            "currency": address.get("currency") or normalized_currency,
+            "address": address.get("address") or "",
+            "secondary_address": address.get("secondary_address") or "",
+            "raw": address,
         }
 
     def place_order(self, symbol: str, qty: float, side: str, ord_type: str, price: float = None) -> dict:

@@ -3,7 +3,7 @@ import os
 import time
 import threading
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 from backend.services.supabase_client import query_supabase
 from backend.services.auth_service import get_user_id_from_header
@@ -733,6 +733,30 @@ def _patch_proposal_as_not_actionable(auth_header: str, proposal_id: str, order_
 def _is_toss_action_restricted_error(error: Exception, code: str) -> bool:
     text = str(error)
     return code in text or "가능수량이 부족" in text
+
+
+def _is_already_canceled_order_error(error: Exception) -> bool:
+    """
+    거래소에서 이미 취소/종료된 주문을 다시 취소하려고 할 때 내려주는 문구를 감지합니다.
+    """
+    text = str(error or "").lower()
+    keywords = (
+        "이미 취소",
+        "취소된 주문",
+        "취소 완료",
+        "취소완료",
+        "cancelled",
+        "canceled",
+        "already cancel",
+        "already cancelled",
+        "already canceled",
+        "cancel-restricted",
+        "취소 가능수량이 부족",
+        "취소 가능 수량이 부족",
+        "취소할 수량이 없습니다",
+        "취소 가능수량이 없습니다",
+    )
+    return any(keyword.lower() in text for keyword in keywords)
 
 
 def _resolve_proposal_broker_env(proposal: dict, fallback: str | None = None) -> str:
@@ -2277,11 +2301,19 @@ def cancel_manual_order():
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
-        if exchange == "TOSS" and _is_toss_action_restricted_error(e, "cancel-restricted"):
-            _patch_proposal_as_not_actionable(auth_header, proposal_id, current_status, "취소 가능수량이 없어 주문 상태를 종료 처리했습니다.")
+        if _is_already_canceled_order_error(e):
+            _patch_trade_proposal(auth_header, proposal_id, {
+                "status": "CANCELED",
+                "failure_reason": "이미 취소된 주문으로 거래내역 상태를 취소완료로 갱신했습니다.",
+                "canceled_at": datetime.utcnow().isoformat() + "Z",
+                "raw_order_payload": {
+                    "last_order_status": current_status or {},
+                    "cancel_restricted_reason": str(e)[:500],
+                },
+            })
             return jsonify({
                 "success": False,
-                "message": "취소 가능수량이 없습니다. 이미 체결 또는 종료된 주문으로 보여 거래내역 상태를 갱신했습니다.",
+                "message": "이미 취소된 주문입니다.",
                 "detail": current_status,
             }), 400
         _patch_trade_proposal(auth_header, proposal_id, {
@@ -2565,6 +2597,19 @@ def cancel_replace_order():
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
+        if _is_already_canceled_order_error(e):
+            _patch_trade_proposal(auth_header, proposal_id, {
+                "status": "CANCELED",
+                "failure_reason": "이미 취소된 주문으로 거래내역 상태를 취소완료로 갱신했습니다.",
+                "canceled_at": datetime.utcnow().isoformat() + "Z",
+                "raw_order_payload": {
+                    "cancel_replace_cancel_error": str(e)[:500],
+                },
+            })
+            return jsonify({
+                "success": False,
+                "message": "이미 취소된 주문입니다.",
+            }), 400
         _patch_trade_proposal(auth_header, proposal_id, {
             "failure_reason": f"취소 후 재주문 실패: {str(e)[:500]}",
         })
@@ -3946,15 +3991,91 @@ def stop_auto_trading_rule():
     if not rules or len(rules) == 0:
         return jsonify({"success": False, "message": "해당 조건감시 규칙을 찾을 수 없거나 권한이 없습니다."}), 404
 
-    # 상태를 STOPPED로 마감
-    update_data = {
-        "status": "STOPPED",
+    # 기존 상태에 따라 물리 삭제 또는 정지 상태 전환 분기
+    current_status = rules[0].get("status")
+
+    try:
+        if current_status in ("STOPPED", "COMPLETED"):
+            result = query_supabase(auth_header, f"auto_trading_rules?id=eq.{rule_id}", "DELETE")
+            return jsonify({"success": True, "message": "조건감시 규칙이 완전히 삭제되었습니다.", "data": result})
+        else:
+            update_data = {
+                "status": "STOPPED",
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            result = query_supabase(auth_header, f"auto_trading_rules?id=eq.{rule_id}", "PATCH", json_data=update_data)
+            return jsonify({"success": True, "message": "조건감시가 정지되었습니다.", "data": result})
+    except Exception as error:
+        current_app.logger.exception("조건감시 정지 실패")
+        return jsonify(format_error_payload(error, "조건감시 정지 실패")), 400
+
+
+@trade_bp.route("/api/trade/auto-trading-rule", methods=["POST"])
+def create_auto_trading_rule():
+    """
+    사용자가 주문과 무관하게 이미 보유 중인 자산에 대해 조건감시 규칙을 단독으로 새로 등록합니다.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 토큰이 없습니다."}), 401
+
+    try:
+        user_id, _ = get_user_id_from_header(auth_header)
+    except Exception as e:
+        return jsonify({"success": False, "message": f"인증 실패: {str(e)}"}), 401
+
+    req_data = request.json or {}
+    exchange = req_data.get("exchange")
+    asset_type = req_data.get("asset_type")
+    symbol = str(req_data.get("symbol") or "").upper()
+    entry_price = float(req_data.get("entry_price") or 0)
+    quantity = float(req_data.get("quantity") or 0)
+    target_profit_rate = float(req_data.get("target_profit_rate") or 0)
+    stop_loss_rate = float(req_data.get("stop_loss_rate") or 0)
+    execution_mode = req_data.get("execution_mode", "PROPOSAL")
+    broker_env = req_data.get("broker_env", "REAL").upper()
+
+    if not exchange or not symbol or entry_price <= 0 or quantity <= 0:
+        return jsonify({"success": False, "message": "필수 입력값(거래소, 종목, 진입가, 수량)이 누락되었거나 올바르지 않습니다."}), 400
+
+    # 실제 계좌의 보유 잔고 체크 (없는 주식 감시 등록 차단 가드)
+    try:
+        record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
+        client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
+        if not client:
+            return jsonify({"success": False, "message": "거래소 클라이언트를 생성할 수 없습니다."}), 400
+        
+        qty = _get_holding_qty_from_balance(client, symbol)
+        if qty is None or qty <= 0:
+            return jsonify({
+                "success": False,
+                "message": f"현재 {exchange} ({broker_env}) 계좌에 {symbol} 자산의 보유 수량이 없거나 조회할 수 없습니다. 보유 중인 자산에 대해서만 감시 등록이 가능합니다."
+            }), 400
+    except Exception as e:
+        current_app.logger.exception("조건감시 등록 전 보유 잔고 조회 실패")
+        return jsonify({"success": False, "message": f"계좌 보유 잔고를 확인할 수 없어 등록이 취소되었습니다. ({str(e)})"}), 400
+
+    rule_data = {
+        "user_id": user_id,
+        "exchange": exchange,
+        "asset_type": asset_type,
+        "ticker": symbol,
+        "symbol": symbol,
+        "broker_env": broker_env,
+        "entry_price": entry_price,
+        "investment_amount": entry_price * quantity,
+        "quantity": quantity,
+        "target_profit_rate": target_profit_rate,
+        "stop_loss_rate": stop_loss_rate,
+        "execution_mode": execution_mode,
+        "status": "RUNNING",
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
 
     try:
-        result = query_supabase(auth_header, f"auto_trading_rules?id=eq.{rule_id}", "PATCH", json_data=update_data)
-        return jsonify({"success": True, "message": "조건감시가 정지되었습니다.", "data": result})
+        result = query_supabase(auth_header, "auto_trading_rules", "POST", json_data=rule_data)
+        return jsonify({"success": True, "message": "조건감시 규칙이 정상적으로 생성되었습니다.", "data": result})
     except Exception as error:
-        current_app.logger.exception("조건감시 정지 실패")
-        return jsonify(format_error_payload(error, "조건감시 정지 실패")), 400
+        current_app.logger.exception("조건감시 규칙 생성 실패")
+        return jsonify(format_error_payload(error, "조건감시 규칙 생성 실패")), 400

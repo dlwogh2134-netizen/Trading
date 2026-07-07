@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useEffectEvent, useRef } from 'react'
+import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { supabase, deleteUserWatchlistItem, ensureNewsSummaries, fetchUserWatchlist, normalizeWatchlistItem, upsertUserWatchlistItem } from '../supabaseClient'
@@ -46,7 +46,7 @@ const getStockWarningBadgeTone = (warningType) => STOCK_WARNING_BADGE_META[Strin
 const getOrderStatusLabel = (status) => {
   const normalized = String(status || '').toUpperCase()
   if (['PENDING', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED'].includes(normalized)) return '미체결'
-  if (['APPROVED', 'ORDERED'].includes(normalized)) return '주문 완료'
+  if (['APPROVED', 'ORDERED'].includes(normalized)) return '접수 완료'
   if (normalized === 'EXECUTED') return '체결완료'
   if (['CANCELED', 'CANCELLED'].includes(normalized)) return '취소완료'
   if (['FAILED', 'REJECTED', 'EXPIRED'].includes(normalized)) return '실패'
@@ -221,8 +221,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     // 숏 포지션(숏 진입) 여부 판별
     const isShort = isFuturesOrder && futuresIntent === 'SHORT_OPEN'
     
-    let tpPrice = 0
-    let slPrice = 0
+    let tpPrice
+    let slPrice
     
     if (isShort) {
       // 숏은 가격 하락 시 익절, 상승 시 손절
@@ -250,8 +250,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [tradeMessage, setTradeMessage] = useState({ text: '', isError: false })
 
   // 6. 실시간 호가, 체결, 보유자산 상태 (WTS 연동 고도화)
-  const [orderbook, setOrderbook] = useState(null)
-  const [trades, setTrades] = useState([])
+  const [, setTrades] = useState([])
   const [userBalance, setUserBalance] = useState(null)
   const [balanceMessage, setBalanceMessage] = useState('')
   const [activeTab, setActiveTab] = useState('news') // news | community
@@ -268,6 +267,16 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [disclosureAnalysisLoadingId, setDisclosureAnalysisLoadingId] = useState('')
   const [disclosureSyncing, setDisclosureSyncing] = useState(false)
   const [disclosureSyncMessage, setDisclosureSyncMessage] = useState({ text: '', isError: false })
+  const [communityPosts, setCommunityPosts] = useState([])
+  const [communityProfiles, setCommunityProfiles] = useState({})
+  const [communityCurrentUserId, setCommunityCurrentUserId] = useState('')
+  const [communityDraft, setCommunityDraft] = useState('')
+  const [communityReplyParentId, setCommunityReplyParentId] = useState('')
+  const [communityReplyDraft, setCommunityReplyDraft] = useState('')
+  const [communityLoading, setCommunityLoading] = useState(false)
+  const [communitySubmitting, setCommunitySubmitting] = useState(false)
+  const [communityActionId, setCommunityActionId] = useState('')
+  const [communityMessage, setCommunityMessage] = useState({ text: '', isError: false })
   const [displayName, setDisplayName] = useState(symbol)
   const [stockWarnings, setStockWarnings] = useState([])
   const [marketFeeds, setMarketFeeds] = useState({
@@ -301,6 +310,69 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [editStopLoss, setEditStopLoss] = useState('')
   const [editQuantity, setEditQuantity] = useState('')
   const [ruleUpdating, setRuleUpdating] = useState(false)
+
+  const [showAddRuleForm, setShowAddRuleForm] = useState(false)
+  const [addRulePrice, setAddRulePrice] = useState('')
+  const [addRuleQty, setAddRuleQty] = useState('')
+  const [addRuleProfitRate, setAddRuleProfitRate] = useState('5.0')
+  const [addRuleStopRate, setAddRuleStopRate] = useState('-3.0')
+  const [addRuleExecutionMode, setAddRuleExecutionMode] = useState('PROPOSAL')
+
+  const handleAddRule = async () => {
+    if (!addRulePrice || parseFloat(addRulePrice) <= 0) {
+      alert('진입 가격을 정확하게 입력해주세요.')
+      return
+    }
+    if (!addRuleQty || parseFloat(addRuleQty) <= 0) {
+      alert('수량을 정확하게 입력해주세요.')
+      return
+    }
+    if (!addRuleProfitRate || !addRuleStopRate) {
+      alert('익절 및 손절 비율을 올바르게 입력해주세요.')
+      return
+    }
+
+    setRuleUpdating(true)
+    try {
+      const authHeader = await getAuthHeader()
+      if (!authHeader) {
+        alert('로그인이 필요합니다.')
+        return
+      }
+      const response = await fetch(`${API_BASE_URL}/api/trade/auto-trading-rule`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+        },
+        body: JSON.stringify({
+          exchange,
+          asset_type: normalizedRouteAssetType,
+          symbol,
+          entry_price: parseFloat(addRulePrice),
+          quantity: parseFloat(addRuleQty),
+          target_profit_rate: parseFloat(addRuleProfitRate),
+          stop_loss_rate: parseFloat(addRuleStopRate),
+          execution_mode: addRuleExecutionMode,
+          broker_env: brokerEnv,
+        }),
+      })
+      const result = await response.json()
+      if (result.success) {
+        setShowAddRuleForm(false)
+        setAddRulePrice('')
+        setAddRuleQty('')
+        loadAutoTradingRules()
+      } else {
+        alert(result.message || '조건감시 규칙 등록에 실패했습니다.')
+      }
+    } catch (error) {
+      console.error('Add rule error:', error)
+      alert('서버 통신 오류가 발생했습니다.')
+    } finally {
+      setRuleUpdating(false)
+    }
+  }
 
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
@@ -792,8 +864,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         })
         navigate(`/search/not-found?${params.toString()}`, { replace: true })
       }
-    } catch (e) {
-      console.error("종목명 로드 실패:", e)
+    } catch (error) {
+      console.error("종목명 로드 실패:", error)
       const params = new URLSearchParams({
         query: symbol || '',
         assetType: normalizedRouteAssetType,
@@ -1103,6 +1175,201 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
   }
 
+  const fetchCommunityPosts = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    setCommunityCurrentUserId(session?.user?.id || '')
+
+    if (!session?.user?.id || !symbol) {
+      setCommunityPosts([])
+      setCommunityProfiles({})
+      return
+    }
+
+    setCommunityLoading(true)
+    setCommunityMessage({ text: '', isError: false })
+
+    try {
+      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+      const { data, error } = await supabase
+        .from('community_posts')
+        .select('id,user_id,parent_id,asset_type,symbol,exchange,content,status,created_at,updated_at')
+        .eq('asset_type', resolvedAssetType)
+        .eq('symbol', normalizedSymbol)
+        .eq('status', 'ACTIVE')
+        .order('created_at', { ascending: false })
+        .limit(80)
+
+      if (error) throw error
+
+      const posts = data || []
+      setCommunityPosts(posts)
+
+      const userIds = [...new Set(posts.map((post) => post.user_id).filter(Boolean))]
+      if (userIds.length === 0) {
+        setCommunityProfiles({})
+        return
+      }
+
+      const { data: profileRows, error: profileError } = await supabase
+        .from('public_profiles')
+        .select('id,nickname,role')
+        .in('id', userIds)
+
+      if (profileError) throw profileError
+
+      const nextProfiles = {}
+      ;(profileRows || []).forEach((profile) => {
+        nextProfiles[profile.id] = profile
+      })
+      setCommunityProfiles(nextProfiles)
+    } catch (error) {
+      const message = getApiErrorMessage(error, '커뮤니티 글을 불러오지 못했습니다.')
+      setCommunityPosts([])
+      setCommunityProfiles({})
+      setCommunityMessage({
+        text: message.detail ? `${message.title} ${message.detail}` : message.title,
+        isError: true,
+      })
+    } finally {
+      setCommunityLoading(false)
+    }
+  }
+
+  const handleSubmitCommunityPost = async (event) => {
+    event.preventDefault()
+    const content = communityDraft.trim()
+
+    if (content.length < 1 || content.length > 500) {
+      setCommunityMessage({ text: '커뮤니티 글은 1자 이상 500자 이하로 입력해 주세요.', isError: true })
+      return
+    }
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user?.id) {
+      setCommunityMessage({ text: '로그인 후 커뮤니티 글을 작성할 수 있습니다.', isError: true })
+      return
+    }
+
+    setCommunitySubmitting(true)
+    setCommunityMessage({ text: '', isError: false })
+
+    try {
+      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+      const { error } = await supabase
+        .from('community_posts')
+        .insert({
+          user_id: session.user.id,
+          asset_type: resolvedAssetType,
+          symbol: normalizedSymbol,
+          exchange,
+          content,
+          status: 'ACTIVE',
+        })
+
+      if (error) throw error
+
+      setCommunityDraft('')
+      await fetchCommunityPosts()
+    } catch (error) {
+      const message = getApiErrorMessage(error, '커뮤니티 글 작성에 실패했습니다.')
+      setCommunityMessage({
+        text: message.detail ? `${message.title} ${message.detail}` : message.title,
+        isError: true,
+      })
+    } finally {
+      setCommunitySubmitting(false)
+    }
+  }
+
+  const handleSubmitCommunityReply = async (event, parentPost) => {
+    event.preventDefault()
+    const content = communityReplyDraft.trim()
+
+    if (!parentPost?.id || parentPost.parent_id) {
+      setCommunityMessage({ text: '답글은 원댓글에만 작성할 수 있습니다.', isError: true })
+      return
+    }
+
+    if (content.length < 1 || content.length > 500) {
+      setCommunityMessage({ text: '답글은 1자 이상 500자 이하로 입력해 주세요.', isError: true })
+      return
+    }
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user?.id) {
+      setCommunityMessage({ text: '로그인 후 답글을 작성할 수 있습니다.', isError: true })
+      return
+    }
+
+    setCommunitySubmitting(true)
+    setCommunityMessage({ text: '', isError: false })
+
+    try {
+      const normalizedSymbol = String(symbol || '').trim().toUpperCase()
+      const { error } = await supabase
+        .from('community_posts')
+        .insert({
+          user_id: session.user.id,
+          parent_id: parentPost.id,
+          asset_type: resolvedAssetType,
+          symbol: normalizedSymbol,
+          exchange,
+          content,
+          status: 'ACTIVE',
+        })
+
+      if (error) throw error
+
+      setCommunityReplyParentId('')
+      setCommunityReplyDraft('')
+      await fetchCommunityPosts()
+    } catch (error) {
+      const message = getApiErrorMessage(error, '답글 작성에 실패했습니다.')
+      setCommunityMessage({
+        text: message.detail ? `${message.title} ${message.detail}` : message.title,
+        isError: true,
+      })
+    } finally {
+      setCommunitySubmitting(false)
+    }
+  }
+
+  const handleUpdateCommunityStatus = async (post, status) => {
+    if (!post?.id) return
+    const confirmMessage = status === 'HIDDEN'
+      ? '이 커뮤니티 글을 관리자 숨김 처리할까요?'
+      : '이 커뮤니티 글을 삭제할까요?'
+    if (!window.confirm(confirmMessage)) return
+
+    setCommunityActionId(post.id)
+    setCommunityMessage({ text: '', isError: false })
+
+    try {
+      const { error } = await supabase
+        .from('community_posts')
+        .update({
+          status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', post.id)
+
+      if (error) throw error
+
+      await fetchCommunityPosts()
+    } catch (error) {
+      const fallback = status === 'HIDDEN'
+        ? '커뮤니티 글 숨김 처리에 실패했습니다.'
+        : '커뮤니티 글 삭제에 실패했습니다.'
+      const message = getApiErrorMessage(error, fallback)
+      setCommunityMessage({
+        text: message.detail ? `${message.title} ${message.detail}` : message.title,
+        isError: true,
+      })
+    } finally {
+      setCommunityActionId('')
+    }
+  }
+
   const fetchMlSignal = async () => {
     if (!isLoggedIn) {
       setMlSignal(null)
@@ -1165,7 +1432,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       const diffHours = Math.floor(diffMins / 60);
       if (diffHours < 24) return `${diffHours}시간 전`;
       return date.toLocaleDateString();
-    } catch (e) {
+    } catch {
       return '';
     }
   }
@@ -1376,7 +1643,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return formatChartDateTime(time)
     }
     if (typeof time === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(time)) {
-      const [year, month, day] = time.split('-')
+      const [, month, day] = time.split('-')
       return `${month}.${day}`
     }
     return String(time)
@@ -1740,13 +2007,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setQuantity('')
   }
 
-  // 호가 클릭 시 단가 자동 입력 매핑
-  const handlePriceClick = (clickedPrice) => {
-    if (orderType === 'LIMIT') {
-      setPrice(clickedPrice.toString());
-    }
-  }
-
   const refreshMlSignal = useEffectEvent(() => {
     fetchMlSignal()
   })
@@ -1767,6 +2027,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     loadAutoTradingRules()
     fetchNewsList()
     fetchDisclosureList()
+    fetchCommunityPosts()
   }, [exchange, symbol, chartInterval, brokerEnv, symbolLookupReady, resolvedAssetType])
 
   useEffect(() => {
@@ -1778,6 +2039,30 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   useEffect(() => {
     loadFavoriteStatus()
   }, [isLoggedIn, symbol, resolvedAssetType, exchange])
+
+  useEffect(() => {
+    if (!isLoggedIn || !symbolLookupReady || !symbol) return undefined
+
+    const channel = supabase
+      .channel(`community-posts-${resolvedAssetType}-${String(symbol).toUpperCase()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'community_posts',
+          filter: `symbol=eq.${String(symbol).trim().toUpperCase()}`,
+        },
+        () => {
+          fetchCommunityPosts()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [isLoggedIn, symbolLookupReady, resolvedAssetType, symbol])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2234,6 +2519,18 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setTradeMessage({ text: '보유 수량 기준으로 청산/매도 주문값을 채웠습니다. 전송 전 사전검증을 확인하세요.', isError: false })
   }
 
+  const communityReplyMap = communityPosts.reduce((map, post) => {
+    if (!post.parent_id) return map
+    const replies = map[post.parent_id] || []
+    replies.push(post)
+    map[post.parent_id] = replies
+    return map
+  }, {})
+  Object.values(communityReplyMap).forEach((replies) => {
+    replies.sort((left, right) => new Date(left.created_at) - new Date(right.created_at))
+  })
+  const communityRootPosts = communityPosts.filter((post) => !post.parent_id)
+
   if (!symbolLookupReady) {
     return (
       <div className="min-h-screen bg-[#070b19] text-[#e2e2ec] font-inter">
@@ -2632,15 +2929,121 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                     트리거는 조건이 실제로 발동된 사유입니다.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={loadAutoTradingRules}
-                  disabled={autoRulesLoading}
-                  className="rounded border border-emerald-500/30 px-3 py-2 text-[10px] font-black text-emerald-300 transition hover:bg-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {autoRulesLoading ? '조회 중' : '감시 새로고침'}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddRulePrice(String(currentPrice || ''))
+                      setAddRuleQty(myHolding ? String(myHolding.qty || '') : '')
+                      setShowAddRuleForm(!showAddRuleForm)
+                    }}
+                    className="rounded bg-cyan-500 px-3 py-2 text-[10px] font-black text-[#070b19] transition hover:bg-cyan-400 cursor-pointer"
+                  >
+                    {showAddRuleForm ? '등록 닫기' : '새로운 감시 등록'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={loadAutoTradingRules}
+                    disabled={autoRulesLoading}
+                    className="rounded border border-emerald-500/30 px-3 py-2 text-[10px] font-black text-emerald-300 transition hover:bg-emerald-950/30 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                  >
+                    {autoRulesLoading ? '조회 중' : '감시 새로고침'}
+                  </button>
+                </div>
               </div>
+
+              {showAddRuleForm && (
+                <div className="mb-4 rounded-lg border border-[#1f2945] bg-[#070b19] p-3 text-xs">
+                  <p className="mb-2 text-[10px] font-bold text-cyan-300">주문 없이 독립적으로 감시 규칙을 등록합니다. (보유 중인 자산에만 권장)</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div>
+                      <label className="block text-[9px] text-slate-500 mb-1 font-bold">진입 가격 ({getCurrencySign()})</label>
+                      <input
+                        type="number"
+                        value={addRulePrice}
+                        onChange={(e) => setAddRulePrice(e.target.value)}
+                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-slate-500 mb-1 font-bold">감시 수량</label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        value={addRuleQty}
+                        onChange={(e) => setAddRuleQty(e.target.value)}
+                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                        placeholder="예: 2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-green-400 mb-1 font-bold">목표 익절 (%)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={addRuleProfitRate}
+                        onChange={(e) => setAddRuleProfitRate(e.target.value)}
+                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] text-red-400 mb-1 font-bold">손실 제한 (%)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={addRuleStopRate}
+                        onChange={(e) => setAddRuleStopRate(e.target.value)}
+                        className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white focus:border-cyan-400 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2.5 items-center justify-between border-t border-[#1f2945]/40 pt-2.5">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAddRuleExecutionMode('PROPOSAL')}
+                        className={`rounded px-2.5 py-1 text-[10px] font-bold border transition cursor-pointer ${
+                          addRuleExecutionMode === 'PROPOSAL'
+                            ? 'border-cyan-400 bg-cyan-950/20 text-cyan-300'
+                            : 'border-slate-800 text-slate-500 hover:text-slate-400'
+                        }`}
+                      >
+                        매도 제안만 생성
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAddRuleExecutionMode('AUTO')}
+                        className={`rounded px-2.5 py-1 text-[10px] font-bold border transition cursor-pointer ${
+                          addRuleExecutionMode === 'AUTO'
+                            ? 'border-rose-400 bg-rose-950/20 text-rose-300'
+                            : 'border-slate-800 text-slate-500 hover:text-slate-400'
+                        }`}
+                      >
+                        조건 도달 시 자동 매도
+                      </button>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowAddRuleForm(false)}
+                        className="rounded border border-slate-700 px-3 py-1 text-[10px] text-slate-300 hover:bg-slate-800 transition cursor-pointer"
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        disabled={ruleUpdating}
+                        onClick={handleAddRule}
+                        className="rounded bg-cyan-500 px-3 py-1 text-[10px] font-black text-[#070b19] hover:bg-cyan-400 transition disabled:opacity-50 cursor-pointer"
+                      >
+                        {ruleUpdating ? '등록 중...' : '감시 등록'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {autoRulesMessage ? (
                 <div className="mb-3 rounded border border-amber-900/60 bg-amber-950/20 px-3 py-2 text-[11px] leading-5 text-amber-300">
@@ -2807,10 +3210,10 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                               </div>
                               <div>
                                 <p>최근 오류</p>
-                                <p className="truncate text-amber-300">{rule.last_error || '-'}</p>
+                                <p className="truncate text-amber-300">{isRunning ? (rule.last_error || '-') : '-'}</p>
                               </div>
                             </div>
-                            {(isRunning || String(rule.status || '').toUpperCase() === 'FAILED') && (
+                            {isRunning || String(rule.status || '').toUpperCase() === 'FAILED' ? (
                               <div className="mt-3 flex justify-end gap-2 border-t border-[#1f2945]/40 pt-2.5">
                                 <button
                                   type="button"
@@ -2826,6 +3229,21 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                                   className="rounded border border-rose-900/60 bg-rose-950/10 px-2.5 py-1 text-[10px] text-rose-300 hover:border-rose-700 hover:bg-rose-950/20 transition cursor-pointer disabled:opacity-50"
                                 >
                                   감시 정지
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="mt-3 flex justify-end gap-2 border-t border-[#1f2945]/40 pt-2.5">
+                                <button
+                                  type="button"
+                                  disabled={ruleUpdating}
+                                  onClick={() => {
+                                    if (confirm('해당 조건감시 기록을 화면에서 완전히 삭제하시겠습니까?')) {
+                                      handleStopRule(rule.id)
+                                    }
+                                  }}
+                                  className="rounded border border-rose-950 bg-rose-950/20 px-2.5 py-1 text-[10px] text-rose-400 hover:border-rose-800 hover:bg-rose-950/40 transition cursor-pointer disabled:opacity-50"
+                                >
+                                  감시 삭제
                                 </button>
                               </div>
                             )}
@@ -2848,7 +3266,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 {[
                   { id: 'news', label: '뉴스' },
                   { id: 'disclosure', label: '공시' },
-                  { id: 'community', label: '토론' }
+                  { id: 'community', label: '커뮤니티' }
                 ].map(t => (
                   <button
                     key={t.id}
@@ -2969,7 +3387,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                               const analysis = disclosureAnalyses[item.rcept_no]
                               const isOpen = selectedDisclosureId === item.id
                               const isLoadingAnalysis = disclosureAnalysisLoadingId === item.id
-                              const points = Array.isArray(analysis?.key_points) ? analysis.key_points : []
                               const risks = Array.isArray(analysis?.risk_points) ? analysis.risk_points : []
                               const metrics = Array.isArray(analysis?.metrics) ? analysis.metrics : []
                               const checkItems = Array.isArray(analysis?.check_items) ? analysis.check_items : []
@@ -3008,7 +3425,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                                 '분할 비율': ['분할비율'],
                                 '병합 비율': ['병합비율'],
                                 '거래정지 일정': ['매매거래정지기간', '신주권상장예정일'],
-                                '정지 사유': ['거래정지사유'],
+                                '거래정지 사유': ['거래정지사유'],
                                 '정지 기간': ['거래정지일', '해제일시'],
                                 '위험 사유': ['위험사유', '상장폐지사유'],
                                 '심사 일정': ['심사일정', '개선기간'],
@@ -3167,21 +3584,214 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               )}
 
               {activeTab === 'community' && (
-                <div className="flex flex-col gap-3 max-h-[220px] overflow-y-auto pr-1 text-xs">
-                  <div className="bg-[#1b253b]/40 p-3 rounded border border-[#1f2945]/40 flex flex-col gap-1">
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span className="font-bold text-cyan-400">또치어제자</span>
-                      <span>5분 전</span>
+                <div className="max-h-[420px] overflow-y-auto pr-1">
+                  <section className="min-h-[260px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
+                    <div className="mb-3 flex flex-col gap-2 border-b border-[#1f2945]/50 pb-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold text-cyan-200">커뮤니티</h3>
+                        <p className="mt-1 text-[11px] text-slate-500">{displayName} 의견을 남기고 확인합니다.</p>
+                      </div>
+                      <span className="w-fit rounded-full border border-cyan-500/30 bg-cyan-950/30 px-2.5 py-1 text-[11px] font-bold text-cyan-100">
+                        총 {communityPosts.length}개
+                      </span>
                     </div>
-                    <p className="text-[#e2e2ec] mt-1 leading-relaxed">진짜 하이닉스 수급 장난아니네요. 다음 타겟은 300만원 갑니다.</p>
-                  </div>
-                  <div className="bg-[#1b253b]/40 p-3 rounded border border-[#1f2945]/40 flex flex-col gap-1">
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span className="font-bold text-cyan-400">부자냥냥이</span>
-                      <span>20분 전</span>
+
+                    <form onSubmit={handleSubmitCommunityPost} className="mb-4 flex flex-col gap-2">
+                      <textarea
+                        value={communityDraft}
+                        onChange={(event) => setCommunityDraft(event.target.value)}
+                        maxLength={500}
+                        placeholder={isLoggedIn ? '이 종목에 대한 의견을 입력해 주세요.' : '로그인 후 커뮤니티 글을 작성할 수 있습니다.'}
+                        disabled={!isLoggedIn || communitySubmitting}
+                        className="min-h-[88px] w-full resize-none rounded border border-[#1f2945] bg-slate-950/50 px-3 py-2 text-xs leading-5 text-slate-100 outline-none transition focus:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span className={`text-[11px] ${communityDraft.trim().length > 500 ? 'text-rose-300' : 'text-slate-500'}`}>
+                          {communityDraft.trim().length}/500
+                        </span>
+                        <button
+                          type="submit"
+                          disabled={!isLoggedIn || communitySubmitting || communityDraft.trim().length === 0}
+                          className="rounded border border-cyan-500/40 bg-cyan-950/30 px-3 py-2 text-[11px] font-bold text-cyan-200 transition hover:bg-cyan-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {communitySubmitting ? '등록 중...' : '글 등록'}
+                        </button>
+                      </div>
+                    </form>
+
+                    {communityMessage.text ? (
+                      <p className={`mb-3 rounded border px-3 py-2 text-[11px] leading-5 ${communityMessage.isError ? 'border-rose-500/30 bg-rose-950/20 text-rose-200' : 'border-cyan-500/30 bg-cyan-950/20 text-cyan-200'}`}>
+                        {communityMessage.text}
+                      </p>
+                    ) : null}
+
+                    <div className="flex flex-col gap-3">
+                      {communityLoading ? (
+                        <div className="py-8 text-center text-xs font-mono text-cyan-400/80 animate-pulse">
+                          커뮤니티 로드 중...
+                        </div>
+                      ) : communityRootPosts.length > 0 ? (
+                        communityRootPosts.map((post) => {
+                          const profile = communityProfiles[post.user_id] || {}
+                          const canDelete = communityCurrentUserId && communityCurrentUserId === post.user_id
+                          const canHide = userProfile?.role === 'ADMIN' && !canDelete
+                          const replies = communityReplyMap[post.id] || []
+                          return (
+                            <article key={post.id} className="rounded border border-[#1f2945]/60 bg-[#1b253b]/35 p-3">
+                              <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
+                                  <span className="max-w-[160px] truncate font-bold text-cyan-300">
+                                    {profile.nickname || '익명 사용자'}
+                                  </span>
+                                  {profile.role === 'ADMIN' ? (
+                                    <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 font-bold text-amber-200">
+                                      ADMIN
+                                    </span>
+                                  ) : null}
+                                  <span className="text-slate-500">{formatTime(post.created_at)}</span>
+                                </div>
+                                <div className="flex shrink-0 gap-1.5">
+                                  {isLoggedIn ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setCommunityReplyParentId(communityReplyParentId === post.id ? '' : post.id)
+                                        setCommunityReplyDraft('')
+                                      }}
+                                      className="rounded border border-cyan-500/25 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30"
+                                    >
+                                      답글
+                                    </button>
+                                  ) : null}
+                                  {(canDelete || canHide) ? (
+                                    <>
+                                    {canDelete ? (
+                                      <button
+                                        type="button"
+                                        disabled={communityActionId === post.id}
+                                        onClick={() => handleUpdateCommunityStatus(post, 'DELETED')}
+                                        className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-400 transition hover:border-rose-500/40 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        삭제
+                                      </button>
+                                    ) : null}
+                                    {canHide ? (
+                                      <button
+                                        type="button"
+                                        disabled={communityActionId === post.id}
+                                        onClick={() => handleUpdateCommunityStatus(post, 'HIDDEN')}
+                                        className="rounded border border-amber-600/40 px-2 py-1 text-[10px] font-bold text-amber-300 transition hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        숨김
+                                      </button>
+                                    ) : null}
+                                    </>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-[#e2e2ec]">
+                                {post.content}
+                              </p>
+                              {communityReplyParentId === post.id ? (
+                                <form onSubmit={(event) => handleSubmitCommunityReply(event, post)} className="mt-3 rounded border border-cyan-500/20 bg-cyan-950/10 p-2">
+                                  <textarea
+                                    value={communityReplyDraft}
+                                    onChange={(event) => setCommunityReplyDraft(event.target.value)}
+                                    maxLength={500}
+                                    placeholder="답글을 입력해 주세요."
+                                    disabled={communitySubmitting}
+                                    className="min-h-[64px] w-full resize-none rounded border border-[#1f2945] bg-slate-950/60 px-2.5 py-2 text-[11px] leading-5 text-slate-100 outline-none transition focus:border-cyan-500/50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  />
+                                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                    <span className="text-[10px] text-slate-500">{communityReplyDraft.trim().length}/500</span>
+                                    <div className="flex justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setCommunityReplyParentId('')
+                                          setCommunityReplyDraft('')
+                                        }}
+                                        className="rounded border border-slate-700 px-2.5 py-1 text-[10px] font-bold text-slate-400 transition hover:text-slate-200"
+                                      >
+                                        취소
+                                      </button>
+                                      <button
+                                        type="submit"
+                                        disabled={communitySubmitting || communityReplyDraft.trim().length === 0}
+                                        className="rounded border border-cyan-500/40 bg-cyan-950/30 px-2.5 py-1 text-[10px] font-bold text-cyan-200 transition hover:bg-cyan-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        {communitySubmitting ? '등록 중...' : '답글 등록'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                </form>
+                              ) : null}
+                              {replies.length > 0 ? (
+                                <div className="mt-3 flex flex-col gap-2 border-l-2 border-cyan-500/20 pl-3">
+                                  {replies.map((reply) => {
+                                    const replyProfile = communityProfiles[reply.user_id] || {}
+                                    const canDeleteReply = communityCurrentUserId && communityCurrentUserId === reply.user_id
+                                    const canHideReply = userProfile?.role === 'ADMIN' && !canDeleteReply
+                                    return (
+                                      <div key={reply.id} className="rounded border border-[#1f2945]/50 bg-slate-950/30 p-2.5">
+                                        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                                          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
+                                            <span className="text-cyan-400">↳</span>
+                                            <span className="max-w-[140px] truncate font-bold text-cyan-300">
+                                              {replyProfile.nickname || '익명 사용자'}
+                                            </span>
+                                            {replyProfile.role === 'ADMIN' ? (
+                                              <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 font-bold text-amber-200">
+                                                ADMIN
+                                              </span>
+                                            ) : null}
+                                            <span className="text-slate-500">{formatTime(reply.created_at)}</span>
+                                          </div>
+                                          {(canDeleteReply || canHideReply) ? (
+                                            <div className="flex shrink-0 gap-1.5">
+                                              {canDeleteReply ? (
+                                                <button
+                                                  type="button"
+                                                  disabled={communityActionId === reply.id}
+                                                  onClick={() => handleUpdateCommunityStatus(reply, 'DELETED')}
+                                                  className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-400 transition hover:border-rose-500/40 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                  삭제
+                                                </button>
+                                              ) : null}
+                                              {canHideReply ? (
+                                                <button
+                                                  type="button"
+                                                  disabled={communityActionId === reply.id}
+                                                  onClick={() => handleUpdateCommunityStatus(reply, 'HIDDEN')}
+                                                  className="rounded border border-amber-600/40 px-2 py-1 text-[10px] font-bold text-amber-300 transition hover:bg-amber-950/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                  숨김
+                                                </button>
+                                              ) : null}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                        <p className="mt-1.5 whitespace-pre-wrap break-words text-[11px] leading-5 text-[#e2e2ec]">
+                                          {reply.content}
+                                        </p>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              ) : null}
+                            </article>
+                          )
+                        })
+                      ) : (
+                        <div className="rounded border border-[#1f2945] bg-[#070b19] px-3 py-8 text-center">
+                          <p className="text-xs text-slate-500 font-mono">
+                            아직 이 종목의 커뮤니티 글이 없습니다.
+                          </p>
+                        </div>
+                      )}
                     </div>
-                    <p className="text-[#e2e2ec] mt-1 leading-relaxed">익절률 5% 조건 주문 걸어놨는데 바로 체결됬네요 꿀맛!</p>
-                  </div>
+                  </section>
                 </div>
               )}
             </div>
@@ -3817,7 +4427,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                             />
                             {getAutoExitTargetPrices() && (
                               <span className="text-[8px] text-slate-400 font-mono text-center mt-0.5 break-all">
-                                목표가: ${getAutoExitTargetPrices().tpPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                목표가: {formatUnitPrice(getAutoExitTargetPrices().tpPrice)}
                                 {autoExitRateType === 'ROE' && ` (가격 ${getAutoExitTargetPrices().tpPercent.toFixed(2)}%)`}
                               </span>
                             )}
@@ -3835,7 +4445,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                             />
                             {getAutoExitTargetPrices() && (
                               <span className="text-[8px] text-slate-400 font-mono text-center mt-0.5 break-all">
-                                손절가: ${getAutoExitTargetPrices().slPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                손절가: {formatUnitPrice(getAutoExitTargetPrices().slPrice)}
                                 {autoExitRateType === 'ROE' && ` (가격 ${getAutoExitTargetPrices().slPercent.toFixed(2)}%)`}
                               </span>
                             )}

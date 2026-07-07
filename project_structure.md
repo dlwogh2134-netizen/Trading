@@ -40,6 +40,7 @@ backend/
 │   └── transfer.py
 ├── scripts/
 │   ├── backfill_dart_disclosures.py
+│   ├── export_dart_features.py
 │   ├── export_news_features.py
 │   ├── export_training_candles.py
 │   ├── sync_dart_corp_codes.py
@@ -66,6 +67,7 @@ backend/
 │   ├── ml_model_service.py
 │   ├── ml_registry_service.py
 │   ├── ml_scheduler.py
+│   ├── ml_split_model_promotion_service.py
 │   ├── news_ingest.py
 │   ├── news_query_planner.py
 │   ├── news_repository.py
@@ -98,7 +100,7 @@ backend/
 - `routes/`
   - HTTP API 입구
   - `disclosures.py`는 OpenDART 공시 목록 조회 및 수동 동기화 API를 담당
-  - `transfer.py`는 코인원에서 바이낸스로 이동하는 가상자산 출금 사전검증, 승인, 상태 추적 API를 담당
+  - `transfer.py`는 코인원 ↔ 바이낸스 가상자산 출금 사전검증, 수수료 조회, 승인, 상태 추적 API를 담당
 - `services/`
   - 거래소 연동, Supabase, 스케줄러, ML 운영 로직
 - `scripts/`
@@ -108,8 +110,8 @@ backend/
 
 - `agent.py`, `trading_engine.py`는 현재 저장소에 없습니다.
 - 토큰 캐시는 현재 `token_cache_service.py`와 Supabase `token_caches`를 기준으로 보는 것이 맞습니다.
-- `coinone_client.py`는 코인원 잔고/현재가/지정가 주문/미체결 주문 취소를 담당하며, 시장가 주문은 아직 운영 경로가 아닙니다.
-- `binance_client.py`는 `BinanceSpotClient`와 `BinanceFuturesClient`를 포함합니다. API Key 저장은 `BINANCE` 레코드 하나를 사용하고, `BINANCE_UM_FUTURES`는 USD-M 선물 잔고/주문/이력 요청 식별자로만 사용합니다. 선물 주문은 레버리지와 교차/격리 마진 타입을 주문 직전에 반영하며, 선물 REAL 주문은 `BINANCE_FUTURES_REAL_ENABLED=true` 환경변수 없이는 차단됩니다.
+- `coinone_client.py`는 코인원 잔고/현재가/지정가 주문/미체결 주문 취소, 입금 주소 조회, Public 가상자산 입출금 수수료 조회, 출금을 담당하며, 시장가 주문은 아직 운영 경로가 아닙니다.
+- `binance_client.py`는 `BinanceSpotClient`와 `BinanceFuturesClient`를 포함합니다. 현물 클라이언트는 입금 주소/입금 내역, 네트워크별 출금 수수료, 출금 요청을 지원합니다. API Key 저장은 `BINANCE` 레코드 하나를 사용하고, `BINANCE_UM_FUTURES`는 USD-M 선물 잔고/주문/이력 요청 식별자로만 사용합니다. 선물 주문은 레버리지와 교차/격리 마진 타입을 주문 직전에 반영하며, 선물 REAL 주문은 `BINANCE_FUTURES_REAL_ENABLED=true` 환경변수 없이는 차단됩니다.
 - `auto_trading_rule_engine.py`는 Supabase `auto_trading_rules`의 `RUNNING` 규칙을 감시하고, 조건 도달 시 `trade_proposals`에 매도 제안을 생성하거나 사용자가 `AUTO`로 선택한 규칙에 한해 자동 매도 주문을 전송합니다.
 - `open_order_status_sync_service.py`는 worker가 전체 사용자의 미완료 주문만 주기적으로 조회해 KIS/코인원/바이낸스/바이낸스 선물 실제 주문 상태를 `trade_proposals`에 반영하는 서비스입니다.
 - `error_message_service.py`는 거래소 원문 에러를 사용자 친화적인 `message`, `error.title`, `error.action`, `error.code`, `error.raw_message` 구조로 변환하는 표준 에러 메시지 레이어입니다.
@@ -150,12 +152,14 @@ frontend/
     │   ├── apiError.js
     │   └── supabaseClient.js
     └── pages/
+        ├── AdminInquiryPanel.jsx
         ├── AdminMlData.jsx
         ├── AssetDetail.jsx
         ├── AssetsTab.jsx
         ├── Dashboard.jsx
         ├── Home.jsx
         ├── Login.jsx
+        ├── MarketRankings.jsx
         ├── News.jsx
         ├── SearchNotFound.jsx
         ├── Settings.jsx
@@ -173,6 +177,8 @@ frontend/
   - 종목 상세
   - 차트, 호가, 체결, 주문 사전검증, ML 신호 카드
   - TOSS 주식 상세 헤더의 종목 유의사항 배지 연동
+- `AdminInquiryPanel.jsx`
+  - 3분리 모델 자동화 상태 모니터링 및 수동 검증 패널
 - `AdminMlData.jsx`
   - ML 운영 콘솔
   - readiness, serving audit, 활성 신호, 자동화 실행, 작업 이력, 고급 도구
@@ -227,6 +233,7 @@ ml/
   - 현재 기준 주식 신호 `v1~v11`
   - 주식 위험 `v1~v11`
   - 코인 신호/위험 `v1~v8`
+  - 3분리 shadow 모델 설정: `lgbm_kr_stock_v1.yaml`, `lgbm_kr_stock_risk_v1.yaml`, `lgbm_us_stock_v1.yaml`, `lgbm_us_stock_risk_v1.yaml`
 - `data/raw/`
   - 원천 캔들 및 외부 피처 CSV
 - `data/ops/`

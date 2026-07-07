@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Rate, SectionHeader } from '../components/DashboardComponents.jsx'
@@ -51,6 +51,37 @@ export default function AssetsTab({
       return `₩${Math.round(numeric).toLocaleString()}`
     }
     return `${numeric.toLocaleString()} ${normalizedCurrency}`
+  }
+
+  const formatCryptoAmount = (value, currency) => {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return '-'
+    return `${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 8 })} ${currency || ''}`.trim()
+  }
+
+  const getTransferRoute = (asset = {}) => {
+    const exchange = String(asset.rawExchange || asset.exchange || '').toUpperCase()
+    if (exchange === 'COINONE') {
+      return {
+        fromExchange: 'COINONE',
+        toExchange: 'BINANCE',
+        fromLabel: '코인원',
+        toLabel: '바이낸스',
+        addressLabel: '바이낸스 입금 주소',
+        addressButtonLabel: '바이낸스 주소 불러오기',
+      }
+    }
+    if (exchange === 'BINANCE') {
+      return {
+        fromExchange: 'BINANCE',
+        toExchange: 'COINONE',
+        fromLabel: '바이낸스',
+        toLabel: '코인원',
+        addressLabel: '코인원 입금 주소',
+        addressButtonLabel: '코인원 주소 불러오기',
+      }
+    }
+    return null
   }
 
   const getBalanceCashEntries = (account = {}) => {
@@ -200,6 +231,7 @@ export default function AssetsTab({
   }
 
   const openWithdrawModal = (asset) => {
+    const transferRoute = getTransferRoute(asset)
     setWithdrawAsset(asset)
     setWithdrawForm({
       amount: '',
@@ -207,9 +239,12 @@ export default function AssetsTab({
       address: '',
       secondaryAddress: '',
       confirm: false,
+      fromExchange: transferRoute?.fromExchange || 'COINONE',
+      toExchange: transferRoute?.toExchange || 'BINANCE',
     })
     setWithdrawPrecheck(null)
     setWithdrawMessage({ text: '', isError: false, detail: '' })
+    void fetchTransferStatuses()
   }
 
   const closeWithdrawModal = () => {
@@ -218,7 +253,7 @@ export default function AssetsTab({
     setWithdrawMessage({ text: '', isError: false, detail: '' })
   }
 
-  const fetchTransferStatuses = async () => {
+  async function fetchTransferStatuses() {
     const authHeader = await getAuthHeader()
     if (!authHeader) return
     setTransferLoading(true)
@@ -237,13 +272,7 @@ export default function AssetsTab({
     }
   }
 
-  useEffect(() => {
-    if (withdrawAsset) {
-      fetchTransferStatuses()
-    }
-  }, [withdrawAsset])
-
-  const loadBinanceDepositAddress = async () => {
+  const loadDestinationDepositAddress = async () => {
     if (!withdrawAsset) return
     const authHeader = await getAuthHeader()
     if (!authHeader) {
@@ -253,11 +282,15 @@ export default function AssetsTab({
     setWithdrawLoading(true)
     setWithdrawMessage({ text: '', isError: false, detail: '' })
     try {
+      const route = getTransferRoute(withdrawAsset)
       const params = new URLSearchParams({
         currency: withdrawAsset.id,
         network: withdrawForm.network || withdrawAsset.id,
       })
-      const response = await fetch(`${API_BASE_URL}/api/transfer/binance/deposit-address?${params.toString()}`, {
+      const addressPath = route?.toExchange === 'COINONE'
+        ? '/api/transfer/coinone/deposit-address'
+        : '/api/transfer/binance/deposit-address'
+      const response = await fetch(`${API_BASE_URL}${addressPath}?${params.toString()}`, {
         headers: { Authorization: authHeader },
       })
       const payload = await response.json()
@@ -267,11 +300,11 @@ export default function AssetsTab({
       setWithdrawForm((prev) => ({
         ...prev,
         address: payload.data?.address || prev.address,
-        secondaryAddress: payload.data?.tag || prev.secondaryAddress,
+        secondaryAddress: payload.data?.tag || payload.data?.secondary_address || prev.secondaryAddress,
       }))
-      setWithdrawMessage({ text: '바이낸스 입금 주소를 불러왔습니다.', isError: false, detail: '' })
+      setWithdrawMessage({ text: `${route?.toLabel || '도착 거래소'} 입금 주소를 불러왔습니다.`, isError: false, detail: '' })
     } catch (error) {
-      const message = getApiErrorMessage(error, '바이낸스 입금 주소를 불러오지 못했습니다.')
+      const message = getApiErrorMessage(error, '입금 주소를 불러오지 못했습니다.')
       setWithdrawMessage({
         text: message.title,
         detail: message.detail,
@@ -303,6 +336,8 @@ export default function AssetsTab({
           currency: withdrawAsset.id,
           network: withdrawForm.network || withdrawAsset.id,
           amount: Number(withdrawForm.amount),
+          from_exchange: withdrawForm.fromExchange,
+          to_exchange: withdrawForm.toExchange,
           address: withdrawForm.address,
           secondary_address: withdrawForm.secondaryAddress,
         }),
@@ -349,6 +384,8 @@ export default function AssetsTab({
           currency: withdrawAsset.id,
           network: withdrawForm.network || withdrawAsset.id,
           amount: Number(withdrawForm.amount),
+          from_exchange: withdrawForm.fromExchange,
+          to_exchange: withdrawForm.toExchange,
           address: withdrawForm.address,
           secondary_address: withdrawForm.secondaryAddress,
           confirm: true,
@@ -439,6 +476,7 @@ export default function AssetsTab({
         exchange: exchangeName,
         assetType,
         source: stock.source || 'LIVE_BALANCE',
+        rawExchange,
         quantity: `${stock.qty}`,
         average: formatUnitCurrency(stock.avg_price, stockCurrency, currentDisplayCurrency),
         profit: formatCurrency(stock.profit, stockCurrency, currentDisplayCurrency),
@@ -651,10 +689,13 @@ export default function AssetsTab({
                   </td>
                 </tr>
               ) : sortedHoldings.map((item) => {
-                const canWithdraw = String(item.exchange || '').toUpperCase() === 'COINONE'
+                const itemExchange = String(item.rawExchange || item.exchange || '').toUpperCase()
+                const canWithdraw = ['COINONE', 'BINANCE'].includes(itemExchange)
                   && String(item.assetType || '').toUpperCase() === 'CRYPTO'
                   && item.source === 'LIVE_BALANCE'
                   && parseNumeric(item.quantity) > 0
+                  && (itemExchange === 'COINONE' || String(item.id || '').toUpperCase() === 'XRP')
+                const transferRoute = getTransferRoute(item)
                 return (
                   <tr key={item.rowId || item.id} className="border-b border-slate-800/80 last:border-b-0 hover:bg-slate-800/20">
                     <td className="px-5 py-4 font-bold text-white">
@@ -681,7 +722,7 @@ export default function AssetsTab({
                           onClick={() => openWithdrawModal(item)}
                           className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-bold text-amber-200 transition hover:border-amber-300 hover:bg-amber-500/20"
                         >
-                          바이낸스로 출금
+                          {transferRoute?.toLabel || '외부'}로 출금
                         </button>
                       ) : (
                         <span className="text-[10px] text-slate-600">-</span>
@@ -702,10 +743,10 @@ export default function AssetsTab({
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300">Coin Transfer</p>
                 <h2 className="mt-1 text-lg font-bold text-white">
-                  {withdrawAsset.id} 코인원 → 바이낸스 출금
+                  {withdrawAsset.id} {getTransferRoute(withdrawAsset)?.fromLabel || '출발 거래소'} → {getTransferRoute(withdrawAsset)?.toLabel || '도착 거래소'} 출금
                 </h2>
                 <p className="mt-1 text-xs leading-5 text-slate-400">
-                  코인원 출금주소록에 등록되고 2차 인증이 완료된 주소만 출금됩니다. XRP/XLM/EOS는 Destination Tag/Memo가 필수입니다.
+                  XRP 출금은 Destination Tag/Memo가 필수입니다. 주소와 태그를 도착 거래소 입금 주소 조회값과 대조한 뒤 승인합니다.
                 </p>
               </div>
               <button
@@ -744,21 +785,21 @@ export default function AssetsTab({
 
                 <div className="mt-3 flex flex-col gap-1.5 text-xs font-bold text-slate-300">
                   <div className="flex items-center justify-between gap-2">
-                    <span>바이낸스 입금 주소</span>
+                    <span>{getTransferRoute(withdrawAsset)?.addressLabel || '입금 주소'}</span>
                     <button
                       type="button"
-                      onClick={loadBinanceDepositAddress}
+                      onClick={loadDestinationDepositAddress}
                       disabled={withdrawLoading}
                       className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-white disabled:opacity-50"
                     >
-                      {withdrawLoading ? '조회 중' : '주소 불러오기'}
+                      {withdrawLoading ? '조회 중' : getTransferRoute(withdrawAsset)?.addressButtonLabel || '주소 불러오기'}
                     </button>
                   </div>
                   <input
                     type="text"
                     value={withdrawForm.address}
                     onChange={(e) => setWithdrawForm((prev) => ({ ...prev, address: e.target.value, confirm: false }))}
-                    placeholder="바이낸스 입금 주소"
+                    placeholder={getTransferRoute(withdrawAsset)?.addressLabel || '입금 주소'}
                     className="rounded border border-slate-700 bg-[#070b19] px-3 py-2 font-mono text-xs text-white outline-none transition focus:border-cyan-400"
                   />
                 </div>
@@ -801,7 +842,7 @@ export default function AssetsTab({
                     className="mt-1 accent-red-400"
                   />
                   <span>
-                    주소, 네트워크, Destination Tag/Memo, 수량을 직접 확인했으며 승인 시 실제 코인원 출금 API가 호출됩니다.
+                    주소, 네트워크, Destination Tag/Memo, 수량을 직접 확인했으며 승인 시 실제 {getTransferRoute(withdrawAsset)?.fromLabel || '출발 거래소'} 출금 API가 호출됩니다.
                   </span>
                 </label>
 
@@ -828,18 +869,30 @@ export default function AssetsTab({
                     <div className="mt-3 space-y-2 text-xs text-slate-300">
                       <div className="flex justify-between gap-3">
                         <span className="text-slate-500">출금 가능 수량</span>
-                        <span className="font-mono text-white">{withdrawPrecheck.available_qty} {withdrawPrecheck.currency}</span>
+                        <span className="font-mono text-white">{formatCryptoAmount(withdrawPrecheck.available_qty, withdrawPrecheck.currency)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">출금 수수료</span>
+                        <span className="font-mono text-amber-200">{formatCryptoAmount(withdrawPrecheck.withdrawal_fee, withdrawPrecheck.currency)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">예상 수령 수량</span>
+                        <span className="font-mono text-cyan-100">{formatCryptoAmount(withdrawPrecheck.estimated_receive_amount, withdrawPrecheck.currency)}</span>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <span className="text-slate-500">최소 출금 수량</span>
+                        <span className="font-mono text-slate-200">{formatCryptoAmount(withdrawPrecheck.withdrawal_min_amount, withdrawPrecheck.currency)}</span>
                       </div>
                       <div className="flex justify-between gap-3">
                         <span className="text-slate-500">주소 일치</span>
-                        <span className={withdrawPrecheck.address_matches_binance ? 'text-emerald-300' : 'text-amber-300'}>
-                          {withdrawPrecheck.address_matches_binance ? '일치' : '불일치/수동확인'}
+                        <span className={withdrawPrecheck.address_matches_destination ? 'text-emerald-300' : 'text-amber-300'}>
+                          {withdrawPrecheck.address_matches_destination ? '일치' : '불일치/수동확인'}
                         </span>
                       </div>
                       <div className="flex justify-between gap-3">
                         <span className="text-slate-500">태그 일치</span>
-                        <span className={withdrawPrecheck.tag_matches_binance ? 'text-emerald-300' : 'text-amber-300'}>
-                          {withdrawPrecheck.tag_matches_binance ? '일치' : '불일치/수동확인'}
+                        <span className={withdrawPrecheck.tag_matches_destination ? 'text-emerald-300' : 'text-amber-300'}>
+                          {withdrawPrecheck.tag_matches_destination ? '일치' : '불일치/수동확인'}
                         </span>
                       </div>
                       {withdrawPrecheck.warnings?.length ? (

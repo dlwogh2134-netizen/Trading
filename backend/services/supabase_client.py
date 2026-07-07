@@ -49,6 +49,8 @@ def query_supabase(auth_header: str, endpoint: str, method: str = "GET", json_da
         res = requests.patch(url, headers=headers, json=json_data, params=params)
     elif method == "PUT":
         res = requests.put(url, headers=headers, json=json_data, params=params)
+    elif method == "DELETE":
+        res = requests.delete(url, headers=headers, params=params)
     else:
         raise ValueError("지원하지 않는 HTTP 메소드입니다.")
     

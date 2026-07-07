@@ -148,11 +148,37 @@ class AutoTradingRuleEngine:
                     rule["quantity"] = actual_qty
             else:
                 # 거래소에 실제 보유 포지션/자산이 존재하지 않는 경우 (qty == 0)
-                # 감축(Reduce-Only) 무한 리젝트 에러를 방지하기 위해 즉시 FAILED 마감 처리
+                # 규칙 생성 시점(created_at)을 파싱하여 등록 후 3분(180초) 이내라면 체결/잔고 반영 지연으로 보고 정지를 보류함
+                created_at_str = rule.get("created_at")
+                is_grace_period = False
+                if created_at_str:
+                    from datetime import datetime, timezone
+                    try:
+                        # ISO 포맷 파싱 및 타임존 보정
+                        created_time = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                        now_time = datetime.now(timezone.utc)
+                        diff_seconds = (now_time - created_time).total_seconds()
+                        if diff_seconds < 180:  # 3분(180초) 유예
+                            is_grace_period = True
+                    except Exception as parse_err:
+                        self.logger.warning(f"[Rule Engine] Error parsing created_at for rule {rule.get('id')}: {parse_err}")
+                
+                if is_grace_period:
+                    # 유예 기간 동안은 룰 정지를 보류하고 대기 상태 갱신
+                    self._update_rule(
+                        rule["id"],
+                        {
+                            "last_checked_at": _utc_now_iso(),
+                            "last_error": f"체결 및 잔고 반영 대기 중입니다. (최대 3분 유예)",
+                        },
+                    )
+                    return False
+
+                # 유예 기간(3분)이 지났는데도 보유 주식/코인이 없다면 감축 주문 리젝트 방지를 위해 정지 처리
                 self._update_rule(
                     rule["id"],
                     {
-                        "status": "FAILED",
+                        "status": "STOPPED",
                         "last_checked_at": _utc_now_iso(),
                         "last_error": f"감시 대상 자산({symbol})이 거래소 보유 잔고에 존재하지 않아 감시를 중단합니다.",
                     },
