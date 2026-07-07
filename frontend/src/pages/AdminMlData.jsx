@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import Header from '../components/Header.jsx'
 import { supabase } from '../supabaseClient'
+import AdminInquiryPanel from './AdminInquiryPanel.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -1924,6 +1925,7 @@ function ModelResultCard({ title, result }) {
 }
 
 export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideHeader = false }) {
+  const [adminTab, setAdminTab] = useState('ml')
   const [mode, setMode] = useState('crypto')
   const [form, setForm] = useState(presets.crypto)
   const [loading, setLoading] = useState(false)
@@ -2629,7 +2631,35 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
       )}
 
       <main className="mx-auto flex max-w-7xl flex-col gap-6">
-        <section className="ai-glass rounded-lg p-6">
+        {/* 관리자 내부 탭 */}
+        <div className="flex border-b border-slate-800">
+          <button
+            type="button"
+            onClick={() => setAdminTab('ml')}
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition ${
+              adminTab === 'ml'
+                ? 'border-ai-cyan text-white bg-ai-cyan/5'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            ML 운영 콘솔
+          </button>
+          <button
+            type="button"
+            onClick={() => setAdminTab('inquiries')}
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition ${
+              adminTab === 'inquiries'
+                ? 'border-ai-cyan text-white bg-ai-cyan/5'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            사용자 문의 관리
+          </button>
+        </div>
+
+        {adminTab === 'ml' && (
+          <>
+            <section className="ai-glass rounded-lg p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">ML Operations</p>
@@ -3176,6 +3206,10 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             />
           </div>
         </section>
+        </>
+        )}
+
+        {adminTab === 'inquiries' && <AdminInquiryPanel />}
       </main>
 
       <JobLogModal
