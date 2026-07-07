@@ -743,6 +743,56 @@ const getTransferReceivedAmount = (row = {}) => {
   return 0
 }
 
+const getCoinoneTransferDeductionAmount = (row = {}) => {
+  const status = String(row.status || '').toUpperCase()
+  if (!['SUBMITTED', 'WITHDRAWAL_REGISTER', 'WITHDRAWAL_WAIT', 'COMPLETED'].includes(status)) return 0
+  return toNumber(row.amount)
+}
+
+const deductCoinoneTransfersFromEstimatedHoldings = (mergedBalance, transferRows = []) => {
+  const holdings = Array.isArray(mergedBalance?.holdings) ? mergedBalance.holdings : []
+  const deductions = new Map()
+
+  ;(transferRows || []).forEach((row) => {
+    const currency = String(row.currency || '').trim().toUpperCase()
+    const amount = getCoinoneTransferDeductionAmount(row)
+    if (!currency || amount <= 0) return
+    deductions.set(currency, (deductions.get(currency) || 0) + amount)
+  })
+
+  if (deductions.size === 0) return mergedBalance
+
+  const adjustedHoldings = holdings
+    .map((holding) => {
+      const rawExchange = String(holding.raw_exchange || holding.exchange || holding.account_type || '').toUpperCase()
+      const source = String(holding.source || '').toUpperCase()
+      const symbol = String(holding.symbol || holding.ticker || holding.id || '').trim().toUpperCase()
+      const deductionAmount = deductions.get(symbol) || 0
+
+      if (rawExchange !== 'COINONE' || source !== 'DB_ESTIMATED' || deductionAmount <= 0) {
+        return holding
+      }
+
+      const nextQty = Math.max(0, toNumber(holding.qty) - deductionAmount)
+      const avgPrice = toNumber(holding.avg_price)
+      const currentPrice = toNumber(holding.current_price)
+      return {
+        ...holding,
+        qty: nextQty,
+        eval_amount: currentPrice > 0 ? currentPrice * nextQty : toNumber(holding.eval_amount),
+        profit: avgPrice > 0 && currentPrice > 0 ? (currentPrice - avgPrice) * nextQty : toNumber(holding.profit),
+        profit_rate: avgPrice > 0 && currentPrice > 0 ? ((currentPrice - avgPrice) / avgPrice) * 100 : toNumber(holding.profit_rate),
+        transfer_deducted_qty: deductionAmount,
+      }
+    })
+    .filter((holding) => toNumber(holding.qty) > 0)
+
+  return {
+    ...mergedBalance,
+    holdings: adjustedHoldings,
+  }
+}
+
 const mergeBalanceWithCompletedTransfers = (mergedBalance, transferRows = []) => {
   const holdings = Array.isArray(mergedBalance?.holdings) ? mergedBalance.holdings : []
   const liveKeys = new Set(holdings.map(getHoldingIdentity).filter(Boolean))
@@ -1088,10 +1138,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
       setCompletedTransferRows(transferRows)
       setRawBalances(successResults)
       const mergedBalance = mergeBalanceWithCompletedTransfers(
-        mergeBalanceWithTradeEstimates(
-          mergeAccountBalances(successResults, showMockAssets),
-          tradeRows,
-          showMockAssets,
+        deductCoinoneTransfersFromEstimatedHoldings(
+          mergeBalanceWithTradeEstimates(
+            mergeAccountBalances(successResults, showMockAssets),
+            tradeRows,
+            showMockAssets,
+          ),
+          transferRows,
         ),
         transferRows,
       )
@@ -1216,10 +1269,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
   useEffect(() => {
     if (rawBalances.length > 0) {
       setBalance(mergeBalanceWithCompletedTransfers(
-        mergeBalanceWithTradeEstimates(
-          mergeAccountBalances(rawBalances, showMockAssets),
-          executedTradeRows,
-          showMockAssets,
+        deductCoinoneTransfersFromEstimatedHoldings(
+          mergeBalanceWithTradeEstimates(
+            mergeAccountBalances(rawBalances, showMockAssets),
+            executedTradeRows,
+            showMockAssets,
+          ),
+          completedTransferRows,
         ),
         completedTransferRows,
       ))
