@@ -1564,9 +1564,9 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                       </button>
                     </div>
                   </div>
-                  <div className="overflow-x-auto max-h-[180px] overflow-y-auto">
-                    <table className="w-full border-collapse text-xs">
-                      <thead className="border-b border-slate-800 text-slate-400 bg-[#0c0e15]/100 sticky top-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full table-fixed border-collapse text-xs">
+                      <thead className="block border-b border-slate-800 bg-[#0c0e15]/100 text-slate-400 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
                         <tr>
                           <th className="px-3 py-2 text-left font-bold">종목명</th>
                           <th className="px-3 py-2 text-left font-bold">시장</th>
@@ -1575,7 +1575,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           <th className="px-3 py-2 text-right font-bold">현재가 변동</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-800/40">
+                      <tbody className="block max-h-[136px] overflow-y-auto divide-y divide-slate-800/40 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
                         {dashboardWatchlist.map((item) => {
                           const stockCurrency = item.currency || (item.marketCountry === 'US' ? 'USD' : 'KRW')
                           const savedPrice = parsePriceNumber(item.latestPrice ?? item.average)
@@ -1659,9 +1659,9 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
                 {balance && balance.holdings.length > 0 ? (
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="border-b border-slate-800 text-slate-400 bg-[#0c0e15]/100">
+                    <table className="w-full table-fixed text-left border-collapse text-xs">
+                      <thead className="block border-b border-slate-800 bg-[#0c0e15]/100 text-slate-400 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
+                        <tr>
                           <th className="py-2 px-3 font-bold">종목명/코드</th>
                           <th className="py-2 px-3 font-bold">거래소</th>
                           <th className="py-2 px-3 text-right font-bold">
@@ -1689,7 +1689,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           </th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-800 font-mono">
+                      <tbody className="block max-h-[378px] overflow-y-auto divide-y divide-slate-800 font-mono [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
                         {getSortedHoldings(balance.holdings).map((stock, index) => {
                           const exchangeName = stock.exchange || stock.account_type || '-'
                           const isCoinone = String(exchangeName).toUpperCase() === 'COINONE'
