@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Rate, SectionHeader } from '../components/DashboardComponents.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
+import AssetLogo from '../components/AssetLogo.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 const TAG_REQUIRED_SYMBOLS = new Set(['XRP', 'XLM', 'EOS'])
@@ -59,8 +60,18 @@ export default function AssetsTab({
     return `${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 8 })} ${currency || ''}`.trim()
   }
 
+  const normalizeExchangeCode = (value = '') => {
+    const text = String(value || '').toUpperCase()
+    if (text.includes('BINANCE_UM_FUTURES')) return 'BINANCE_UM_FUTURES'
+    if (text.includes('BINANCE')) return 'BINANCE'
+    if (text.includes('COINONE')) return 'COINONE'
+    if (text.includes('TOSS')) return 'TOSS'
+    if (text.includes('KIS')) return 'KIS'
+    return text
+  }
+
   const getTransferRoute = (asset = {}) => {
-    const exchange = String(asset.rawExchange || asset.exchange || '').toUpperCase()
+    const exchange = normalizeExchangeCode(asset.rawExchange || asset.exchange)
     if (exchange === 'COINONE') {
       return {
         fromExchange: 'COINONE',
@@ -448,7 +459,7 @@ export default function AssetsTab({
 
     if (targetDisplayCurrency === 'KRW') {
       const displayValue = (currency === 'USD' || currency === 'USDT') ? val * rate : val
-      return `₩${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+      return `₩${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getMaximumFractionDigits(displayValue) })}`
     }
 
     if (targetDisplayCurrency === 'USD') {
@@ -459,18 +470,19 @@ export default function AssetsTab({
     if (currency === 'USD' || currency === 'USDT') {
       return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getMaximumFractionDigits(val) })}`
     }
-    return `₩${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+    return `₩${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getMaximumFractionDigits(val) })}`
   }
 
   const displayAccounts = buildAccountSummaryCards()
   const rawHoldings = balance?.holdings?.length
     ? balance.holdings.map((stock, index) => {
       const exchangeName = stock.exchange || stock.account_type || '-'
-      const isCoinone = String(exchangeName).toUpperCase() === 'COINONE'
+      const rawExchange = normalizeExchangeCode(stock.raw_exchange || exchangeName)
+      const isCoinone = rawExchange === 'COINONE'
+      const isBinance = rawExchange === 'BINANCE' || rawExchange === 'BINANCE_UM_FUTURES'
       const isForeign = /[a-zA-Z]/.test(stock.symbol) && !/^[0-9a-zA-Z]{6,7}$/.test(stock.symbol) && !isCoinone
-      const stockCurrency = stock.currency || (isForeign ? 'USD' : 'KRW')
-      const currentDisplayCurrency = isForeign ? displayCurrency : 'KRW'
-      const rawExchange = String(stock.raw_exchange || exchangeName || '').toUpperCase()
+      const stockCurrency = stock.currency || (isBinance ? 'USDT' : isForeign ? 'USD' : 'KRW')
+      const currentDisplayCurrency = isBinance ? 'USD' : isForeign ? displayCurrency : 'KRW'
       const assetType = stock.asset_type || (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(rawExchange) ? 'CRYPTO' : 'STOCK')
       const symbol = stock.symbol || stock.id || `holding-${index}`
       const profitRate = Number(stock.profit_rate)
@@ -694,7 +706,7 @@ export default function AssetsTab({
                   </td>
                 </tr>
               ) : sortedHoldings.map((item) => {
-                const itemExchange = String(item.rawExchange || item.exchange || '').toUpperCase()
+                const itemExchange = normalizeExchangeCode(item.rawExchange || item.exchange)
                 const canWithdraw = ['COINONE', 'BINANCE'].includes(itemExchange)
                   && String(item.assetType || '').toUpperCase() === 'CRYPTO'
                   && item.source === 'LIVE_BALANCE'
@@ -704,10 +716,15 @@ export default function AssetsTab({
                 return (
                   <tr key={item.rowId || item.id} className="border-b border-slate-800/80 last:border-b-0 hover:bg-slate-800/20">
                     <td className="px-5 py-4 font-bold text-white">
-                      <Link to={`/asset/${item.assetType || 'STOCK'}/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline">
-                        {item.name}
-                      </Link>
-                      <div className="text-[10px] text-slate-500 font-mono mt-0.5">{item.id}</div>
+                      <div className="flex items-center gap-3">
+                        <AssetLogo symbol={item.id} assetType={item.assetType} name={item.name} size="h-8 w-8" />
+                        <div className="min-w-0">
+                          <Link to={`/asset/${item.assetType || 'STOCK'}/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline block truncate">
+                            {item.name}
+                          </Link>
+                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">{item.id}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-5 py-4 font-sans font-bold text-slate-400">
                       <span className="rounded bg-slate-800/60 border border-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase">

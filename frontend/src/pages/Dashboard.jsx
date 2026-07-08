@@ -1,20 +1,25 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { deleteUserWatchlistItem, fetchUserWatchlist, supabase } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import Settings from './Settings'
+import AssetLogo from '../components/AssetLogo.jsx'
 import { Rate, SectionHeader, SidebarNav } from '../components/DashboardComponents.jsx'
 import WatchlistTab from './WatchlistTab.jsx'
 import AssetsTab from './AssetsTab.jsx'
 import TradeHistoryTab from './TradeHistoryTab.jsx'
 import AdminMlData from './AdminMlData.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
+import {
+  deductCoinoneTransfersFromEstimatedHoldings,
+  getTransferReceivedAmount,
+} from '../lib/transferBalanceAdjustments.js'
 import { DASHBOARD_TAB_KEYS, DEFAULT_DASHBOARD_TAB } from '../dashboardConstants.js'
 
 const DASHBOARD_API_BASE_URL = 'http://localhost:5050'
 const BALANCE_EXCHANGE_ORDER = ['TOSS', 'KIS', 'COINONE', 'BINANCE', 'BINANCE_UM_FUTURES']
 const TRADE_PROPOSAL_HOLDING_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,order_amount,market_country,currency,status,broker_env,created_at'
-const TRANSFER_PROPOSAL_FIELDS = 'id,from_exchange,to_exchange,currency,amount,status,received_amount,expected_receive_amount,withdraw_fee,fee_currency,binance_deposit_payload,created_at,submitted_at,completed_at,updated_at'
+const TRANSFER_PROPOSAL_FIELDS = 'id,from_exchange,to_exchange,currency,amount,status,received_amount,expected_receive_amount,withdraw_fee,fee_currency,precheck_payload,binance_deposit_payload,created_at,submitted_at,completed_at,updated_at'
 const DASHBOARD_TAB_SET = new Set(DASHBOARD_TAB_KEYS)
 
 const normalizeDashboardTab = (tab) => (
@@ -62,7 +67,7 @@ const formatUnitCurrency = (value, currency, displayCurrency = 'KRW', exchangeRa
 
   if (displayCurrency === 'KRW') {
     const displayValue = (currency === 'USD' || currency === 'USDT') ? numeric * rate : numeric
-    return `₩${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+    return `₩${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getMaximumFractionDigits(displayValue) })}`
   }
 
   if (displayCurrency === 'USD') {
@@ -73,7 +78,7 @@ const formatUnitCurrency = (value, currency, displayCurrency = 'KRW', exchangeRa
   if (currency === 'USD' || currency === 'USDT') {
     return `$${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getMaximumFractionDigits(numeric) })}`
   }
-  return `₩${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+  return `₩${numeric.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getMaximumFractionDigits(numeric) })}`
 }
 
 const formatNullableCurrency = (value, currency, displayCurrency = 'KRW', exchangeRate = 1500) => {
@@ -614,15 +619,36 @@ const mergeAccountBalances = (items, showMockAssets = true) => {
 const getHoldingIdentity = (holding = {}) => {
   const symbol = String(holding.symbol || holding.ticker || holding.id || '').trim().toUpperCase()
   const exchangeText = String(holding.raw_exchange || holding.exchange || holding.account_type || '').toUpperCase()
-  const rawExchange = exchangeText.includes('KIS') ? 'KIS'
-    : exchangeText.includes('TOSS') ? 'TOSS'
-      : exchangeText.includes('COINONE') ? 'COINONE'
-        : exchangeText.includes('BINANCE_UM_FUTURES') ? 'BINANCE_UM_FUTURES'
-          : exchangeText.includes('BINANCE') ? 'BINANCE'
-            : exchangeText
+  const rawExchange = normalizeExchangeText(exchangeText)
   const env = String(holding.env || (exchangeText.includes('모의') ? 'MOCK' : exchangeText.includes('실전') ? 'REAL' : 'REAL')).toUpperCase()
   const assetType = String(holding.asset_type || (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(rawExchange) ? 'CRYPTO' : 'STOCK')).toUpperCase()
   return symbol ? `${assetType}:${rawExchange}:${env}:${symbol}` : ''
+}
+
+const normalizeExchangeText = (exchangeText = '') => {
+  const normalized = String(exchangeText || '').toUpperCase()
+  return normalized.includes('KIS') ? 'KIS'
+    : normalized.includes('TOSS') ? 'TOSS'
+      : normalized.includes('COINONE') ? 'COINONE'
+        : normalized.includes('BINANCE_UM_FUTURES') ? 'BINANCE_UM_FUTURES'
+          : normalized.includes('BINANCE') ? 'BINANCE'
+            : normalized
+}
+
+const getHoldingAccountScope = (holding = {}) => {
+  const exchangeText = String(holding.raw_exchange || holding.exchange || holding.account_type || '').toUpperCase()
+  const exchange = normalizeExchangeText(exchangeText)
+  const env = String(holding.env || (exchangeText.includes('모의') ? 'MOCK' : 'REAL')).toUpperCase()
+  return exchange ? `${exchange}:${env}` : ''
+}
+
+const buildLiveAccountScopes = (liveHoldings = [], liveSources = []) => {
+  const scopes = new Set(liveHoldings.map(getHoldingAccountScope).filter(Boolean))
+  liveSources.forEach((source) => {
+    const exchange = normalizeExchangeText(source)
+    if (exchange) scopes.add(`${exchange}:REAL`)
+  })
+  return scopes
 }
 
 const fetchTradeSymbolNameMap = async (tradeRows = []) => {
@@ -650,10 +676,17 @@ const fetchTradeSymbolNameMap = async (tradeRows = []) => {
   return Object.fromEntries(pairs)
 }
 
-const buildEstimatedHoldingsFromTrades = (tradeRows = [], liveHoldings = [], showMockAssets = true) => {
+const buildEstimatedHoldingsFromTrades = (tradeRows = [], liveHoldings = [], showMockAssets = true, liveSources = []) => {
   const liveKeys = new Set(liveHoldings.map(getHoldingIdentity).filter(Boolean))
+  const liveAccountScopes = buildLiveAccountScopes(liveHoldings, liveSources)
+  const hasAuthoritativeLiveAccount = (item = {}) => {
+    const exchange = String(item.raw_exchange || item.exchange || '').toUpperCase()
+    if (!['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(exchange)) return false
+    const env = String(item.env || 'REAL').toUpperCase()
+    return liveAccountScopes.has(`${exchange}:${env}`)
+  }
   if (tradeRows.some((row) => row.source === 'DB_ESTIMATED')) {
-    return tradeRows.filter((item) => item.qty > 0 && (showMockAssets || item.env !== 'MOCK') && !liveKeys.has(getHoldingIdentity(item)))
+    return tradeRows.filter((item) => item.qty > 0 && (showMockAssets || item.env !== 'MOCK') && !liveKeys.has(getHoldingIdentity(item)) && !hasAuthoritativeLiveAccount(item))
   }
   const grouped = new Map()
 
@@ -701,7 +734,7 @@ const buildEstimatedHoldingsFromTrades = (tradeRows = [], liveHoldings = [], sho
   })
 
   return Array.from(grouped.values())
-    .filter((item) => item.qty > 0 && !liveKeys.has(getHoldingIdentity(item)))
+    .filter((item) => item.qty > 0 && !liveKeys.has(getHoldingIdentity(item)) && !hasAuthoritativeLiveAccount(item))
     .map((item) => {
       const avgPrice = item.buyQty > 0 ? item.buyAmount / item.buyQty : item.lastPrice
       const currentPrice = item.lastPrice || avgPrice
@@ -726,7 +759,7 @@ const buildEstimatedHoldingsFromTrades = (tradeRows = [], liveHoldings = [], sho
 
 const mergeBalanceWithTradeEstimates = (mergedBalance, tradeRows = [], showMockAssets = true) => {
   const holdings = Array.isArray(mergedBalance?.holdings) ? mergedBalance.holdings : []
-  const estimatedHoldings = buildEstimatedHoldingsFromTrades(tradeRows, holdings, showMockAssets)
+  const estimatedHoldings = buildEstimatedHoldingsFromTrades(tradeRows, holdings, showMockAssets, mergedBalance?.sources || [])
   return {
     ...mergedBalance,
     holdings: [...holdings, ...estimatedHoldings],
@@ -738,22 +771,6 @@ const buildTransferHoldingIdentity = (currency) => {
   return symbol ? `CRYPTO:BINANCE:REAL:${symbol}` : ''
 }
 
-const getTransferReceivedAmount = (row = {}) => {
-  const receivedAmount = toNumber(row.received_amount)
-  if (receivedAmount > 0) return receivedAmount
-  const depositAmount = toNumber(row.binance_deposit_payload?.amount)
-  if (depositAmount > 0) return depositAmount
-  const expectedAmount = toNumber(row.expected_receive_amount)
-  if (expectedAmount > 0) return expectedAmount
-  return 0
-}
-
-const getCoinoneTransferDeductionAmount = (row = {}) => {
-  const status = String(row.status || '').toUpperCase()
-  if (!['SUBMITTED', 'WITHDRAWAL_REGISTER', 'WITHDRAWAL_WAIT', 'COMPLETED'].includes(status)) return 0
-  return toNumber(row.amount)
-}
-
 const fetchTransferRowsFromSupabase = async () => {
   const { data, error } = await supabase
     .from('asset_transfer_proposals')
@@ -763,51 +780,6 @@ const fetchTransferRowsFromSupabase = async () => {
 
   if (error) throw error
   return data || []
-}
-
-const deductCoinoneTransfersFromEstimatedHoldings = (mergedBalance, transferRows = []) => {
-  const holdings = Array.isArray(mergedBalance?.holdings) ? mergedBalance.holdings : []
-  const deductions = new Map()
-
-  ;(transferRows || []).forEach((row) => {
-    const fromExchange = String(row.from_exchange || '').toUpperCase()
-    const toExchange = String(row.to_exchange || '').toUpperCase()
-    const currency = String(row.currency || '').trim().toUpperCase()
-    const amount = getCoinoneTransferDeductionAmount(row)
-    if (fromExchange !== 'COINONE' || toExchange !== 'BINANCE' || !currency || amount <= 0) return
-    deductions.set(currency, (deductions.get(currency) || 0) + amount)
-  })
-
-  if (deductions.size === 0) return mergedBalance
-
-  const adjustedHoldings = holdings
-    .map((holding) => {
-      const rawExchange = String(holding.raw_exchange || holding.exchange || holding.account_type || '').toUpperCase()
-      const symbol = String(holding.symbol || holding.ticker || holding.id || '').trim().toUpperCase()
-      const deductionAmount = deductions.get(symbol) || 0
-
-      if (rawExchange !== 'COINONE' || deductionAmount <= 0) {
-        return holding
-      }
-
-      const nextQty = Math.max(0, toNumber(holding.qty) - deductionAmount)
-      const avgPrice = toNumber(holding.avg_price)
-      const currentPrice = toNumber(holding.current_price)
-      return {
-        ...holding,
-        qty: nextQty,
-        eval_amount: currentPrice > 0 ? currentPrice * nextQty : toNumber(holding.eval_amount),
-        profit: avgPrice > 0 && currentPrice > 0 ? (currentPrice - avgPrice) * nextQty : toNumber(holding.profit),
-        profit_rate: avgPrice > 0 && currentPrice > 0 ? ((currentPrice - avgPrice) / avgPrice) * 100 : toNumber(holding.profit_rate),
-        transfer_deducted_qty: deductionAmount,
-      }
-    })
-    .filter((holding) => toNumber(holding.qty) > 0)
-
-  return {
-    ...mergedBalance,
-    holdings: adjustedHoldings,
-  }
 }
 
 const mergeBalanceWithCompletedTransfers = (mergedBalance, transferRows = []) => {
@@ -1138,7 +1110,7 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
 
       let transferRows = []
       try {
-        const transferResponse = await fetch(`${DASHBOARD_API_BASE_URL}/api/transfer/withdraw/status?limit=50`, {
+        const transferResponse = await fetch(`${DASHBOARD_API_BASE_URL}/api/transfer/withdraw/status?limit=100`, {
           headers: {
             Authorization: authHeader,
           },
@@ -1648,11 +1620,11 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                     <table className="w-full table-fixed border-collapse text-xs">
                       <thead className="block border-b border-slate-800 bg-[#0c0e15]/100 text-slate-400 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
                         <tr>
-                          <th className="px-3 py-2 text-left font-bold">종목명</th>
-                          <th className="px-3 py-2 text-left font-bold">시장</th>
-                          <th className="px-3 py-2 text-right font-bold">저장 당시 가격</th>
-                          <th className="px-3 py-2 text-right font-bold">현재가</th>
-                          <th className="px-3 py-2 text-right font-bold">현재가 변동</th>
+                          <th className="px-3 py-2 text-left font-bold w-[32%]">종목명</th>
+                          <th className="px-3 py-2 text-left font-bold w-[13%]">시장</th>
+                          <th className="px-3 py-2 text-right font-bold w-[18%]">저장 당시 가격</th>
+                          <th className="px-3 py-2 text-right font-bold w-[18%]">현재가</th>
+                          <th className="px-3 py-2 text-right font-bold w-[19%]">현재가 변동</th>
                         </tr>
                       </thead>
                       <tbody className="block max-h-[136px] overflow-y-auto divide-y divide-slate-800/40 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
@@ -1672,8 +1644,8 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           const isRemoving = removingWatchlistIds.has(item.id)
                           return (
                             <tr key={item.id} className="hover:bg-slate-800/20 transition-colors">
-                              <td className="px-3 py-2.5 font-bold text-white">
-                                <div className="flex min-w-[160px] items-center gap-2">
+                              <td className="px-3 py-2.5 font-bold text-white w-[32%]">
+                                <div className="flex items-center gap-2 min-w-0">
                                   <button
                                     type="button"
                                     className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-rose-400 transition-all hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1684,17 +1656,18 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                                   >
                                     <HeartIcon className="h-4 w-4" filled={!isRemoving} />
                                   </button>
-                                  <span className="truncate">{item.name}</span>
+                                  <AssetLogo symbol={item.symbol} assetType={item.assetType || item.asset_type} name={item.name} size="h-6 w-6" />
+                                  <span className="truncate min-w-0 block">{item.name}</span>
                                 </div>
                               </td>
-                              <td className="px-3 py-2.5 text-slate-400">{item.market}</td>
-                              <td className="px-3 py-2.5 text-right font-mono text-slate-300">
+                              <td className="px-3 py-2.5 text-slate-400 w-[13%] truncate">{item.market}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-slate-300 w-[18%]">
                                 {hasSavedPrice ? formatUnitCurrency(savedPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
                               </td>
-                              <td className="px-3 py-2.5 text-right font-mono text-slate-300">
+                              <td className="px-3 py-2.5 text-right font-mono text-slate-300 w-[18%]">
                                 {hasCurrentPrice ? formatUnitCurrency(currentPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
                               </td>
-                              <td className={`px-3 py-2.5 text-right font-mono font-bold ${priceDeltaTone}`}>
+                              <td className={`px-3 py-2.5 text-right font-mono font-bold w-[19%] ${priceDeltaTone}`}>
                                 {hasSavedPrice && hasCurrentPrice ? `${signedDeltaAmount} (${signedDeltaRate})` : '-'}
                               </td>
                             </tr>
@@ -1786,8 +1759,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           return (
                             <tr key={`${exchangeName}-${stock.env || 'REAL'}-${stock.symbol}-${index}`} className="hover:bg-slate-800/40 transition-colors">
                               <td className="py-3 px-3 font-sans">
-                                <div className="font-semibold text-white">{stock.name}</div>
-                                <div className="text-[10px] text-slate-500 font-mono">{stock.symbol}</div>
+                                <div className="flex items-center gap-3">
+                                  <AssetLogo symbol={stock.symbol} assetType={stock.asset_type || (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(normalizedExchange) ? 'CRYPTO' : 'STOCK')} name={stock.name} size="h-8 w-8" />
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-white truncate">{stock.name}</div>
+                                    <div className="text-[10px] text-slate-500 font-mono">{stock.symbol}</div>
+                                  </div>
+                                </div>
                               </td>
                               <td className="py-3 px-3 text-left font-sans font-bold text-slate-400">
                                 <span className="rounded bg-slate-800/60 border border-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase">

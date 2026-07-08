@@ -46,7 +46,7 @@ export function normalizeWatchlistItem(row = {}) {
   // currency 결정
   let currency = String(row.currency || '').toUpperCase()
   if (assetType === 'CRYPTO') {
-    currency = exchange === 'BINANCE' ? 'USDT' : 'KRW'
+    currency = exchange === 'BINANCE' || exchange === 'BINANCE_UM_FUTURES' ? 'USDT' : 'KRW'
   } else {
     if (marketCountry === 'US') {
       currency = 'USD'
@@ -114,7 +114,16 @@ export async function fetchUserWatchlist() {
     .order('updated_at', { ascending: false })
 
   if (error) throw error
-  return (data || []).map(toWatchlistViewItem)
+  const items = (data || []).map(toWatchlistViewItem)
+  const seenCryptoSymbols = new Set()
+  return items.filter((item) => {
+    if (item.assetType !== 'CRYPTO') return true
+    const symbol = String(item.id || '').toUpperCase()
+    if (!symbol) return false
+    if (seenCryptoSymbols.has(symbol)) return false
+    seenCryptoSymbols.add(symbol)
+    return true
+  })
 }
 
 export async function upsertUserWatchlistItem(row) {
@@ -190,13 +199,18 @@ export async function deleteUserWatchlistItem(row) {
   }
 
   const item = normalizeWatchlistItem(row)
-  const { error } = await supabase
+  let query = supabase
     .from('user_watchlist')
     .delete()
     .eq('user_id', session.user.id)
     .eq('symbol', item.symbol)
     .eq('asset_type', item.asset_type)
-    .eq('exchange', item.exchange)
+
+  if (item.asset_type !== 'CRYPTO') {
+    query = query.eq('exchange', item.exchange)
+  }
+
+  const { error } = await query
 
   if (error) throw error
 }

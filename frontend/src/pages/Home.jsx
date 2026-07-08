@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useNavigate } from "react-router-dom";
 import Header from "../components/Header.jsx";
+import AssetLogo from "../components/AssetLogo.jsx";
 import { deleteUserWatchlistItem, fetchUserWatchlist, normalizeWatchlistItem, upsertUserWatchlistItem } from "../supabaseClient";
 
 const filters = {
@@ -142,15 +143,6 @@ function applyClientMarketFilters(rows, activeFilters) {
   return filtered.map((row, index) => ({ ...row, rank: index + 1 }));
 }
 
-function RankIcon({ label }) {
-  const text = String(label || "?").trim().slice(0, 2).toUpperCase();
-  return (
-    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-ai-cyan/90 to-blue-700 text-[10px] font-black text-white shadow-[0_0_18px_rgba(0,224,255,0.18)]">
-      {text}
-    </div>
-  );
-}
-
 function FilterChip({ label, active = false, onClick }) {
   return (
     <button
@@ -230,7 +222,7 @@ function MarketTable({ rows, titleType = "stock", ranking = "거래대금", favo
               </button>
               <div className="text-center text-[16px] text-slate-100 tabular-nums">{row.rank}</div>
               <div className="flex min-w-0 items-center gap-3">
-                <RankIcon label={row.symbol || row.code || row.name} />
+                <AssetLogo symbol={row.code || row.symbol} assetType={assetType} name={row.name} />
                 <div className="min-w-0">
                   <div className="truncate text-[15px] font-semibold text-slate-100">{row.name}</div>
                   <div className="mt-0.5 truncate text-[12px] text-slate-500">{row.code || row.symbol}</div>
@@ -275,7 +267,7 @@ function MobileMarketTable({ rows, titleType = "stock", ranking = "거래대금"
           >
             <div className="flex items-center gap-3">
               <div className="w-6 text-center text-slate-300">{row.rank}</div>
-              <RankIcon label={row.symbol || row.code || row.name} />
+              <AssetLogo symbol={symbol} assetType={assetType} name={row.name} />
               <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold text-slate-100">{row.name}</div>
                 <div className="mt-0.5 text-[11px] text-slate-500">{row.code || row.symbol}</div>
@@ -389,7 +381,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
     }
   };
 
-  const loadOverview = async (requestFilters = stockFilters) => {
+  const loadOverview = async (requestFilters = stockFilters, requestCoinFilters = coinFilters) => {
       try {
         setStatus("loading");
         const currentMarketState = getKoreanMarketState();
@@ -397,7 +389,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
         const response = await fetch("http://localhost:5050/api/home/market", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filters: requestFilters }),
+          body: JSON.stringify({ filters: requestFilters, coinFilters: requestCoinFilters }),
         });
 
         const data = await response.json();
@@ -431,7 +423,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       ranking: stockFilters.ranking,
       horizon: stockFilters.horizon,
       forceRefresh: true,
-    });
+    }, coinFilters);
   };
   const snapshotTimeText = snapshotMeta.as_of ? ` · 데이터 기준 ${formatSnapshotTime(snapshotMeta.as_of)}` : "";
   const checkedTimeText = updatedAt ? ` · 확인 ${updatedAt}` : "";
@@ -452,6 +444,9 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       ranking: stockFilters.ranking,
       horizon: stockFilters.horizon,
     };
+    const requestCoinFilters = {
+      ranking: coinFilters.ranking,
+    };
 
     const scheduleNextLoad = () => {
       const currentMarketState = getKoreanMarketState();
@@ -459,12 +454,12 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       const delay = currentMarketState.isOpen ? 60_000 : 600_000;
       timeoutId = window.setTimeout(async () => {
         if (cancelled) return;
-        await loadOverview(requestFilters);
+        await loadOverview(requestFilters, requestCoinFilters);
         if (!cancelled) scheduleNextLoad();
       }, delay);
     };
 
-    loadOverview(requestFilters).then(() => {
+    loadOverview(requestFilters, requestCoinFilters).then(() => {
       if (!cancelled) scheduleNextLoad();
     });
 
@@ -472,7 +467,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [stockFilters.region, stockFilters.ranking, stockFilters.horizon]);
+  }, [stockFilters.region, stockFilters.ranking, stockFilters.horizon, coinFilters.ranking]);
 
   return (
     <div className="min-h-screen bg-obsidian-bg text-[#e2e2ec] font-inter">

@@ -2,41 +2,61 @@
 
 FUNCTION_SCHEMAS = [
     {
-        "name": "get_price",
-        "description": "거래소와 심볼 기준으로 현재가를 조회합니다.",
+        "name": "get_home_market_rankings",
+        "description": "홈 화면 필터 기준으로 주식 또는 코인 순위를 조회합니다.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "asset_type": {"type": "string", "enum": ["STOCK", "CRYPTO"]},
+                "market_segment": {"type": "string", "description": "KR, US, ALL"},
+                "ranking": {"type": "string", "description": "거래대금, 거래량, 상승률, 하락률"},
+                "limit": {"type": "number"},
+            },
+        },
+    },
+    {
+        "name": "get_portfolio_summary",
+        "description": "로그인한 사용자의 평가 자산과 주문가능 현금 요약을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
                 "exchange": {"type": "string", "description": "TOSS, KIS, COINONE, BINANCE 등"},
-                "symbol": {"type": "string", "description": "Asset symbol"},
+                "broker_env": {"type": "string", "enum": ["REAL", "MOCK"]},
             },
-            "required": ["exchange", "symbol"],
+        },
+    },
+    {
+        "name": "add_watchlist_item",
+        "description": "로그인한 사용자의 관심종목에 종목을 추가합니다.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "종목명 또는 종목코드"},
+            },
+            "required": ["query"],
         },
     },
     {
         "name": "get_holdings",
-        "description": "로그인한 사용자의 보유 자산 요약을 조회합니다.",
+        "description": "로그인한 사용자의 보유 주식 또는 코인 현황을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
-                "include_mock": {"type": "boolean", "description": "Include mock accounts"},
+                "exchange": {"type": "string", "description": "TOSS, KIS, COINONE, BINANCE 등"},
+                "broker_env": {"type": "string", "enum": ["REAL", "MOCK"]},
             },
         },
     },
     {
-        "name": "create_trade_proposal",
-        "description": "사용자 승인이 필요한 매매 제안을 생성합니다. 실제 주문 실행은 하지 않습니다.",
+        "name": "search_trade_history",
+        "description": "거래금액 또는 종목 조건으로 거래내역을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
-                "exchange": {"type": "string"},
                 "symbol": {"type": "string"},
-                "side": {"type": "string", "enum": ["BUY", "SELL"]},
-                "quantity": {"type": "number"},
-                "price": {"type": "number"},
-                "broker_env": {"type": "string", "enum": ["REAL", "MOCK"]},
+                "min_amount": {"type": "number"},
+                "limit": {"type": "number"},
             },
-            "required": ["exchange", "symbol", "side", "quantity"],
         },
     },
 ]
