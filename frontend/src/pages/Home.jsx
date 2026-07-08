@@ -389,7 +389,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
     }
   };
 
-  const loadOverview = async (requestFilters = stockFilters) => {
+  const loadOverview = async (requestFilters = stockFilters, requestCoinFilters = coinFilters) => {
       try {
         setStatus("loading");
         const currentMarketState = getKoreanMarketState();
@@ -397,7 +397,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
         const response = await fetch("http://localhost:5050/api/home/market", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filters: requestFilters }),
+          body: JSON.stringify({ filters: requestFilters, coinFilters: requestCoinFilters }),
         });
 
         const data = await response.json();
@@ -431,7 +431,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       ranking: stockFilters.ranking,
       horizon: stockFilters.horizon,
       forceRefresh: true,
-    });
+    }, coinFilters);
   };
   const snapshotTimeText = snapshotMeta.as_of ? ` · 데이터 기준 ${formatSnapshotTime(snapshotMeta.as_of)}` : "";
   const checkedTimeText = updatedAt ? ` · 확인 ${updatedAt}` : "";
@@ -452,6 +452,9 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       ranking: stockFilters.ranking,
       horizon: stockFilters.horizon,
     };
+    const requestCoinFilters = {
+      ranking: coinFilters.ranking,
+    };
 
     const scheduleNextLoad = () => {
       const currentMarketState = getKoreanMarketState();
@@ -459,12 +462,12 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       const delay = currentMarketState.isOpen ? 60_000 : 600_000;
       timeoutId = window.setTimeout(async () => {
         if (cancelled) return;
-        await loadOverview(requestFilters);
+        await loadOverview(requestFilters, requestCoinFilters);
         if (!cancelled) scheduleNextLoad();
       }, delay);
     };
 
-    loadOverview(requestFilters).then(() => {
+    loadOverview(requestFilters, requestCoinFilters).then(() => {
       if (!cancelled) scheduleNextLoad();
     });
 
@@ -472,7 +475,7 @@ export default function Home({ isLoggedIn, userEmail, handleLogout }) {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [stockFilters.region, stockFilters.ranking, stockFilters.horizon]);
+  }, [stockFilters.region, stockFilters.ranking, stockFilters.horizon, coinFilters.ranking]);
 
   return (
     <div className="min-h-screen bg-obsidian-bg text-[#e2e2ec] font-inter">

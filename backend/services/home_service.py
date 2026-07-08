@@ -681,13 +681,16 @@ def build_home_overview(data: dict, auth_header: str | None = None) -> dict:
         },
     }
 
+    filters = data.get("filters") or {}
+    coin_filters = data.get("coinFilters") or data.get("coin_filters") or filters
+    coin_ranking = coin_filters.get("ranking") or coin_filters.get("metric") or "거래대금"
+
     try:
-        result["coins"] = fetch_coinone_overview()
+        result["coins"] = fetch_coinone_overview(ranking=coin_ranking)
     except Exception as coin_error:
         result["message"] = f"Coinone 조회 실패: {str(coin_error)}"
 
     try:
-        filters = data.get("filters") or {}
         ranking = filters.get("ranking") or filters.get("metric") or "거래대금"
         stock_rows = data.get("stock_rows") or fetch_top_turnover_stock_rows(
             limit=HOME_STOCK_CLIENT_CACHE_LIMIT,

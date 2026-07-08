@@ -171,6 +171,7 @@ app.register_blueprint(chatbot_bp)
 
 - 사용자 입력 공백 검증
 - 시스템 프롬프트 로드
+- 로그인 사용자의 `profiles.invest_type`, `profiles.invest_score`를 조회해 투자성향 문맥을 시스템 프롬프트에 추가
 - `ChatbotLLMClient`를 통해 OpenAI 호출
 - function calling 스키마 전달
 - 응답과 메타 정보 반환
@@ -178,13 +179,26 @@ app.register_blueprint(chatbot_bp)
 현재 연결 구조:
 
 ```python
-result = self.llm_client.generate_reply(
-    system_prompt=self.system_prompt,
-    user_message=text,
-    user_id=user_id,
-    function_schemas=FUNCTION_SCHEMAS,
-)
+tool_result = run_chatbot_tool(auth_header, text)
+if tool_result:
+    return {
+        "reply": tool_result["reply"],
+        ...
+    }
+
+result = self.llm_client.generate_reply(...)
 ```
+
+현재는 먼저 프로젝트 내부 기능 도구를 확인하고, 해당하지 않는 일반 질문만 OpenAI 응답으로 넘깁니다.
+
+투자성향 반영 흐름:
+
+```python
+profile_context = load_user_investment_profile_context(auth_header, user_id)
+system_prompt = f"{base_system_prompt}\n\n{profile_context}"
+```
+
+투자성향 정보가 없거나 조회에 실패하면 기본 시스템 프롬프트만 사용합니다. 따라서 프로필 조회 오류가 챗봇 응답 전체를 막지는 않습니다.
 
 ---
 
@@ -218,6 +232,7 @@ CHATBOT_MAX_HISTORY_MESSAGES=16
 CHATBOT_MAX_TOOL_CALLS=3
 CHATBOT_MINUTE_REQUEST_LIMIT=10
 CHATBOT_DAILY_TOKEN_LIMIT=50000
+CHATBOT_INTERNAL_API_BASE_URL=http://localhost:5050
 ```
 
 주의:
@@ -234,9 +249,11 @@ OpenAI function calling에 전달할 함수 스키마 정의 파일입니다.
 
 현재 정의된 도구:
 
-- `get_price`
+- `get_home_market_rankings`
+- `get_portfolio_summary`
+- `add_watchlist_item`
 - `get_holdings`
-- `create_trade_proposal`
+- `search_trade_history`
 
 중요:
 
@@ -251,14 +268,40 @@ OpenAI function calling에 전달할 함수 스키마 정의 파일입니다.
 
 현재 상태:
 
-- 사용 가능한 도구 이름만 반환
-- 실제 시세 조회/보유자산 조회/매매 제안 생성 실행 로직은 아직 연결하지 않음
+- 홈 필터별 순위 조회 연결
+- 평가 자산/주문가능금액 조회 연결
+- 관심종목 추가 연결
+- 보유 주식/코인 현황 조회 연결
+- 거래내역 조건 조회 연결
+- 실제 주문 실행 기능은 연결하지 않음
+
+홈 필터별 순위 조회 주의사항:
+
+- 챗봇 순위 조회는 홈 화면과 같은 `/api/home/market` 데이터를 기준으로 사용합니다.
+- 홈 화면의 `applyClientMarketFilters`와 같은 방식으로 지역 필터와 상승률/하락률/거래량/거래대금 정렬을 적용합니다.
+- `/api/market/rankings`를 직접 호출하면 홈 화면 필터 결과와 다른 랭킹 소스를 탈 수 있으므로, 챗봇의 "홈 필터별 순위" 기능에서는 사용하지 않습니다.
+- `/api/market/rankings`는 `MarketRankings.jsx`의 전체 순위/더보기 화면에서 아직 사용하므로 백엔드 라우트는 유지합니다.
+- 챗봇 도구명은 혼동을 줄이기 위해 `get_home_market_rankings`로 정리했습니다.
+
+현재 연결된 챗봇 질문 예시:
+
+```text
+국내 거래대금 순위 상위 5개 보여줘
+국내 상승률 순위 상위 3개 보여줘
+지금 내 돈 얼마 있어?
+삼성전자 관심종목 설정해줘
+토스에 내 주식 뭐뭐 있어?
+30만원 이상의 거래내역 다 뽑아줘
+삼성전자 거래내역만 보여줘
+```
 
 향후 연결 예정:
 
-- `get_price` -> 기존 차트/시세 API 또는 거래소 클라이언트 연결
-- `get_holdings` -> 대시보드/자산 조회 백엔드 로직 연결
-- `create_trade_proposal` -> `trade_proposals` 생성 흐름 연결
+- 뉴스/공시 요약
+- 실시간 환율 단독 조회
+- 조건주문 제안
+- `create_trade_proposal` 기반 매매 제안 생성
+- 주문 정정/취소 후 재주문 제안 생성
 
 실거래 주문은 반드시 사용자 승인 카드 이후 서버 검증을 거쳐야 합니다.
 
@@ -283,11 +326,12 @@ load_prompt("trading_rules.md")
 
 여기서 설정하는 내용:
 
-- 챗봇의 역할
+- 챗봇의 역할: AI 트레이딩 보조 챗봇이자 투자 전문가형 금융자산 운용 보조자
 - 말투
 - 답변 방식
 - 민감정보 노출 금지
 - 투자 판단 단정 금지
+- 사용자 투자성향 기반 제안 강도 조절
 
 팀원이 시스템 롤을 수정할 때는 이 파일을 먼저 확인하면 됩니다.
 

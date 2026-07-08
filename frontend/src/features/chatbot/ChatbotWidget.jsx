@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { sendChatbotMessage } from './chatbotApi'
 
 const INITIAL_MESSAGES = [
@@ -67,6 +67,15 @@ export default function ChatbotWidget({ enabled = true }) {
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const inputRef = useRef(null)
+  const messagesEndRef = useRef(null)
+
+  useEffect(() => {
+    if (!enabled || !isOpen) return
+
+    window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    })
+  }, [enabled, isOpen, messages, isSending])
 
   if (!enabled) return null
 
@@ -145,6 +154,7 @@ export default function ChatbotWidget({ enabled = true }) {
                 답변 작성 중...
               </div>
             )}
+            <div ref={messagesEndRef} aria-hidden="true" />
           </div>
 
           <div className="border-t border-slate-800 bg-[#0b1120] p-3">
