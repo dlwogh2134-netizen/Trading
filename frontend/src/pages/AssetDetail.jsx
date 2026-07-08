@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { supabase, deleteUserWatchlistItem, ensureNewsSummaries, fetchUserWatchlist, normalizeWatchlistItem, upsertUserWatchlistItem } from '../supabaseClient'
 import Header from '../components/Header.jsx'
+import AssetLogo from '../components/AssetLogo.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
@@ -2644,7 +2645,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 {overallFeedStatus.label}
               </span>
             </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <div className="mt-1.5 flex flex-wrap items-center gap-3">
+              <AssetLogo symbol={symbol} assetType={resolvedAssetType} name={displayName} size="h-10 w-10" />
               <h1 className="text-xl font-bold font-mono text-white flex items-center gap-2 min-w-0">
                 <span className="break-all">
                   {displayName !== symbol ? `${displayName} (${symbol})` : symbol}

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { ensureNewsSummaries } from '../lib/supabaseClient.js'
 import { deleteUserWatchlistItem, fetchUserWatchlist, supabase, updateUserWatchlistOrder } from '../supabaseClient'
+import AssetLogo from '../components/AssetLogo.jsx'
 import { SectionHeader } from '../components/DashboardComponents.jsx'
 import { formatNewsDate, mergeLatestNews } from '../dashboardUtils.js'
 
@@ -786,7 +787,10 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
                   >
                     <HeartIcon className="h-4 w-4" filled={!isRemoving} />
                   </button>
-                  <span className="block min-w-0 truncate font-bold">{item.name}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AssetLogo symbol={item.symbol} assetType={item.asset_type || item.assetType} name={item.name} size="h-6 w-6" />
+                    <span className="block min-w-0 truncate font-bold">{item.name}</span>
+                  </div>
                 </div>
                 <span className="mt-1 block text-xs opacity-70 font-mono">{item.market} · {item.account}</span>
               </div>

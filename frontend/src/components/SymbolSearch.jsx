@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import AssetLogo from './AssetLogo.jsx'
 
 // 종목 퀵 검색 공통 컴포넌트
 // - 심볼/종목명 입력 + 자동완성 드롭다운 + 상세 페이지 이동 기능
@@ -106,13 +107,16 @@ export default function SymbolSearch({ className = '' }) {
               <div
                 key={`${item.asset_type || 'STOCK'}-${item.symbol}`}
                 onMouseDown={() => handleSuggestionClick(item)}
-                className="flex cursor-pointer items-center justify-between border-b border-[#1f2945]/30 px-3 py-2.5 transition-all last:border-none hover:bg-blue-950/40"
+                className="flex cursor-pointer items-center justify-between border-b border-[#1f2945]/30 px-3 py-2.5 transition-all last:border-none hover:bg-blue-950/40 gap-3"
               >
-                <div className="flex min-w-0 flex-col">
-                  <span className="truncate text-xs font-bold text-white">{item.display_name}</span>
-                  <span className="truncate font-mono text-[9px] text-slate-500">
-                    {item.symbol}{getMarketLabel(item) ? ` · ${getMarketLabel(item)}` : ''}
-                  </span>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <AssetLogo symbol={item.symbol} assetType={item.asset_type} name={item.display_name} size="h-6 w-6" />
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate text-xs font-bold text-white">{item.display_name}</span>
+                    <span className="truncate font-mono text-[9px] text-slate-500">
+                      {item.symbol}{getMarketLabel(item) ? ` · ${getMarketLabel(item)}` : ''}
+                    </span>
+                  </div>
                 </div>
                 <span className="ml-2 shrink-0 rounded border border-cyan-900/60 bg-cyan-950/60 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-cyan-400">
                   {item.asset_type === 'CRYPTO' ? '코인' : '주식'}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../supabaseClient'
 import { buildApiErrorText } from '../lib/apiError.js'
+import AssetLogo from '../components/AssetLogo.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -203,6 +204,7 @@ const mapProposalToTrade = (proposal) => {
     exchange: proposal.exchange || '-',
     symbolName: displayName,
     ticker,
+    assetType: proposal.asset_type || (['COINONE', 'BINANCE'].includes(proposal.exchange) ? 'CRYPTO' : 'STOCK'),
     side: mapTradeSide(proposal.side),
     currency,
     price: price === null ? '-' : formatUnitCurrency(price, currency),
@@ -252,6 +254,7 @@ const mapBrokerHistoryToTrade = (order, symbolNameMap = {}) => {
     exchange: order.exchange || '-',
     symbolName: displayName,
     ticker: symbol,
+    assetType: order.asset_type || (['COINONE', 'BINANCE'].includes(order.exchange) ? 'CRYPTO' : 'STOCK'),
     side: mapTradeSide(order.side),
     currency,
     price: rawPrice === null ? '-' : formatUnitCurrency(rawPrice, currency),
@@ -909,8 +912,13 @@ export default function TradeHistoryTab() {
                     </span>
                   </td>
                   <td className="px-4 py-4">
-                    <p className="font-bold text-white">{trade.symbolName}</p>
-                    <p className="mt-1 text-xs text-slate-500 font-mono">{trade.ticker}</p>
+                    <div className="flex items-center gap-3">
+                      <AssetLogo symbol={trade.ticker} assetType={trade.assetType} name={trade.symbolName} size="h-8 w-8" />
+                      <div>
+                        <p className="font-bold text-white leading-tight">{trade.symbolName}</p>
+                        <p className="mt-0.5 text-xs text-slate-500 font-mono">{trade.ticker}</p>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-4">
                     <span className={`font-bold ${trade.side === '매수' || trade.side === '입금'
@@ -1006,9 +1014,7 @@ export default function TradeHistoryTab() {
               <div className="rounded-lg border border-slate-700 bg-slate-800/70 p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className="grid h-11 w-11 place-items-center rounded-lg border border-slate-600 bg-[#0f172a] text-lg font-bold text-ai-cyan">
-                      {selectedTrade.symbolName.slice(0, 1)}
-                    </div>
+                    <AssetLogo symbol={selectedTrade.ticker} assetType={selectedTrade.assetType} name={selectedTrade.symbolName} size="h-11 w-11" />
                     <div>
                       <p className="text-lg font-extrabold text-white">{selectedTrade.symbolName}</p>
                       <p className="mt-1 text-xs font-mono text-slate-400">{selectedTrade.ticker}</p>

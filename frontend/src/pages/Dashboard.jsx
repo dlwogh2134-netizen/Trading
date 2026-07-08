@@ -1,8 +1,9 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { deleteUserWatchlistItem, fetchUserWatchlist, supabase } from '../supabaseClient'
 import Header from '../components/Header.jsx'
 import Settings from './Settings'
+import AssetLogo from '../components/AssetLogo.jsx'
 import { Rate, SectionHeader, SidebarNav } from '../components/DashboardComponents.jsx'
 import WatchlistTab from './WatchlistTab.jsx'
 import AssetsTab from './AssetsTab.jsx'
@@ -1619,11 +1620,11 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                     <table className="w-full table-fixed border-collapse text-xs">
                       <thead className="block border-b border-slate-800 bg-[#0c0e15]/100 text-slate-400 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
                         <tr>
-                          <th className="px-3 py-2 text-left font-bold">종목명</th>
-                          <th className="px-3 py-2 text-left font-bold">시장</th>
-                          <th className="px-3 py-2 text-right font-bold">저장 당시 가격</th>
-                          <th className="px-3 py-2 text-right font-bold">현재가</th>
-                          <th className="px-3 py-2 text-right font-bold">현재가 변동</th>
+                          <th className="px-3 py-2 text-left font-bold w-[32%]">종목명</th>
+                          <th className="px-3 py-2 text-left font-bold w-[13%]">시장</th>
+                          <th className="px-3 py-2 text-right font-bold w-[18%]">저장 당시 가격</th>
+                          <th className="px-3 py-2 text-right font-bold w-[18%]">현재가</th>
+                          <th className="px-3 py-2 text-right font-bold w-[19%]">현재가 변동</th>
                         </tr>
                       </thead>
                       <tbody className="block max-h-[136px] overflow-y-auto divide-y divide-slate-800/40 [&>tr]:table [&>tr]:w-full [&>tr]:table-fixed">
@@ -1643,8 +1644,8 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           const isRemoving = removingWatchlistIds.has(item.id)
                           return (
                             <tr key={item.id} className="hover:bg-slate-800/20 transition-colors">
-                              <td className="px-3 py-2.5 font-bold text-white">
-                                <div className="flex min-w-[160px] items-center gap-2">
+                              <td className="px-3 py-2.5 font-bold text-white w-[32%]">
+                                <div className="flex items-center gap-2 min-w-0">
                                   <button
                                     type="button"
                                     className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-rose-400 transition-all hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1655,17 +1656,18 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                                   >
                                     <HeartIcon className="h-4 w-4" filled={!isRemoving} />
                                   </button>
-                                  <span className="truncate">{item.name}</span>
+                                  <AssetLogo symbol={item.symbol} assetType={item.assetType || item.asset_type} name={item.name} size="h-6 w-6" />
+                                  <span className="truncate min-w-0 block">{item.name}</span>
                                 </div>
                               </td>
-                              <td className="px-3 py-2.5 text-slate-400">{item.market}</td>
-                              <td className="px-3 py-2.5 text-right font-mono text-slate-300">
+                              <td className="px-3 py-2.5 text-slate-400 w-[13%] truncate">{item.market}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-slate-300 w-[18%]">
                                 {hasSavedPrice ? formatUnitCurrency(savedPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
                               </td>
-                              <td className="px-3 py-2.5 text-right font-mono text-slate-300">
+                              <td className="px-3 py-2.5 text-right font-mono text-slate-300 w-[18%]">
                                 {hasCurrentPrice ? formatUnitCurrency(currentPrice, stockCurrency, currentDisplayCurrency, exchangeRate) : '-'}
                               </td>
-                              <td className={`px-3 py-2.5 text-right font-mono font-bold ${priceDeltaTone}`}>
+                              <td className={`px-3 py-2.5 text-right font-mono font-bold w-[19%] ${priceDeltaTone}`}>
                                 {hasSavedPrice && hasCurrentPrice ? `${signedDeltaAmount} (${signedDeltaRate})` : '-'}
                               </td>
                             </tr>
@@ -1757,8 +1759,13 @@ export default function Dashboard({ isLoggedIn, userEmail, handleLogout, userPro
                           return (
                             <tr key={`${exchangeName}-${stock.env || 'REAL'}-${stock.symbol}-${index}`} className="hover:bg-slate-800/40 transition-colors">
                               <td className="py-3 px-3 font-sans">
-                                <div className="font-semibold text-white">{stock.name}</div>
-                                <div className="text-[10px] text-slate-500 font-mono">{stock.symbol}</div>
+                                <div className="flex items-center gap-3">
+                                  <AssetLogo symbol={stock.symbol} assetType={stock.asset_type || (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(normalizedExchange) ? 'CRYPTO' : 'STOCK')} name={stock.name} size="h-8 w-8" />
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-white truncate">{stock.name}</div>
+                                    <div className="text-[10px] text-slate-500 font-mono">{stock.symbol}</div>
+                                  </div>
+                                </div>
                               </td>
                               <td className="py-3 px-3 text-left font-sans font-bold text-slate-400">
                                 <span className="rounded bg-slate-800/60 border border-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase">

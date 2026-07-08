@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { Rate, SectionHeader } from '../components/DashboardComponents.jsx'
 import { getApiErrorMessage } from '../lib/apiError.js'
+import AssetLogo from '../components/AssetLogo.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 const TAG_REQUIRED_SYMBOLS = new Set(['XRP', 'XLM', 'EOS'])
@@ -715,10 +716,15 @@ export default function AssetsTab({
                 return (
                   <tr key={item.rowId || item.id} className="border-b border-slate-800/80 last:border-b-0 hover:bg-slate-800/20">
                     <td className="px-5 py-4 font-bold text-white">
-                      <Link to={`/asset/${item.assetType || 'STOCK'}/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline">
-                        {item.name}
-                      </Link>
-                      <div className="text-[10px] text-slate-500 font-mono mt-0.5">{item.id}</div>
+                      <div className="flex items-center gap-3">
+                        <AssetLogo symbol={item.id} assetType={item.assetType} name={item.name} size="h-8 w-8" />
+                        <div className="min-w-0">
+                          <Link to={`/asset/${item.assetType || 'STOCK'}/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline block truncate">
+                            {item.name}
+                          </Link>
+                          <div className="text-[10px] text-slate-500 font-mono mt-0.5">{item.id}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-5 py-4 font-sans font-bold text-slate-400">
                       <span className="rounded bg-slate-800/60 border border-slate-700/60 px-1.5 py-0.5 text-[10px] uppercase">
