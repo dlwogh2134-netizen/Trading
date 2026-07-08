@@ -891,7 +891,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       const hasMatch = items.some(item => 
         item.id === favoritePayload.symbol &&
         item.assetType === favoritePayload.asset_type &&
-        item.exchange === favoritePayload.exchange
+        (favoritePayload.asset_type === 'CRYPTO' || item.exchange === favoritePayload.exchange)
       )
       setIsFavorite(hasMatch)
     } catch (e) {

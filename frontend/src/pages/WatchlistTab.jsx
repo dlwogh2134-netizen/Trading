@@ -108,7 +108,13 @@ function getChartConfig(item, assetType) {
   return { exchange, brokerEnv }
 }
 
-function WatchlistCandlestickChart({ item, assetType, onLatestPriceChange }) {
+function getCryptoChartConfig(chartMode = 'KRW') {
+  if (chartMode === 'USD') return { exchange: 'BINANCE', brokerEnv: 'REAL' }
+  if (chartMode === 'FUTURES') return { exchange: 'BINANCE_UM_FUTURES', brokerEnv: 'REAL' }
+  return { exchange: 'COINONE', brokerEnv: 'REAL' }
+}
+
+function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoChartModeChange, onLatestPriceChange }) {
   const defaultInterval = assetType === 'CRYPTO' ? '1h' : '1d'
   const [chartInterval, setChartInterval] = useState(defaultInterval)
   const [candleData, setCandleData] = useState([])
@@ -207,7 +213,9 @@ function WatchlistCandlestickChart({ item, assetType, onLatestPriceChange }) {
       setChartError('')
 
       try {
-        const { exchange, brokerEnv } = getChartConfig(item, assetType)
+        const { exchange, brokerEnv } = assetType === 'CRYPTO'
+          ? getCryptoChartConfig(cryptoChartMode)
+          : getChartConfig(item, assetType)
         const authHeader = await getAuthHeader()
         const params = new URLSearchParams({
           exchange,
@@ -285,7 +293,7 @@ function WatchlistCandlestickChart({ item, assetType, onLatestPriceChange }) {
       isMounted = false
       if (abortControllerRef.current) abortControllerRef.current.abort()
     }
-  }, [item?.id, item?.exchange, item?.account, assetType, chartInterval, onLatestPriceChange])
+  }, [item?.id, item?.exchange, item?.account, assetType, chartInterval, cryptoChartMode, onLatestPriceChange])
 
   useEffect(() => {
     if (!chartRef.current || !candleSeriesRef.current) return
@@ -297,27 +305,49 @@ function WatchlistCandlestickChart({ item, assetType, onLatestPriceChange }) {
   }, [candleData])
 
   const intervalOptions = assetType === 'CRYPTO' ? CRYPTO_INTERVALS : STOCK_INTERVALS
+  const cryptoChartModes = [
+    { value: 'KRW', label: '₩', title: '원화 차트' },
+    { value: 'USD', label: '$', title: '달러 차트' },
+    { value: 'FUTURES', label: 'F', title: '선물 차트' },
+  ]
 
   return (
     <div className="rounded-lg border border-[#1f2945]/60 bg-[#0e1529] p-3">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-xs font-bold text-white">{item?.name || item?.id}</p>
-          <p className="mt-0.5 font-mono text-[10px] text-slate-500">
-            {getChartConfig(item, assetType).exchange} · {item?.id}
+      <div className="mb-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-xs font-bold text-white">{item?.name || item?.id}</p>
+          <p className="mt-0.5 truncate font-mono text-[10px] text-slate-500">
+            {(assetType === 'CRYPTO' ? getCryptoChartConfig(cryptoChartMode) : getChartConfig(item, assetType)).exchange} · {item?.id}
           </p>
         </div>
-        <div className="flex flex-wrap gap-1 rounded border border-[#2b395b] bg-[#1b253b] p-0.5">
-          {intervalOptions.map((option) => (
-            <button
-              key={option.value}
-              className={`rounded px-2 py-1 text-[10px] font-bold transition ${chartInterval === option.value ? 'bg-cyan-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
-              type="button"
-              onClick={() => setChartInterval(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className="col-span-2 ml-auto flex min-w-0 flex-wrap justify-end gap-1 md:col-span-1">
+          {assetType === 'CRYPTO' ? (
+            <div className="flex shrink-0 gap-1 rounded border border-[#2b395b] bg-[#070b19] p-0.5">
+              {cryptoChartModes.map((option) => (
+                <button
+                  key={option.value}
+                  className={`h-6 min-w-7 rounded px-2 text-[10px] font-black transition ${cryptoChartMode === option.value ? 'bg-cyan-500 text-slate-950 shadow-[0_0_12px_rgba(34,211,238,0.18)]' : 'text-slate-400 hover:bg-cyan-500/10 hover:text-cyan-200'}`}
+                  type="button"
+                  title={option.title}
+                  onClick={() => onCryptoChartModeChange?.(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex min-w-0 flex-wrap justify-end gap-1 rounded border border-[#2b395b] bg-[#1b253b] p-0.5">
+            {intervalOptions.map((option) => (
+              <button
+                key={option.value}
+                className={`rounded px-2 py-1 text-[10px] font-bold transition ${chartInterval === option.value ? 'bg-cyan-500 text-slate-950' : 'text-slate-400 hover:text-white'}`}
+                type="button"
+                onClick={() => setChartInterval(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <div className="relative min-h-[360px] overflow-hidden rounded bg-[#0e1529]">
@@ -342,6 +372,10 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
     const numeric = Number(value)
     const val = Number.isFinite(numeric) ? numeric : 0
     const rate = Number(exchangeRate) || 1380
+    const getDollarFractionDigits = (displayValue) => {
+      const absoluteValue = Math.abs(Number(displayValue))
+      return absoluteValue > 0 && absoluteValue < 0.1 ? 3 : 1
+    }
 
     if (targetDisplayCurrency === 'KRW') {
       if (currency === 'USD' || currency === 'USDT') {
@@ -352,13 +386,14 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
 
     if (targetDisplayCurrency === 'USD') {
       if (currency === 'KRW') {
-        return `$${(val / rate).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+        const displayValue = val / rate
+        return `$${displayValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getDollarFractionDigits(displayValue) })}`
       }
-      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getDollarFractionDigits(val) })}`
     }
 
     if (currency === 'USD' || currency === 'USDT') {
-      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
+      return `$${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: getDollarFractionDigits(val) })}`
     }
     return `₩${val.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`
   }
@@ -374,6 +409,7 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
   const [expandedNewsId, setExpandedNewsId] = useState('')
   const [summaryLoadingId, setSummaryLoadingId] = useState('')
   const [chartCurrentPrice, setChartCurrentPrice] = useState(null)
+  const [cryptoChartMode, setCryptoChartMode] = useState('KRW')
   const [marketFilter, setMarketFilter] = useState('all')
   const [draggingWatchId, setDraggingWatchId] = useState('')
   const [dragOverWatchId, setDragOverWatchId] = useState('')
@@ -386,10 +422,29 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
   const useSlider = filteredWatchlistItems.length >= 5
 
   const assetType = selectedItem?.assetType || (selectedItem?.market === '코인' ? 'CRYPTO' : 'STOCK')
-  const selectedCurrency = selectedItem?.currency || (assetType === 'CRYPTO' ? 'KRW' : selectedItem?.marketCountry === 'US' ? 'USD' : 'KRW')
-  const currentDisplayCurrency = selectedCurrency === 'USD' || selectedCurrency === 'USDT' ? displayCurrency : 'KRW'
-  const baselinePrice = Number(selectedItem?.latestPrice)
-  const fallbackCurrentPrice = Number(selectedItem?.latestPrice ?? selectedItem?.average)
+  const selectedCurrency = assetType === 'CRYPTO'
+    ? (cryptoChartMode === 'KRW' ? 'KRW' : 'USDT')
+    : (selectedItem?.currency || (selectedItem?.marketCountry === 'US' ? 'USD' : 'KRW'))
+  const currentDisplayCurrency = assetType === 'CRYPTO'
+    ? (cryptoChartMode === 'KRW' ? 'KRW' : 'USD')
+    : (selectedCurrency === 'USD' || selectedCurrency === 'USDT' ? displayCurrency : 'KRW')
+  const convertCryptoSavedPrice = (value) => {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return NaN
+    const savedCurrency = String(selectedItem?.currency || 'KRW').toUpperCase()
+    const rate = Number(exchangeRate) || 1380
+    if (assetType !== 'CRYPTO') return numeric
+    if (cryptoChartMode === 'KRW') {
+      return savedCurrency === 'USD' || savedCurrency === 'USDT' ? numeric * rate : numeric
+    }
+    return savedCurrency === 'KRW' ? numeric / rate : numeric
+  }
+  const baselinePrice = assetType === 'CRYPTO'
+    ? convertCryptoSavedPrice(selectedItem?.latestPrice)
+    : Number(selectedItem?.latestPrice)
+  const fallbackCurrentPrice = assetType === 'CRYPTO'
+    ? baselinePrice
+    : Number(selectedItem?.latestPrice ?? selectedItem?.average)
   const currentPrice = Number.isFinite(Number(chartCurrentPrice)) ? Number(chartCurrentPrice) : fallbackCurrentPrice
   const hasBaselinePrice = Number.isFinite(baselinePrice) && baselinePrice > 0
   const hasCurrentPrice = Number.isFinite(currentPrice)
@@ -765,6 +820,8 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
           <WatchlistCandlestickChart
             item={selectedItem}
             assetType={assetType}
+            cryptoChartMode={cryptoChartMode}
+            onCryptoChartModeChange={setCryptoChartMode}
             onLatestPriceChange={setChartCurrentPrice}
           />
         ) : (
