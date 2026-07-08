@@ -262,7 +262,7 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
           <Header isLoggedIn={isLoggedIn} userEmail={userEmail} handleLogout={handleLogout} />
         ) : null}
 
-        <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
+        <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-4 sm:p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Admin Support</p>
@@ -274,7 +274,7 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
             <select
               value={sortOrder}
               onChange={(event) => setSortOrder(event.target.value)}
-              className="rounded border border-slate-700 bg-[#0f172a] px-3 py-2 text-xs font-bold text-slate-300 outline-none transition focus:border-ai-cyan"
+              className="w-full rounded border border-slate-700 bg-[#0f172a] px-3 py-2 text-xs font-bold text-slate-300 outline-none transition focus:border-ai-cyan sm:w-auto"
               aria-label="문의 정렬"
             >
               <option value="desc">최신순</option>
@@ -289,8 +289,8 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-4">
-          <div className="grid grid-cols-[minmax(180px,1.5fr)_120px_180px_120px_120px] rounded-t-lg bg-[#0f172a] text-xs font-bold text-slate-400">
+        <section className="overflow-hidden rounded-lg border border-slate-700/80 bg-slate-surface p-3 sm:p-4">
+          <div className="hidden grid-cols-[minmax(180px,1.5fr)_120px_180px_120px_120px] rounded-t-lg bg-[#0f172a] text-xs font-bold text-slate-400 lg:grid">
             <div className="px-4 py-3">제목</div>
             <div className="px-4 py-3">유형</div>
             <div className="px-4 py-3">작성자</div>
@@ -298,7 +298,7 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
             <div className="px-4 py-3">작성일</div>
           </div>
 
-          <div className="overflow-hidden rounded-b-lg border border-t-0 border-slate-800">
+          <div className="overflow-hidden rounded-lg border border-slate-800 lg:rounded-b-lg lg:rounded-t-none lg:border-t-0">
             {isLoading ? (
               <div className="border-t border-slate-800 px-4 py-10 text-center text-sm font-bold text-slate-400">문의 목록을 불러오는 중입니다.</div>
             ) : loadError ? (
@@ -312,18 +312,18 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
                   <button
                     type="button"
                     aria-expanded={isExpanded}
-                    className="grid w-full grid-cols-[minmax(180px,1.5fr)_120px_180px_120px_120px] text-left text-sm text-slate-300 transition hover:bg-white/[0.03]"
+                    className="grid w-full grid-cols-1 gap-2 px-4 py-4 text-left text-sm text-slate-300 transition hover:bg-white/[0.03] sm:grid-cols-2 lg:grid-cols-[minmax(180px,1.5fr)_120px_180px_120px_120px] lg:gap-0 lg:px-0 lg:py-0"
                     onClick={() => setExpandedInquiryId(isExpanded ? null : item.id)}
                   >
-                    <span className="px-4 py-3 font-bold text-white">{item.title}</span>
-                    <span className="px-4 py-3">{inquiryTypeLabels[item.inquiryType] || '-'}</span>
-                    <span className="truncate px-4 py-3">{item.userEmail}</span>
-                    <span className="px-4 py-3">{inquiryStatusLabels[item.status] || item.status}</span>
-                    <span className="px-4 py-3">{formatDate(item.createdAt)}</span>
+                    <span className="min-w-0 font-bold text-white sm:col-span-2 lg:col-span-1 lg:px-4 lg:py-3">{item.title}</span>
+                    <span className="text-xs text-slate-400 lg:px-4 lg:py-3 lg:text-sm lg:text-slate-300">{inquiryTypeLabels[item.inquiryType] || '-'}</span>
+                    <span className="min-w-0 truncate text-xs text-slate-400 lg:px-4 lg:py-3 lg:text-sm lg:text-slate-300">{item.userEmail}</span>
+                    <span className="text-xs font-bold text-slate-200 lg:px-4 lg:py-3 lg:text-sm lg:font-normal lg:text-slate-300">{inquiryStatusLabels[item.status] || item.status}</span>
+                    <span className="text-xs text-slate-500 sm:text-right lg:px-4 lg:py-3 lg:text-left lg:text-sm lg:text-slate-300">{formatDate(item.createdAt)}</span>
                   </button>
 
                   {isExpanded ? (
-                    <div className="grid gap-3 bg-[#0f172a]/70 px-4 py-4 text-xs leading-5 text-slate-300 md:grid-cols-2">
+                    <div className="grid gap-3 bg-[#0f172a]/70 px-3 py-4 text-xs leading-5 text-slate-300 sm:px-4 md:grid-cols-2">
                       <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                         <p className="font-bold text-slate-500">문의 내용</p>
                         <p className="mt-2 whitespace-pre-wrap">{item.content}</p>
@@ -344,10 +344,10 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
                         <p className="mt-2">{inquiryStatusLabels[item.status] || item.status}</p>
                       </div>
                       {canReply ? (
-                        <div className="flex justify-end md:col-span-2">
+                        <div className="flex justify-stretch md:col-span-2 md:justify-end">
                           <button
                             type="button"
-                            className="inline-flex items-center gap-2 rounded border border-ai-cyan/40 px-3 py-1.5 text-xs font-bold text-ai-cyan transition hover:border-ai-cyan hover:bg-ai-cyan/10"
+                            className="inline-flex w-full items-center justify-center gap-2 rounded border border-ai-cyan/40 px-3 py-2 text-xs font-bold text-ai-cyan transition hover:border-ai-cyan hover:bg-ai-cyan/10 sm:w-auto sm:py-1.5"
                             onClick={() => {
                               setSubmitError('')
                               setReplyInquiry(item)

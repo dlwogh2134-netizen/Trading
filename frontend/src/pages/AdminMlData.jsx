@@ -2752,11 +2752,11 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
 
       <main className="mx-auto flex max-w-7xl flex-col gap-6">
         {/* 관리자 내부 탭 */}
-        <div className="flex border-b border-slate-800">
+        <div className="flex overflow-x-auto border-b border-slate-800">
           <button
             type="button"
             onClick={() => setAdminTab('ml')}
-            className={`px-6 py-3 text-sm font-bold border-b-2 transition ${
+            className={`shrink-0 px-4 py-3 text-sm font-bold border-b-2 transition sm:px-6 ${
               adminTab === 'ml'
                 ? 'border-ai-cyan text-white bg-ai-cyan/5'
                 : 'border-transparent text-slate-400 hover:text-white'
@@ -2767,7 +2767,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
           <button
             type="button"
             onClick={() => setAdminTab('inquiries')}
-            className={`px-6 py-3 text-sm font-bold border-b-2 transition ${
+            className={`shrink-0 px-4 py-3 text-sm font-bold border-b-2 transition sm:px-6 ${
               adminTab === 'inquiries'
                 ? 'border-ai-cyan text-white bg-ai-cyan/5'
                 : 'border-transparent text-slate-400 hover:text-white'
