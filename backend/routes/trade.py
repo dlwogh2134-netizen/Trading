@@ -544,9 +544,9 @@ def _get_shared_toss_client(user_id=None, broker_env="REAL"):
             pass
 
     # 2. 백엔드 시스템 환경 변수에 토스 공용 키가 등록되어 있는 경우 사용
-    shared_client_id = os.getenv("SHARED_TOSS_CLIENT_ID") or os.getenv("TOSS_CLIENT_ID")
-    shared_client_secret = os.getenv("SHARED_TOSS_CLIENT_SECRET") or os.getenv("TOSS_CLIENT_SECRET")
-    shared_account_seq = os.getenv("SHARED_TOSS_ACCOUNT_SEQ") or os.getenv("TOSS_ACCOUNT_SEQ")
+    shared_client_id = os.getenv("SHARED_TOSS_CLIENT_ID") or os.getenv("TOSS_CLIENT_ID") or os.getenv("TOSS_API_KEY")
+    shared_client_secret = os.getenv("SHARED_TOSS_CLIENT_SECRET") or os.getenv("TOSS_CLIENT_SECRET") or os.getenv("TOSS_SECRET_KEY")
+    shared_account_seq = os.getenv("SHARED_TOSS_ACCOUNT_SEQ") or os.getenv("TOSS_ACCOUNT_SEQ") or os.getenv("TOSS_ACCOUNT_SEQ")
     
     if shared_client_id and shared_client_secret:
         try:
@@ -1025,6 +1025,25 @@ def _ensure_kis_order_modifiable(auth_header: str, proposal_id: str, proposal: d
 
     _mark_kis_order_closed(auth_header, proposal_id, current_order)
     raise ValueError("이미 체결되어 정정/취소할 수 없습니다.")
+
+def _get_holding_info_from_balance(client, symbol: str) -> dict | None:
+    """
+    잔고 API에서 특정 종목의 현재 보유 수량과 평균단가를 조회합니다.
+    """
+    try:
+        balance = client.get_balance() or {}
+    except Exception:
+        return None
+
+    target_symbol = str(symbol or "").strip().upper()
+    for item in balance.get("holdings", []) or []:
+        holding_symbol = str(item.get("symbol") or "").strip().upper()
+        if holding_symbol == target_symbol:
+            return {
+                "qty": float(item.get("qty") or 0.0),
+                "avg_price": float(item.get("avg_price") or 0.0)
+            }
+    return {"qty": 0.0, "avg_price": 0.0}
 
 
 def _get_holding_qty_from_balance(client, symbol: str) -> float | None:
@@ -4089,8 +4108,8 @@ def create_auto_trading_rule():
     execution_mode = req_data.get("execution_mode", "PROPOSAL")
     broker_env = req_data.get("broker_env", "REAL").upper()
 
-    if not exchange or not symbol or entry_price <= 0 or quantity <= 0:
-        return jsonify({"success": False, "message": "필수 입력값(거래소, 종목, 진입가, 수량)이 누락되었거나 올바르지 않습니다."}), 400
+    if not exchange or not symbol or quantity <= 0:
+        return jsonify({"success": False, "message": "필수 입력값(거래소, 종목, 수량)이 누락되었거나 올바르지 않습니다."}), 400
 
     # 실제 계좌의 보유 잔고 체크 (없는 주식 감시 등록 차단 가드)
     try:
@@ -4099,8 +4118,8 @@ def create_auto_trading_rule():
         if not client:
             return jsonify({"success": False, "message": "거래소 클라이언트를 생성할 수 없습니다."}), 400
         
-        qty = _get_holding_qty_from_balance(client, symbol)
-        if qty is None or qty <= 0:
+        holding = _get_holding_info_from_balance(client, symbol)
+        if not holding or holding["qty"] <= 0:
             return jsonify({
                 "success": False,
                 "message": f"현재 {exchange} ({broker_env}) 계좌에 {symbol} 자산의 보유 수량이 없거나 조회할 수 없습니다. 보유 중인 자산에 대해서만 감시 등록이 가능합니다."
@@ -4109,6 +4128,14 @@ def create_auto_trading_rule():
         current_app.logger.exception("조건감시 등록 전 보유 잔고 조회 실패")
         return jsonify({"success": False, "message": f"계좌 보유 잔고를 확인할 수 없어 등록이 취소되었습니다. ({str(e)})"}), 400
 
+    # 사용자가 진입가를 입력하지 않았거나, 계좌에 보유 평단가가 유효한 경우 평단가 우선 적용
+    final_entry_price = entry_price
+    if final_entry_price <= 0 or (holding.get("avg_price") or 0) > 0:
+        final_entry_price = holding["avg_price"]
+
+    if final_entry_price <= 0:
+        return jsonify({"success": False, "message": "진입 가격(평균단가)을 특정할 수 없어 감시 등록이 불가능합니다."}), 400
+
     rule_data = {
         "user_id": user_id,
         "exchange": exchange,
@@ -4116,8 +4143,8 @@ def create_auto_trading_rule():
         "ticker": symbol,
         "symbol": symbol,
         "broker_env": broker_env,
-        "entry_price": entry_price,
-        "investment_amount": entry_price * quantity,
+        "entry_price": final_entry_price,
+        "investment_amount": final_entry_price * quantity,
         "quantity": quantity,
         "target_profit_rate": target_profit_rate,
         "stop_loss_rate": stop_loss_rate,
@@ -4133,3 +4160,97 @@ def create_auto_trading_rule():
     except Exception as error:
         current_app.logger.exception("조건감시 규칙 생성 실패")
         return jsonify(format_error_payload(error, "조건감시 규칙 생성 실패")), 400
+
+
+@trade_bp.route("/api/stocks/warnings", methods=["GET"])
+def get_stocks_warnings():
+    """
+    특정 주식 종목의 거래정지, 투자경고, 유의사항 및 VI 발동 정보를 조회합니다.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return jsonify({"success": False, "message": "인증 헤더가 누락되었습니다."}), 401
+
+    try:
+        user_id, _ = get_user_id_from_header(auth_header)
+    except Exception as e:
+        return jsonify({"success": False, "message": f"인증 실패: {str(e)}"}), 401
+
+    symbol = request.args.get("symbol", "").strip()
+    exchange = request.args.get("exchange", "TOSS").strip().upper()
+    broker_env = request.args.get("broker_env", "REAL").strip().upper()
+
+    if not symbol:
+        return jsonify({"success": False, "message": "symbol 파라미터가 필수적입니다."}), 400
+
+    try:
+        # KIS, TOSS에 무관하게 종목 유의사항은 캘린더처럼 Toss API를 활용해 통합 조회
+        client = _get_shared_toss_client(user_id=user_id, broker_env=broker_env)
+        if not client:
+            return jsonify({"success": False, "message": "Toss 클라이언트를 초기화할 수 없습니다."}), 500
+
+        result = client.get_stock_warnings(symbol)
+        warnings = result.get("warnings", [])
+
+        # 추가 조치: 종목 기본 정보 조회를 통해 거래소 거래정지(krx_trading_suspended) 및 정리매매(liquidation_trading) 상태 합성
+        try:
+            stock_info = client.get_stock_info(symbol)
+            if stock_info and isinstance(stock_info, dict):
+                korean_detail = stock_info.get("korean_market_detail") or {}
+                
+                # 1. 거래정지 융합
+                if korean_detail.get("krx_trading_suspended"):
+                    if not any(w.get("warning_type") == "TRADING_SUSPENDED" for w in warnings):
+                        warnings.insert(0, {
+                            "warning_type": "TRADING_SUSPENDED",
+                            "exchange": stock_info.get("market"),
+                            "start_date": None,
+                            "end_date": None,
+                            "label": "거래정지",
+                            "raw": {"reason": "KRX 거래정지 종목 (stock_info 감지)"}
+                        })
+                
+                # 2. 정리매매 융합
+                if korean_detail.get("liquidation_trading"):
+                    if not any(w.get("warning_type") == "LIQUIDATION_TRADING" for w in warnings):
+                        warnings.insert(0, {
+                            "warning_type": "LIQUIDATION_TRADING",
+                            "exchange": stock_info.get("market"),
+                            "start_date": None,
+                            "end_date": None,
+                            "label": "정리매매",
+                            "raw": {"reason": "KRX 정리매매 종목 (stock_info 감지)"}
+                        })
+        except Exception as info_err:
+            current_app.logger.warning(f"warnings 라우트 내 stock_info 추가 조회 실패 (비치명적 에러): {str(info_err)}")
+
+        WARNING_LABEL_MAP = {
+            "TRADING_SUSPENDED": "거래정지",
+            "LIQUIDATION_TRADING": "정리매매",
+            "INVESTMENT_RISK": "투자위험",
+            "INVESTMENT_WARNING": "투자경고",
+            "OVERHEATED": "단기과열",
+            "VI_STATIC_AND_DYNAMIC": "정적/동적 VI",
+            "VI_STATIC": "정적 VI",
+            "VI_DYNAMIC": "동적 VI",
+            "STOCK_WARRANTS": "신주인수권",
+        }
+
+        for w in warnings:
+            w_type = w.get("warning_type", "")
+            w["label"] = w.get("label") or w.get("raw", {}).get("label") or WARNING_LABEL_MAP.get(w_type, w_type.replace("_", " "))
+
+        return jsonify({
+            "success": True,
+            "data": {
+                "symbol": symbol,
+                "warnings": warnings,
+                "symbol_used": result.get("symbol_used")
+            }
+        })
+    except Exception as e:
+        current_app.logger.exception("종목 유의사항 조회 실패")
+        err_payload = format_error_payload(e, context="종목 유의사항 조회 실패", exchange="TOSS")
+        return jsonify(err_payload), 500
+
+
