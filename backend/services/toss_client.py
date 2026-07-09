@@ -1209,7 +1209,7 @@ class TossClient(ExchangeClient):
 
         # 2. 토스 미지원 주기인 경우 자체 리샘플링
         # 2-A. 분봉/시간봉 리샘플링 (5m, 15m, 30m, 60m, 1h 등)
-        if normalized_interval in ("5m", "15m", "30m", "60m", "1h"):
+        if normalized_interval in ("5m", "15m", "30m", "60m", "1h", "4h"):
             interval_minutes = 5
             if normalized_interval == "15m":
                 interval_minutes = 15
@@ -1217,6 +1217,8 @@ class TossClient(ExchangeClient):
                 interval_minutes = 30
             elif normalized_interval in ("60m", "1h"):
                 interval_minutes = 60
+            elif normalized_interval == "4h":
+                interval_minutes = 240
 
             # 1분봉 데이터를 최대한 많이 가져옴 (리샘플링하기 위해 count보다 넉넉히 가져옴, 최대 200개 한계)
             raw_candles = self.get_candles(symbol, interval="1m", count=200)
