@@ -1405,7 +1405,14 @@ class TossClient(ExchangeClient):
             
         return data
 
-    def _get_exchange_rate_impl(self) -> float:
+    def _get_exchange_rate_impl(
+        self,
+        base_currency: str = "USD",
+        quote_currency: str = "KRW",
+        allow_default: bool = True,
+    ) -> float:
+        base_currency = str(base_currency or "USD").strip().upper()
+        quote_currency = str(quote_currency or "KRW").strip().upper()
         try:
             token = self._get_cached_token()
             res = self._send_request(
@@ -1416,8 +1423,8 @@ class TossClient(ExchangeClient):
                     "Content-Type": "application/json",
                 },
                 params={
-                    "baseCurrency": "USD",
-                    "quoteCurrency": "KRW",
+                    "baseCurrency": base_currency,
+                    "quoteCurrency": quote_currency,
                 },
                 timeout=15,
             )
@@ -1427,8 +1434,11 @@ class TossClient(ExchangeClient):
                 rate = result.get("rate")
                 if rate:
                     return float(rate)
+            raise Exception(f"Toss exchange-rate failed: {res.text}")
         except Exception as error:
             logger.warning(f"[Toss Client] exchange-rate request failed: {error}")
+            if not allow_default or base_currency != "USD" or quote_currency != "KRW":
+                raise
 
         return 1500.0
 
@@ -1440,6 +1450,12 @@ class TossClient(ExchangeClient):
             return self._get_exchange_rate_impl()
         except Exception:
             return 1500.0
+
+    def get_exchange_rate_pair(self, base_currency: str = "USD", quote_currency: str = "KRW") -> float:
+        """
+        지정한 통화쌍의 실시간 환율 정보를 조회합니다.
+        """
+        return self._get_exchange_rate_impl(base_currency, quote_currency, allow_default=False)
 
     def _get_orderbook_impl(self, symbol: str) -> dict:
         token = self._get_cached_token()
