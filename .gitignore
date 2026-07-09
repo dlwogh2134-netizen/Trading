@@ -44,5 +44,4 @@ ml/models/*
 
 .codegraph
 
-# pnpm cache store
-.pnpm-store/
+
