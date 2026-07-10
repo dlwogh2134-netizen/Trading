@@ -57,6 +57,7 @@
   - 실거래 하드캡을 계산하고 승인 직전 원자 선점 RPC를 호출한다.
 - Create: `backend/tests/test_chatbot_conversation_repository.py`
 - Create: `backend/tests/test_chatbot_llm_streaming.py`
+- Create: `backend/tests/test_chatbot_rag_service.py`
 - Create: `backend/tests/test_trade_proposal_approval_safety.py`
 - Modify: `backend/tests/test_chatbot_profile_context.py`
 - Modify: `backend/tests/test_chatbot_route_auth.py`
@@ -1477,7 +1478,7 @@ git commit -m "fix: 챗봇 입력과 승인 카드 표시 흐름 개선"
 Run:
 
 ```bash
-python3 -m pytest backend/tests/test_chatbot_route_auth.py backend/tests/test_chatbot_profile_context.py backend/tests/test_chatbot_safety_and_proposals.py backend/tests/test_chatbot_trade_history.py backend/tests/test_chatbot_llm_limits.py backend/tests/test_chatbot_conversation_repository.py backend/tests/test_chatbot_llm_streaming.py backend/tests/test_chatbot_portfolio_summary_service.py backend/tests/test_trade_proposal_approval_safety.py tests/backend/test_chatbot_order_parser.py tests/backend/test_chatbot_memory_service.py tests/backend/test_chatbot_recommendation_service.py tests/backend/test_knowledge_repository.py tests/backend/test_knowledge_routes.py -q
+python3 -m pytest backend/tests/test_chatbot_route_auth.py backend/tests/test_chatbot_profile_context.py backend/tests/test_chatbot_safety_and_proposals.py backend/tests/test_chatbot_trade_history.py backend/tests/test_chatbot_llm_limits.py backend/tests/test_chatbot_conversation_repository.py backend/tests/test_chatbot_llm_streaming.py backend/tests/test_chatbot_portfolio_summary_service.py backend/tests/test_chatbot_rag_service.py backend/tests/test_trade_proposal_approval_safety.py tests/backend/test_chatbot_order_parser.py tests/backend/test_chatbot_memory_service.py tests/backend/test_chatbot_recommendation_service.py tests/backend/test_knowledge_repository.py tests/backend/test_knowledge_routes.py -q
 ```
 
 Expected: 모든 테스트 PASS.
