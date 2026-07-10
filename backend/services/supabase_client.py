@@ -48,7 +48,10 @@ def query_supabase(
         "Content-Type": "application/json"
     }
     if extra_headers:
-        headers.update(extra_headers)
+        for header_name, header_value in extra_headers.items():
+            if str(header_name).casefold() != "prefer":
+                raise ValueError("추가 Supabase 헤더는 Prefer만 허용됩니다.")
+            headers["Prefer"] = header_value
     
     if method == "GET":
         res = requests.get(url, headers=headers, params=params)

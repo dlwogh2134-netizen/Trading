@@ -209,13 +209,20 @@ class ChatbotConversationRepository:
         user_id: str,
         updates: dict,
     ) -> None:
-        query_supabase(
+        updated_rows = query_supabase(
             auth_header,
             "chatbot_conversation_states",
             "PATCH",
             json_data=updates,
             params={"user_id": f"eq.{user_id}"},
+            extra_headers={"Prefer": "return=representation"},
         )
+        if (
+            not isinstance(updated_rows, list)
+            or len(updated_rows) != 1
+            or not isinstance(updated_rows[0], dict)
+        ):
+            raise RuntimeError("챗봇 대화 상태는 정확히 1행 갱신되어야 합니다.")
 
     @staticmethod
     def _is_unexpired(expires_at: datetime | None, now: datetime | None) -> bool:
