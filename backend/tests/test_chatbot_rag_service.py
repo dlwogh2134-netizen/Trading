@@ -37,6 +37,10 @@ def test_chatbot_rag_service_retrieves_disclosure_and_obsidian_chunks(monkeypatc
         return matched_rows
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    monkeypatch.setenv("CHATBOT_RAG_TOP_K", "5")
+    monkeypatch.setenv("CHATBOT_RAG_MAX_CONTEXT_CHARS", "6000")
+    monkeypatch.setenv("CHATBOT_OPENAI_TIMEOUT_SECONDS", "30")
     monkeypatch.setattr(rag_module.requests, "post", fake_post)
     monkeypatch.setattr(rag_module, "safe_query_supabase", fake_query)
 
