@@ -1,6 +1,9 @@
+import json
 import os
 import re
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
@@ -12,6 +15,89 @@ from backend.services.chatbot.web_fallback_search_service import ChatbotWebFallb
 
 
 API_BASE_URL = os.getenv("CHATBOT_INTERNAL_API_BASE_URL", "http://localhost:5050")
+
+SYMBOL_QUERY_ALIASES = {
+    "삼전": "삼성전자",
+    "하닉": "SK하이닉스",
+    "하이닉스": "SK하이닉스",
+    "애플": "AAPL",
+    "마이크로소프트": "MSFT",
+    "마소": "MSFT",
+    "엔비디아": "NVDA",
+    "아마존": "AMZN",
+    "구글": "GOOGL",
+    "알파벳": "GOOGL",
+    "메타": "META",
+    "테슬라": "TSLA",
+    "브로드컴": "AVGO",
+    "넷플릭스": "NFLX",
+    "코스트코": "COST",
+    "오라클": "ORCL",
+    "어도비": "ADBE",
+    "퀄컴": "QCOM",
+    "인텔": "INTC",
+    "팔란티어": "PLTR",
+    "우버": "UBER",
+    "비트": "BTC",
+    "비트코인": "BTC",
+    "이더": "ETH",
+    "이더리움": "ETH",
+    "리플": "XRP",
+    "엑스알피": "XRP",
+    "도지": "DOGE",
+    "도지코인": "DOGE",
+    "테더": "USDT",
+    "솔라나": "SOL",
+    "에이다": "ADA",
+    "트론": "TRX",
+}
+
+SYMBOL_COMMAND_PATTERN = re.compile(
+    r"(관심\s*종목|관심종목|설정해줘|추가해줘|등록해줘|보여줘|조회해줘|알려줘|"
+    r"거래내역|거래\s*내역|주문내역|주문\s*내역|뉴스|공시|시세|환율|"
+    r"설정|추가|등록|해제|삭제|조회|검색)"
+)
+
+KOREAN_MONEY_NUMBER_PATTERN = re.compile(
+    r"[일한이삼사오육칠팔구십백천만]+\s*(?:만원|천원|원|만)"
+)
+
+
+@lru_cache(maxsize=1)
+def _load_training_universe_symbols() -> set[str]:
+    universe_path = Path(__file__).resolve().parents[3] / "ml" / "data" / "reference" / "training_universes.json"
+    try:
+        payload = json.loads(universe_path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+
+    symbols: set[str] = set()
+    for values in payload.values() if isinstance(payload, dict) else []:
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            symbol = str(value or "").strip().upper()
+            if symbol:
+                symbols.add(symbol)
+    return symbols
+
+
+def _normalize_symbol_candidate(candidate: str) -> str:
+    symbol = str(candidate or "").strip()
+    if not symbol:
+        return ""
+
+    alias = SYMBOL_QUERY_ALIASES.get(symbol) or SYMBOL_QUERY_ALIASES.get(symbol.upper())
+    if alias:
+        return alias
+
+    upper_symbol = symbol.upper()
+    training_symbols = _load_training_universe_symbols()
+    if upper_symbol in training_symbols and upper_symbol.endswith("USDT") and len(upper_symbol) > 4:
+        return upper_symbol[:-4]
+    if upper_symbol in training_symbols:
+        return upper_symbol
+    return symbol
 
 
 def list_available_tools() -> list[str]:
@@ -76,15 +162,16 @@ def _format_money(value, currency: str = "KRW") -> str:
 
 
 def _extract_symbol_query(text: str) -> str:
-    cleaned = re.sub(r"(관심\s*종목|관심종목|설정해줘|추가해줘|등록해줘|보여줘|조회해줘|거래내역|거래\s*내역|주문내역|주문\s*내역|뉴스|공시)", " ", text)
+    cleaned = SYMBOL_COMMAND_PATTERN.sub(" ", text)
     cleaned = re.sub(r"\d+(?:\.\d+)?\s*(만원|천원|원|만)", " ", cleaned)
-    cleaned = re.sub(r"[일한이삼사오육칠팔구십백천만]+\s*(원|이상|이하|초과|미만|넘는|넘어|부터)?", " ", cleaned)
+    cleaned = KOREAN_MONEY_NUMBER_PATTERN.sub(" ", cleaned)
     cleaned = re.sub(r"(이상|이하|초과|미만|넘는|넘어|부터|전체|최근|상태|매수|매도|취소|체결|완료|실패)", " ", cleaned)
     cleaned = re.sub(r"[^0-9A-Za-z가-힣._-]+", " ", cleaned)
     candidates = [part.strip() for part in cleaned.split() if part.strip()]
     if not candidates:
         return ""
-    return candidates[0]
+    candidate = candidates[0]
+    return _normalize_symbol_candidate(candidate)
 
 
 def _resolve_symbol(auth_header: str, query: str) -> dict:
@@ -354,6 +441,51 @@ def get_investment_profile_reanalysis_guide() -> dict:
     }
 
 
+def _get_watchlist_price_snapshot(auth_header: str, exchange: str, symbol: str) -> dict:
+    snapshot = {}
+    try:
+        payload = _get_internal(
+            "/api/chart/quote",
+            auth_header,
+            params={
+                "exchange": exchange,
+                "symbol": symbol,
+                "broker_env": "REAL",
+            },
+        )
+    except Exception:
+        payload = {}
+
+    data = payload.get("data") or {}
+    current_price = _to_float(data.get("current_price"))
+    change_rate = _to_float(data.get("change_rate"))
+    if current_price <= 0:
+        try:
+            candle_payload = _get_internal(
+                "/api/chart/candles",
+                auth_header,
+                params={
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "interval": "1d",
+                    "count": 2,
+                    "broker_env": "REAL",
+                },
+            )
+            candles = candle_payload.get("data") or []
+            if candles:
+                current_price = _to_float(candles[-1].get("close"))
+        except Exception:
+            current_price = 0.0
+
+    if current_price > 0:
+        snapshot["latest_price"] = current_price
+        snapshot["average_price"] = current_price
+    if data.get("change_rate") is not None:
+        snapshot["change_rate"] = change_rate
+    return snapshot
+
+
 
 
 def add_watchlist_item(auth_header: str, message: str) -> dict:
@@ -386,6 +518,7 @@ def add_watchlist_item(auth_header: str, message: str) -> dict:
         "currency": "KRW" if asset_type == "CRYPTO" or market != "US" else "USD",
         "updated_at": datetime.utcnow().isoformat() + "Z",
     }
+    payload.update(_get_watchlist_price_snapshot(auth_header, exchange, symbol))
 
     if existing:
         record_id = existing[0]["id"]
@@ -399,6 +532,41 @@ def add_watchlist_item(auth_header: str, message: str) -> dict:
     return {
         "reply": f"{payload['name']}({symbol}) {action}",
         "data": payload,
+    }
+
+
+def remove_watchlist_item(auth_header: str, message: str) -> dict:
+    user_id, _ = get_user_id_from_header(auth_header)
+    symbol_query = _extract_symbol_query(message)
+    symbol_data = _resolve_symbol(auth_header, symbol_query)
+    symbol = str(symbol_data.get("symbol") or "").upper()
+    asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
+    market = str(symbol_data.get("market") or "").upper()
+    exchange = "COINONE" if asset_type == "CRYPTO" else ("TOSS" if market == "US" else "KIS")
+
+    existing = query_supabase(
+        auth_header,
+        "user_watchlist",
+        "GET",
+        params={
+            "user_id": f"eq.{user_id}",
+            "symbol": f"eq.{symbol}",
+            "asset_type": f"eq.{asset_type}",
+            "exchange": f"eq.{exchange}",
+        },
+    ) or []
+    display_name = symbol_data.get("display_name") or symbol
+    if not existing:
+        return {
+            "reply": f"{display_name}({symbol})은 관심종목에 등록되어 있지 않습니다.",
+            "data": {"symbol": symbol, "asset_type": asset_type, "exchange": exchange, "removed": False},
+        }
+
+    record_id = existing[0]["id"]
+    query_supabase(auth_header, f"user_watchlist?id=eq.{record_id}", "DELETE")
+    return {
+        "reply": f"{display_name}({symbol}) 관심종목을 해제했습니다.",
+        "data": {"symbol": symbol, "asset_type": asset_type, "exchange": exchange, "removed": True},
     }
 
 
@@ -627,7 +795,9 @@ def run_chatbot_tool(auth_header: str | None, message: str) -> dict | None:
         return get_exchange_rate(auth_header, text)
     if any(keyword in text for keyword in ["순위", "랭킹", "상위", "필터"]):
         return get_home_market_rankings(auth_header, text)
-    if any(keyword in text for keyword in ["관심종목", "관심 종목"]) and any(keyword in text for keyword in ["설정", "추가", "등록"]):
+    if any(keyword in text for keyword in ["관심종목", "관심 종목"]) and any(keyword in text for keyword in ["해제", "삭제", "제거", "빼줘", "빼", "없애"]):
+        return remove_watchlist_item(auth_header, text)
+    if any(keyword in text for keyword in ["관심종목", "관심 종목"]) and any(keyword in text for keyword in ["설정", "추가", "등록", "넣어", "넣어줘"]):
         return add_watchlist_item(auth_header, text)
     if any(keyword in text for keyword in ["거래내역", "거래 내역", "주문내역", "주문 내역"]):
         return search_trade_history(auth_header, text)
