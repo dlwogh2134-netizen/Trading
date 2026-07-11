@@ -6,6 +6,7 @@ import { streamChatbotMessage } from './chatbotApi'
 import { buildChatbotCitations } from './chatbotCitations'
 import { buildDisclosurePresentation } from './chatbotDisclosurePresentation'
 import { shouldSubmitChatbotInput } from './chatbotInput'
+import { buildMlRecommendationPresentation } from './chatbotMlRecommendationPresentation'
 import {
   buildProposalPrecheckSummary,
   isChatbotApprovalProposal,
@@ -137,28 +138,39 @@ function ChatMessage({ message, onAction }) {
   const messageTime = formatMessageTime(message.createdAt)
   const actions = Array.isArray(message.actions) ? message.actions : []
   const disclosurePresentation = buildDisclosurePresentation(message.toolResult)
+  const mlRecommendationPresentation = buildMlRecommendationPresentation(message.toolResult)
   const hasDisclosureCards = !isUser && disclosurePresentation.items.length > 0
+  const hasMlRecommendationCards = !isUser && mlRecommendationPresentation.shouldRender
   const citations = !isUser ? buildChatbotCitations(message.toolResult) : []
   const traceBadges = !isUser ? buildChatbotTraceBadges({ traceSteps: message.traceSteps, toolResult: message.toolResult }) : []
+  const hasMessageBody = hasDisclosureCards || hasMlRecommendationCards || Boolean(message.text) || !message.isStreaming
+
+  if (!hasMessageBody && traceBadges.length === 0) {
+    return null
+  }
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col gap-1 ${hasDisclosureCards ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col gap-1 ${hasDisclosureCards || hasMlRecommendationCards ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
         {!isUser && traceBadges.length > 0 && (
           <TraceBadges badges={traceBadges} />
         )}
-        <div
-          className={`${hasDisclosureCards ? 'w-full' : 'whitespace-pre-wrap break-words'} rounded-lg px-3 py-2 text-xs leading-5 ${
-            isUser
-              ? 'bg-blue-600 text-[#ffffff]'
-              : 'border border-slate-700/80 bg-[#111827] text-slate-100'
-          }`}
-        >
-          {hasDisclosureCards && !message.isStreaming ? (
-            <DisclosureResults presentation={disclosurePresentation} />
-          ) : (message.text || (message.isStreaming ? '...' : ''))}
-        </div>
-        {messageTime && (
+        {hasMessageBody && (
+          <div
+            className={`${hasDisclosureCards || hasMlRecommendationCards ? 'w-full' : 'whitespace-pre-wrap break-words'} rounded-lg px-3 py-2 text-xs leading-5 ${
+              isUser
+                ? 'bg-blue-600 text-[#ffffff]'
+                : 'border border-slate-700/80 bg-[#111827] text-slate-100'
+            }`}
+          >
+            {hasMlRecommendationCards && !message.isStreaming ? (
+              <MlRecommendationResults presentation={mlRecommendationPresentation} />
+            ) : hasDisclosureCards && !message.isStreaming ? (
+              <DisclosureResults presentation={disclosurePresentation} />
+            ) : message.text}
+          </div>
+        )}
+        {hasMessageBody && messageTime && (
           <time className="px-1 text-[10px] font-medium text-slate-500" dateTime={message.createdAt}>
             {messageTime}
           </time>
@@ -181,6 +193,64 @@ function ChatMessage({ message, onAction }) {
           <CitationList citations={citations} />
         )}
       </div>
+    </div>
+  )
+}
+
+function MlRecommendationResults({ presentation }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-700/70 pb-2">
+        <div className="min-w-0">
+          <p className="font-bold text-cyan-100">{presentation.title}</p>
+          <p className="mt-0.5 text-[10px] leading-4 text-slate-400">주문 실행 근거가 아니라 검토 출발점입니다.</p>
+        </div>
+        {presentation.modelVersion ? (
+          <span className="shrink-0 rounded border border-slate-600/70 bg-slate-950/50 px-2 py-0.5 text-[10px] font-medium text-slate-300">
+            {presentation.modelVersion}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="space-y-2">
+        {presentation.items.map((item) => (
+          <article key={`${item.rank}-${item.symbol}`} className="rounded border border-slate-700/80 bg-slate-950/35 px-3 py-2.5">
+            <div className="flex min-w-0 items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold text-cyan-300">#{item.rank}</p>
+                <h4 className="break-words text-sm font-bold leading-5 text-slate-50">
+                  {item.title}
+                </h4>
+              </div>
+            </div>
+
+            <div className="mt-2 grid grid-cols-3 gap-1.5">
+              <SignalMetric label="점수" value={item.scoreText} tone="cyan" />
+              <SignalMetric label="상승" value={item.upText} tone="emerald" />
+              <SignalMetric label="위험" value={item.riskText} tone="amber" />
+            </div>
+
+            {item.reason ? (
+              <p className="mt-2 break-words text-[11px] leading-5 text-slate-300">{item.reason}</p>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SignalMetric({ label, value, tone }) {
+  const toneClass = {
+    cyan: 'border-cyan-500/25 bg-cyan-950/25 text-cyan-100',
+    emerald: 'border-emerald-500/25 bg-emerald-950/25 text-emerald-100',
+    amber: 'border-amber-500/25 bg-amber-950/25 text-amber-100',
+  }[tone] || 'border-slate-600/60 bg-slate-950/40 text-slate-100'
+
+  return (
+    <div className={`min-w-0 rounded border px-2 py-1.5 ${toneClass}`}>
+      <p className="text-[9px] font-medium text-slate-400">{label}</p>
+      <p className="mt-0.5 truncate font-mono text-[12px] font-bold">{value}</p>
     </div>
   )
 }

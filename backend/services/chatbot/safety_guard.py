@@ -21,6 +21,7 @@ _TOOL_RISK_LEVELS = {
     "search_trade_history": RiskLevel.READ,
     "list_open_orders": RiskLevel.READ,
     "get_exchange_rate": RiskLevel.READ,
+    "get_asset_price": RiskLevel.READ,
     "search_web": RiskLevel.READ,
     "get_asset_outlook": RiskLevel.READ,
     "add_watchlist_item": RiskLevel.WRITE,

@@ -215,7 +215,7 @@ def build_default_rag_evidence_provider() -> EvidenceProvider:
             question=question,
             symbol=symbol,
             market="KR",
-            source_types=["DISCLOSURE", "OBSIDIAN", "APP_NOTE"],
+            source_types=["DISCLOSURE"],
             limit=limit,
         )
 

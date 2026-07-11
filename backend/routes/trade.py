@@ -436,6 +436,15 @@ def _format_user_value_error_message(error: ValueError) -> str:
     return str(error).replace("API 크리덴셜 정보", "API 키 정보").replace("API 크리덴셜", "API 키")
 
 
+def _currency_for_quote(exchange: str, symbol: str) -> str:
+    normalized_exchange = str(exchange or "").upper()
+    if normalized_exchange in {"BINANCE", "BINANCE_UM_FUTURES"}:
+        return "USDT"
+    if normalized_exchange == "COINONE":
+        return "KRW"
+    return "USD" if determine_market_country(symbol) == "US" else "KRW"
+
+
 def _query_user_exchange_records(auth_header: str, user_id: str, exchange: str, broker_env: str | None = None) -> list[dict]:
     """
     사용자 거래소 크리덴셜 레코드를 조회합니다.
@@ -3565,6 +3574,25 @@ def get_quote():
 
     # Fallback: change_rate가 0이면 일봉 캔들 캐시에서 전일 종가 기반으로 직접 계산
     current_price = None
+    live_quote = {}
+    if auth_header:
+        try:
+            user_id, _ = get_user_id_from_header(auth_header)
+            record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
+            client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
+            live_quote = client.get_price(symbol) if client and hasattr(client, "get_price") else {}
+            current_price = float(
+                live_quote.get("current_price")
+                or live_quote.get("price")
+                or live_quote.get("last")
+                or live_quote.get("close")
+                or 0
+            ) or None
+            if live_quote.get("change_rate") is not None:
+                change_rate = float(live_quote.get("change_rate") or 0.0)
+        except Exception as quote_error:
+            current_app.logger.warning(f"차트 현재가 조회 실패: {str(quote_error)}")
+
     if change_rate == 0.0:
         candle_key = (exchange, symbol, "1d", broker_env)
         now = time.time()
@@ -3586,6 +3614,7 @@ def get_quote():
             "change_rate": change_rate,
             "exchange": exchange,
             "symbol": symbol,
+            "currency": _currency_for_quote(exchange, symbol),
             **({"current_price": current_price} if current_price is not None else {}),
         }
     })

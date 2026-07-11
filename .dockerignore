@@ -29,3 +29,16 @@ frontend-dashboard-qa.png
 frontend/admin-inquiries-preview.png
 CORPCODE.xml
 mobile(Copy)
+ml/data/raw
+ml/data/processed/*
+!ml/data/processed/*_predictions_lgbm_v*.csv
+!ml/data/processed/*_v*_summary.json
+!ml/data/processed/*_backtest_*.json
+ml/data/ops/*
+!ml/data/ops/model_registry.json
+ml/models/*
+!ml/models/*.metrics.json
+ml/reports
+ml/notebooks
+supabase/.temp
+tests/**/__pycache__

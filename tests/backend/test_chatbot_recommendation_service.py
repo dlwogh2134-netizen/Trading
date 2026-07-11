@@ -165,7 +165,7 @@ def test_default_rag_evidence_provider_filters_to_symbol_and_disclosure_sources(
             "question": "삼성전자 추천 근거",
             "symbol": "005930",
             "market": "KR",
-            "source_types": ["DISCLOSURE", "OBSIDIAN", "APP_NOTE"],
+            "source_types": ["DISCLOSURE"],
             "limit": 2,
         }
     ]

@@ -47,6 +47,8 @@ SYMBOL_QUERY_ALIASES = {
     "코스트코": "COST",
     "오라클": "ORCL",
     "어도비": "ADBE",
+    "레딧": "RDDT",
+    "REDDIT": "RDDT",
     "퀄컴": "QCOM",
     "인텔": "INTC",
     "팔란티어": "PLTR",
@@ -122,6 +124,7 @@ def list_available_tools() -> list[str]:
         "search_trade_history",
         "list_open_orders",
         "get_exchange_rate",
+        "get_asset_price",
         "search_web",
         "get_asset_outlook",
     ]
@@ -409,7 +412,9 @@ def get_portfolio_summary(auth_header: str, message: str) -> dict:
                 payload = _post_internal("/api/dashboard/balance", auth_header, {"exchange": exchange, "env": env})
                 balance = payload.get("data") or {}
                 summaries.append(normalize_account_summary(exchange, env, balance))
-            except Exception:
+            except Exception as error:
+                if not env_filter and _is_missing_optional_account_error(error):
+                    continue
                 errors.append(f"{exchange} {env} 계좌 조회 실패")
 
     totals_by_env = build_portfolio_totals(summaries)
@@ -423,6 +428,19 @@ def get_portfolio_summary(auth_header: str, message: str) -> dict:
             "source": "PORTFOLIO_SUMMARY",
         },
     }
+
+
+def _is_missing_optional_account_error(error: Exception) -> bool:
+    text = str(error or "")
+    missing_markers = [
+        "등록된",
+        "API 키",
+        "API키",
+        "API key",
+        "credentials",
+        "credential",
+    ]
+    return any(marker in text for marker in missing_markers)
 
 
 def get_exchange_rate(auth_header: str, message: str) -> dict:
@@ -447,6 +465,78 @@ def get_exchange_rate(auth_header: str, message: str) -> dict:
     return {
         "reply": f"{captured_at} 기준\n{base}/{quote} 환율은 1 {base} = {rate:,.2f} {quote}입니다.\n출처: {source}",
         "data": data,
+    }
+
+
+def get_asset_price(auth_header: str, message: str) -> dict:
+    symbol_query = _extract_symbol_query(message)
+    if not symbol_query:
+        return {
+            "reply": "현재가를 확인할 종목명이나 종목코드를 알려주세요.",
+            "data": {"source": "ASSET_PRICE", "reason": "missing_symbol"},
+        }
+
+    try:
+        symbol_data = _resolve_symbol(auth_header, symbol_query)
+    except Exception:
+        if not _is_likely_symbol_token(symbol_query):
+            return {
+                "reply": f"{symbol_query} 종목을 찾지 못했습니다.\n종목명이나 종목코드를 다시 확인해 주세요.",
+                "data": {"source": "ASSET_PRICE", "query": symbol_query, "reason": "symbol_not_found"},
+            }
+        symbol_data = {}
+
+    symbol = str(symbol_data.get("symbol") or symbol_query).upper()
+    display_name = str(symbol_data.get("display_name") or symbol).strip()
+    asset_type = str(symbol_data.get("asset_type") or "").upper()
+    market = str(symbol_data.get("market") or "").strip().upper()
+    exchange = _detect_exchange(message) or _default_exchange_for_asset(asset_type, market)
+    broker_env = _detect_env(message) or "REAL"
+    payload = _get_internal(
+        "/api/chart/quote",
+        auth_header,
+        params={
+            "exchange": exchange,
+            "symbol": symbol,
+            "broker_env": broker_env,
+        },
+    )
+    data = payload.get("data") or {}
+    current_price = _to_float(
+        data.get("current_price")
+        or data.get("price")
+        or data.get("last")
+        or data.get("close")
+    )
+    change_rate = _to_float(data.get("change_rate"))
+    currency = str(data.get("currency") or ("USD" if market == "US" else "KRW")).upper()
+    label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
+
+    if current_price <= 0:
+        return {
+            "reply": f"{label} 현재가를 확인하지 못했습니다.\n거래소 API 키, 허용 IP, 장 운영 상태를 확인해 주세요.",
+            "data": {
+                "source": "ASSET_PRICE",
+                "symbol": symbol,
+                "exchange": exchange,
+                "reason": "missing_price",
+            },
+        }
+
+    return {
+        "reply": f"{label} 현재가는 {_format_money(current_price, currency)}입니다.\n등락률은 {change_rate:+.2f}%입니다.",
+        "data": {
+            "source": "ASSET_PRICE",
+            "symbol": symbol,
+            "display_name": display_name,
+            "asset_type": asset_type,
+            "market": market,
+            "exchange": exchange,
+            "broker_env": broker_env,
+            "current_price": current_price,
+            "change_rate": change_rate,
+            "currency": currency,
+        },
     }
 
 
@@ -872,6 +962,13 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
         error_text = str(error)
         if "API 키" in error_text or "API키" in error_text:
             action = "거래소 API 키가 없거나 권한이 부족할 수 있습니다. API 키 등록과 계좌 환경을 확인한 뒤 다시 시도해 주세요."
+        elif "실거래 시장가" in error_text or "하드캡" in error_text:
+            action = (
+                "실거래 시장가 제안은 만들 수 없습니다. "
+                "10만원 하드캡을 보장하려면 지정가를 함께 입력해 주세요. "
+                "예: 'RDDT 195달러에 1주 실거래 매수 제안'. "
+                "단, 예상 원화 주문금액이 10만원을 넘으면 실거래 제안은 차단됩니다."
+            )
         elif "현재가" in error_text or "주문금액" in error_text:
             action = "현재가와 예상 주문금액을 확인하지 못했습니다. 시세 연결 상태를 확인한 뒤 다시 시도해 주세요."
         else:
@@ -1020,7 +1117,8 @@ def _with_referenced_recommendation_symbol(auth_header: str, message: str) -> tu
             "reply": "추천 후보의 종목코드를 확인하지 못했습니다. 추천 후보를 먼저 다시 조회해 주세요.",
             "data": {"source": "CHATBOT_RECOMMENDATION_REFERENCE", "reason": "missing_symbol"},
         }
-    return f"{symbol} {message}", None
+    env_text = "" if _detect_env(message) else "실거래 "
+    return f"{symbol} {env_text}{message}", None
 
 
 def create_trade_proposal_from_recommendation_reference(auth_header: str, message: str) -> dict:
@@ -1488,6 +1586,16 @@ def _is_asset_outlook_request(text: str) -> bool:
     return any(keyword in str(text or "") for keyword in outlook_keywords)
 
 
+def _is_asset_price_request(text: str) -> bool:
+    value = str(text or "")
+    if any(keyword in value for keyword in ["얼마 있어", "자산 얼마", "내 돈", "평가 자산", "평가자산"]):
+        return False
+    price_keywords = ["현재가", "시세", "얼마", "가격", "주가"]
+    if not any(keyword in value for keyword in price_keywords):
+        return False
+    return bool(_extract_symbol_query(value))
+
+
 def run_chatbot_tool(auth_header: str | None, message: str) -> dict | None:
     if not auth_header:
         return None
@@ -1512,6 +1620,8 @@ def run_chatbot_tool(auth_header: str | None, message: str) -> dict | None:
         return get_investment_profile_reanalysis_guide()
     if any(keyword in text for keyword in ["환율", "환전", "달러", "미달러", "엔화", "유로", "위안", "테더", "USDT"]):
         return guarded("get_exchange_rate", get_exchange_rate)
+    if _is_asset_price_request(text):
+        return guarded("get_asset_price", get_asset_price)
     if any(keyword in text for keyword in ["순위", "랭킹", "상위", "필터"]):
         return guarded("get_home_market_rankings", get_home_market_rankings)
     if any(keyword in text for keyword in ["관심종목", "관심 종목"]) and any(keyword in text for keyword in ["해제", "삭제", "제거", "빼줘", "빼", "없애"]):

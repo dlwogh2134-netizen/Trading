@@ -14,6 +14,7 @@ from backend.services.chatbot.prompt_registry import build_system_prompt
 from backend.services.chatbot.rag_service import ChatbotRAGService
 from backend.services.chatbot.tool_registry import (
     add_watchlist_item,
+    get_asset_price,
     get_exchange_rate,
     get_holdings,
     get_home_market_rankings,
@@ -367,6 +368,11 @@ class ChatbotService:
             base = str(arguments.get("base_currency") or "").strip()
             quote = str(arguments.get("quote_currency") or "KRW").strip()
             return f"{base}/{quote} 환율 알려줘".strip()
+        if tool_name == "get_asset_price":
+            query = str(arguments.get("query") or fallback_text).strip()
+            exchange = str(arguments.get("exchange") or "").strip()
+            broker_env = str(arguments.get("broker_env") or "").strip()
+            return " ".join(part for part in [query, exchange, broker_env, "현재가 알려줘"] if part)
         if tool_name == "get_home_market_rankings":
             asset_type = str(arguments.get("asset_type") or "").upper()
             asset_text = "코인" if asset_type == "CRYPTO" else "국내주식" if asset_type == "STOCK" else ""
@@ -396,6 +402,7 @@ class ChatbotService:
             "search_trade_history": search_trade_history,
             "list_open_orders": list_open_orders,
             "get_exchange_rate": get_exchange_rate,
+            "get_asset_price": get_asset_price,
             "search_web": search_web,
         }
         tool_func = tool_map.get(tool_name)
