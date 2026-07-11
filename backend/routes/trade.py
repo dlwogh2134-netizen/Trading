@@ -6,6 +6,7 @@ import uuid
 import time
 import threading
 import requests
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, current_app
 from backend.services.supabase_client import query_supabase
@@ -1486,13 +1487,23 @@ def _resolve_reference_price(exchange: str, symbol: str, order_type: str, price,
     return resolved_price, "LIVE_PRICE"
 
 
-def _normalize_holding_lookup_symbol(client, exchange: str, symbol: str) -> str:
+def _get_cached_spot_symbol_info(client, symbol: str, symbol_info_cache: dict | None = None) -> dict:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized or client is None or not hasattr(client, "get_spot_symbol_info"):
+        return {}
+    cache = symbol_info_cache if symbol_info_cache is not None else {}
+    if normalized not in cache:
+        cache[normalized] = client.get_spot_symbol_info(normalized) or {}
+    return cache.get(normalized) or {}
+
+
+def _normalize_holding_lookup_symbol(client, exchange: str, symbol: str, symbol_info_cache: dict | None = None) -> str:
     normalized = str(symbol or "").strip().upper()
     if str(exchange or "").upper() != "BINANCE":
         return normalized
     if client is not None and hasattr(client, "get_spot_symbol_info"):
         try:
-            symbol_info = client.get_spot_symbol_info(normalized)
+            symbol_info = _get_cached_spot_symbol_info(client, normalized, symbol_info_cache)
             base_asset = str((symbol_info or {}).get("base_asset") or "").upper()
             if base_asset:
                 return base_asset
@@ -1504,7 +1515,7 @@ def _normalize_holding_lookup_symbol(client, exchange: str, symbol: str) -> str:
     return normalized
 
 
-def _extract_balance_snapshot(client, symbol: str, exchange: str) -> dict:
+def _extract_balance_snapshot(client, symbol: str, exchange: str, symbol_info_cache: dict | None = None) -> dict:
     """
     잔고/보유 수량 기반 사전검증에 사용할 값을 정리합니다.
     """
@@ -1545,7 +1556,7 @@ def _extract_balance_snapshot(client, symbol: str, exchange: str) -> dict:
     except (TypeError, ValueError):
         available_cash = None
 
-    target_holding_symbol = _normalize_holding_lookup_symbol(client, exchange, symbol)
+    target_holding_symbol = _normalize_holding_lookup_symbol(client, exchange, symbol, symbol_info_cache)
     holding_qty = 0.0
     holding_value = None
     for item in balance.get("holdings", []) or []:
@@ -1630,6 +1641,88 @@ def _validate_futures_order_quantity(client, symbol: str, order_type: str, qty: 
     }
 
 
+def _to_positive_decimal(value) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    if not decimal_value.is_finite() or decimal_value <= 0:
+        return None
+    return decimal_value
+
+
+def _floor_decimal_to_step(value: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        return value
+    units = (value / step).to_integral_value(rounding=ROUND_DOWN)
+    return units * step
+
+
+def _build_crypto_quantity_filter(
+    client,
+    exchange: str,
+    symbol: str,
+    order_type: str,
+    symbol_info_cache: dict | None = None,
+) -> dict:
+    if exchange == "COINONE" and hasattr(client, "get_order_quantity_rules"):
+        rules = client.get_order_quantity_rules(symbol) or {}
+        return {
+            "exchange": exchange,
+            "min_qty": rules.get("min_qty"),
+            "max_qty": rules.get("max_qty"),
+            "step_size": rules.get("qty_unit") or rules.get("step_size"),
+            "source": rules.get("source") or "COINONE_ORDER_RULES",
+        }
+    if exchange == "BINANCE" and hasattr(client, "get_spot_symbol_info"):
+        info = _get_cached_spot_symbol_info(client, symbol, symbol_info_cache)
+        is_market = str(order_type or "").upper() == "MARKET"
+        return {
+            "exchange": exchange,
+            "min_qty": info.get("market_min_qty") if is_market else info.get("min_qty"),
+            "max_qty": info.get("market_max_qty") if is_market else info.get("max_qty"),
+            "step_size": info.get("market_step_size") if is_market else info.get("step_size"),
+            "source": "BINANCE_SPOT_LOT_SIZE",
+        }
+    return {"exchange": exchange, "source": "NO_QUANTITY_FILTER"}
+
+
+def _normalize_crypto_order_quantity(
+    client,
+    exchange: str,
+    symbol: str,
+    order_type: str,
+    qty: float,
+    symbol_info_cache: dict | None = None,
+) -> tuple[float, dict]:
+    quantity_filter = _build_crypto_quantity_filter(client, exchange, symbol, order_type, symbol_info_cache)
+    original_qty = _to_positive_decimal(qty)
+    if original_qty is None:
+        raise ValueError("주문 수량은 0보다 큰 유한한 숫자여야 합니다.")
+
+    step_size = _to_positive_decimal(quantity_filter.get("step_size"))
+    normalized_qty = _floor_decimal_to_step(original_qty, step_size) if step_size else original_qty
+    min_qty = _to_positive_decimal(quantity_filter.get("min_qty"))
+    max_qty = _to_positive_decimal(quantity_filter.get("max_qty"))
+
+    if min_qty and normalized_qty < min_qty:
+        raise ValueError(f"{symbol} 최소 주문 수량은 {float(min_qty):g}입니다. 수량을 늘려 다시 시도하세요.")
+    if max_qty and normalized_qty > max_qty:
+        raise ValueError(f"{symbol} 최대 주문 수량은 {float(max_qty):g}입니다. 수량을 {float(max_qty):g} 이하로 낮춰 다시 시도하세요.")
+    if normalized_qty <= 0:
+        raise ValueError("주문 수량이 거래소 주문 단위보다 작습니다. 수량을 늘려 다시 시도하세요.")
+
+    normalized_float = float(normalized_qty)
+    return normalized_float, {
+        **quantity_filter,
+        "original_quantity": float(original_qty),
+        "normalized_quantity": normalized_float,
+        "adjusted": normalized_qty != original_qty,
+    }
+
+
 def _run_binance_order_test(
     client,
     exchange: str,
@@ -1695,8 +1788,21 @@ def _build_precheck_payload(
         raise ValueError("올바르지 않은 주문 수량 포맷입니다.")
     if not math.isfinite(qty) or qty <= 0:
         raise ValueError("주문 수량은 0보다 큰 유한한 숫자여야 합니다.")
+    if exchange in ("TOSS", "KIS") and not float(qty).is_integer():
+        raise ValueError("주식 주문 수량은 현재 정수 단위만 지원합니다. 소수점 또는 금액 주문은 공식 지원 스펙 확인 후 활성화해야 합니다.")
 
     client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
+    symbol_info_cache = {}
+    quantity_filter = None
+    if exchange in ("COINONE", "BINANCE"):
+        qty, quantity_filter = _normalize_crypto_order_quantity(
+            client,
+            exchange=exchange,
+            symbol=symbol,
+            order_type=order_type,
+            qty=qty,
+            symbol_info_cache=symbol_info_cache,
+        )
     reference_price, price_source = _resolve_reference_price(exchange, symbol, order_type, price, client)
     normalized_futures_options = None
     if exchange == "BINANCE_UM_FUTURES":
@@ -1732,7 +1838,7 @@ def _build_precheck_payload(
     estimated_amount_krw = estimated_amount * exchange_rate
     if not math.isfinite(estimated_amount_krw) or estimated_amount_krw <= 0:
         raise ValueError("예상 원화 주문금액을 유한한 숫자로 계산할 수 없습니다.")
-    balance_snapshot = _extract_balance_snapshot(client, symbol, exchange)
+    balance_snapshot = _extract_balance_snapshot(client, symbol, exchange, symbol_info_cache)
     available_cash = balance_snapshot["available_cash"]
     holding_qty = balance_snapshot["holding_qty"]
 
@@ -1864,6 +1970,7 @@ def _build_precheck_payload(
         "asset_type": asset_type,
         "currency": currency,
         "quantity": qty,
+        "quantity_filter": quantity_filter,
         "reference_price": reference_price,
         "price_source": price_source,
         "estimated_amount": estimated_amount,
@@ -2089,6 +2196,15 @@ def place_manual_order():
 
     order_price = precheck["reference_price"]
     total_amount = precheck["estimated_amount"]
+    normalized_precheck_qty = precheck.get("quantity")
+    if normalized_precheck_qty not in (None, ""):
+        try:
+            normalized_precheck_qty = float(normalized_precheck_qty)
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "message": "사전검증 수량 포맷이 올바르지 않습니다."}), 400
+        if not math.isfinite(normalized_precheck_qty) or normalized_precheck_qty <= 0:
+            return jsonify({"success": False, "message": "사전검증 수량은 0보다 큰 유한한 숫자여야 합니다."}), 400
+        qty = normalized_precheck_qty
 
     if precheck.get("exceeds_real_order_limit"):
         return jsonify({

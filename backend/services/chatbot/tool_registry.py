@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -227,6 +228,12 @@ def _detect_exchange(text: str) -> str | None:
     if "바이낸스" in text or "BINANCE" in normalized:
         return "BINANCE"
     return None
+
+
+def _default_exchange_for_asset(asset_type: str, market: str) -> str:
+    if str(asset_type or "").upper() == "CRYPTO":
+        return "COINONE"
+    return "TOSS"
 
 
 def _detect_env(text: str) -> str | None:
@@ -751,7 +758,7 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
     market = str(symbol_data.get("market") or "").upper()
     exchange = _detect_exchange(message)
     if not exchange:
-        exchange = "COINONE" if asset_type == "CRYPTO" else ("TOSS" if market == "US" else "KIS")
+        exchange = _default_exchange_for_asset(asset_type, market)
     broker_env = parsed.broker_env or "MOCK"
 
     if exchange == "COINONE" and parsed.order_type == "MARKET":
@@ -835,6 +842,17 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
             "reply": f"{symbol} {parsed.side} 매매 제안을 만들 수량을 알려주세요.",
             "data": {"source": "CHATBOT_ORDER_PARSER", "reason": "missing_quantity", "symbol": symbol},
         }
+    quantity = _normalize_order_quantity(quantity, asset_type)
+    if quantity <= 0:
+        return {
+            "reply": f"{symbol} 매매 제안을 만들 수량이 최소 주문 단위보다 작습니다. 수량을 늘려 다시 입력해 주세요.",
+            "data": {
+                "source": "CHATBOT_ORDER_PARSER",
+                "reason": "quantity_too_small_after_normalization",
+                "symbol": symbol,
+                "side": parsed.side,
+            },
+        }
 
     market_country = "KR" if asset_type == "CRYPTO" else (market or "KR")
     currency = "KRW" if asset_type == "CRYPTO" or market_country != "US" else "USD"
@@ -878,6 +896,20 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
                 "exchange": exchange,
                 "symbol": symbol,
                 "blockers": blockers,
+            },
+        }
+    normalized_quantity = _to_float(precheck.get("quantity"))
+    if normalized_quantity > 0:
+        quantity = normalized_quantity
+    if quantity <= 0:
+        return {
+            "reply": f"{symbol} 매매 제안을 만들 수량이 거래소 주문 단위보다 작습니다. 수량을 늘려 다시 입력해 주세요.",
+            "data": {
+                "source": "CHATBOT_ORDER_PARSER",
+                "reason": "quantity_too_small_after_precheck",
+                "exchange": exchange,
+                "symbol": symbol,
+                "side": parsed.side,
             },
         }
 
@@ -1077,9 +1109,25 @@ def _quantity_from_amount(amount: float, price: float | None, asset_type: str) -
     if not price or price <= 0:
         return 0.0
     raw_quantity = amount / price
+    return _normalize_order_quantity(raw_quantity, asset_type)
+
+
+def _normalize_order_quantity(quantity: float, asset_type: str) -> float:
+    if not math.isfinite(float(quantity)) or float(quantity) <= 0:
+        return 0.0
     if asset_type == "STOCK":
-        return float(math.floor(raw_quantity))
-    return float(f"{raw_quantity:.8f}")
+        return float(math.floor(float(quantity)))
+    return _floor_quantity(quantity, 8)
+
+
+def _floor_quantity(quantity: float, precision: int) -> float:
+    try:
+        decimal_quantity = Decimal(str(quantity))
+    except (InvalidOperation, ValueError):
+        return 0.0
+    step = Decimal("1").scaleb(-precision)
+    floored = decimal_quantity.quantize(step, rounding=ROUND_DOWN)
+    return float(floored)
 
 
 def _lookup_holding_quantity(
@@ -1111,9 +1159,7 @@ def _lookup_holding_quantity(
 
 def _quantity_from_ratio(holding_quantity: float, ratio: float, asset_type: str) -> float:
     raw_quantity = max(holding_quantity, 0) * min(max(ratio, 0), 1)
-    if asset_type == "STOCK":
-        return float(math.floor(raw_quantity))
-    return float(f"{raw_quantity:.8f}")
+    return _normalize_order_quantity(raw_quantity, asset_type)
 
 
 def _match_min_amount(text: str) -> float:

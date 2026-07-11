@@ -85,6 +85,15 @@ COMMAND_WORDS = (
     "절반",
     "반",
     "반만",
+    "토스",
+    "TOSS",
+    "한국투자",
+    "한투",
+    "KIS",
+    "코인원",
+    "COINONE",
+    "바이낸스",
+    "BINANCE",
 )
 
 KRW_UNIT_MULTIPLIERS = {
@@ -108,10 +117,10 @@ def parse_order_intent(message: str) -> ParsedOrderIntent:
         return ParsedOrderIntent(is_order_request=False)
 
     side = _detect_side(text)
-    symbol_query = _extract_symbol_query(text)
     quantity = _extract_quantity(text)
-    amount_krw = _extract_amount_krw(text)
     price = _extract_price(text)
+    symbol_query = _extract_symbol_query(text)
+    amount_krw = _extract_amount_krw(text)
     sell_ratio = _extract_sell_ratio(text) if side == "SELL" else None
     order_type = "LIMIT" if price and price > 0 else "MARKET"
 
@@ -154,6 +163,8 @@ def _detect_broker_env(text: str) -> str | None:
 
 
 def _extract_symbol_query(text: str) -> str:
+    if _looks_like_multi_symbol_choice(text):
+        return ""
     cleaned = text
     cleaned = re.sub(r"\d+(?:\.\d+)?\s*(?:주|개|수량|원|만원|천원|만)", " ", cleaned)
     cleaned = re.sub(r"[일한이삼사오육칠팔구십백천만]+\s*(?:원|만원|천원|만)\s*(?:어치)?", " ", cleaned)
@@ -162,7 +173,18 @@ def _extract_symbol_query(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return ""
-    return cleaned.split()[0].strip()
+    return _strip_korean_particle(cleaned.split()[0].strip())
+
+
+def _looks_like_multi_symbol_choice(text: str) -> bool:
+    return bool(re.search(r"\S+(?:랑|와|과|하고)\s+\S+\s*중", text))
+
+
+def _strip_korean_particle(token: str) -> str:
+    for suffix in ("으로", "로", "에게", "에는", "에서", "까지", "부터", "을", "를", "이", "가", "은", "는"):
+        if token.endswith(suffix) and len(token) > len(suffix):
+            return token[: -len(suffix)]
+    return token
 
 
 def _extract_quantity(text: str) -> float | None:
@@ -173,6 +195,7 @@ def _extract_quantity(text: str) -> float | None:
 
 
 def _extract_amount_krw(text: str) -> float | None:
+    text = _remove_explicit_price_phrase(text)
     match = re.search(
         r"(\d+(?:\.\d+)?)\s*(만원|천원|원|만)(?!원?\s*에)\s*(?:어치)?",
         text,
@@ -191,6 +214,17 @@ def _extract_amount_krw(text: str) -> float | None:
 
 
 def _extract_price(text: str) -> float | None:
+    explicit_match = re.search(r"(?:지정가|가격)\s*(\d+(?:\.\d+)?)\s*(만원|천원|원|만)(?!\s*어치)", text)
+    if explicit_match:
+        return _parse_krw_value(explicit_match.group(1), explicit_match.group(2))
+
+    explicit_korean_match = re.search(
+        r"(?:지정가|가격)\s*([일한이삼사오육칠팔구십백천만]+)\s*(만원|천원|원|만)(?!\s*어치)",
+        text,
+    )
+    if explicit_korean_match:
+        return _parse_krw_value(explicit_korean_match.group(1), explicit_korean_match.group(2))
+
     match = re.search(r"(\d+(?:\.\d+)?)\s*(만원|천원|원|만)\s*에", text)
     if match:
         return _parse_krw_value(match.group(1), match.group(2))
@@ -202,6 +236,15 @@ def _extract_price(text: str) -> float | None:
     if korean_match:
         return _parse_krw_value(korean_match.group(1), korean_match.group(2))
     return None
+
+
+def _remove_explicit_price_phrase(text: str) -> str:
+    text = re.sub(r"(?:지정가|가격)\s*\d+(?:\.\d+)?\s*(?:만원|천원|원|만)(?!\s*어치)", " ", text)
+    return re.sub(
+        r"(?:지정가|가격)\s*[일한이삼사오육칠팔구십백천만]+\s*(?:만원|천원|원|만)(?!\s*어치)",
+        " ",
+        text,
+    )
 
 
 def _extract_sell_ratio(text: str) -> float | None:

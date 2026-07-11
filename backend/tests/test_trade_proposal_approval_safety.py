@@ -37,9 +37,11 @@ class FakeOrderClient:
     def __init__(self, status="OPEN"):
         self.place_order_calls = 0
         self.status = status
+        self.last_order_kwargs = None
 
     def place_order(self, **kwargs):
         self.place_order_calls += 1
+        self.last_order_kwargs = kwargs
         return {
             "status": self.status,
             "order_id": "order-1",
@@ -81,6 +83,8 @@ class BalanceOrderClient(FakeOrderClient):
         self.base_asset = base_asset
         self.fail_balance = fail_balance
         self.symbol_info_calls = []
+        self.coinone_order_rules = None
+        self.binance_symbol_info = None
 
     def get_balance(self):
         if self.fail_balance:
@@ -97,11 +101,16 @@ class BalanceOrderClient(FakeOrderClient):
 
     def get_spot_symbol_info(self, symbol):
         self.symbol_info_calls.append(symbol)
-        return {
+        return self.binance_symbol_info or {
             "symbol": symbol,
             "base_asset": self.base_asset or self.holding_symbol,
             "quote_asset": "EUR",
         }
+
+    def get_order_quantity_rules(self, symbol):
+        if self.coinone_order_rules is None:
+            return {}
+        return dict(self.coinone_order_rules)
 
 
 def test_real_order_limit_applies_only_to_real_orders():
@@ -595,6 +604,110 @@ def test_precheck_marks_balance_lookup_failure_as_blocker(monkeypatch):
     assert precheck["balance_check_failed"] is True
 
 
+@pytest.mark.parametrize("exchange", ["TOSS", "KIS"])
+def test_stock_precheck_rejects_fractional_quantity_without_verified_fractional_order_support(monkeypatch, exchange):
+    order_client = TossClient() if exchange == "TOSS" else BalanceOrderClient()
+    monkeypatch.setattr(trade, "_build_exchange_client", lambda *args: order_client)
+    monkeypatch.setattr(trade, "is_kr_market_open", lambda *args: True)
+
+    with pytest.raises(ValueError, match="정수"):
+        trade._build_precheck_payload(
+            exchange=exchange,
+            symbol="005930",
+            action="BUY",
+            order_type="LIMIT",
+            quantity=0.5,
+            price=70000,
+            broker_env="MOCK",
+            record={},
+            access_key="access",
+            secret_key="secret",
+        )
+
+
+def test_coinone_precheck_floors_quantity_to_qty_unit(monkeypatch):
+    order_client = BalanceOrderClient(available_cash=1000.0, holding_qty=2.0)
+    order_client.coinone_order_rules = {
+        "min_qty": 0.01,
+        "max_qty": 10,
+        "qty_unit": 0.0001,
+    }
+    monkeypatch.setattr(trade, "_build_exchange_client", lambda *args: order_client)
+
+    precheck = trade._build_precheck_payload(
+        exchange="COINONE",
+        symbol="XRP",
+        action="BUY",
+        order_type="LIMIT",
+        quantity=0.123456,
+        price=800,
+        broker_env="MOCK",
+        record={},
+        access_key="access",
+        secret_key="secret",
+    )
+
+    assert precheck["quantity"] == 0.1234
+    assert precheck["quantity_filter"]["step_size"] == 0.0001
+    assert precheck["quantity_filter"]["adjusted"] is True
+    assert precheck["estimated_amount"] == pytest.approx(98.72)
+
+
+def test_coinone_precheck_rejects_quantity_below_min_after_floor(monkeypatch):
+    order_client = BalanceOrderClient(available_cash=1000.0, holding_qty=2.0)
+    order_client.coinone_order_rules = {
+        "min_qty": 0.01,
+        "max_qty": 10,
+        "qty_unit": 0.0001,
+    }
+    monkeypatch.setattr(trade, "_build_exchange_client", lambda *args: order_client)
+
+    with pytest.raises(ValueError, match="최소 주문 수량"):
+        trade._build_precheck_payload(
+            exchange="COINONE",
+            symbol="XRP",
+            action="BUY",
+            order_type="LIMIT",
+            quantity=0.00999,
+            price=800,
+            broker_env="MOCK",
+            record={},
+            access_key="access",
+            secret_key="secret",
+        )
+
+
+def test_binance_spot_precheck_floors_quantity_to_lot_step(monkeypatch):
+    order_client = BalanceOrderClient(available_cash=1000.0, holding_qty=2.0, holding_symbol="BTC")
+    order_client.binance_symbol_info = {
+        "symbol": "BTCUSDT",
+        "base_asset": "BTC",
+        "quote_asset": "USDT",
+        "min_qty": 0.001,
+        "max_qty": 100,
+        "step_size": 0.001,
+    }
+    monkeypatch.setattr(trade, "_build_exchange_client", lambda *args: order_client)
+
+    precheck = trade._build_precheck_payload(
+        exchange="BINANCE",
+        symbol="BTCUSDT",
+        action="SELL",
+        order_type="LIMIT",
+        quantity=0.123456,
+        price=30000,
+        broker_env="MOCK",
+        record={},
+        access_key="access",
+        secret_key="secret",
+    )
+
+    assert precheck["quantity"] == 0.123
+    assert precheck["quantity_filter"]["step_size"] == 0.001
+    assert precheck["quantity_filter"]["adjusted"] is True
+    assert order_client.symbol_info_calls == ["BTCUSDT"]
+
+
 def test_binance_mock_sell_matches_base_asset_holding(monkeypatch):
     order_client = BalanceOrderClient(
         available_cash=1000.0,
@@ -635,6 +748,20 @@ def test_binance_spot_symbol_info_returns_exchange_base_asset(monkeypatch):
                         "symbol": "BTCEUR",
                         "baseAsset": "BTC",
                         "quoteAsset": "EUR",
+                        "filters": [
+                            {
+                                "filterType": "LOT_SIZE",
+                                "minQty": "0.00100000",
+                                "maxQty": "100.00000000",
+                                "stepSize": "0.00100000",
+                            },
+                            {
+                                "filterType": "MARKET_LOT_SIZE",
+                                "minQty": "0.00200000",
+                                "maxQty": "50.00000000",
+                                "stepSize": "0.00200000",
+                            },
+                        ],
                     }
                 ]
             }
@@ -648,6 +775,13 @@ def test_binance_spot_symbol_info_returns_exchange_base_asset(monkeypatch):
         "symbol": "BTCEUR",
         "base_asset": "BTC",
         "quote_asset": "EUR",
+        "min_qty": 0.001,
+        "max_qty": 100.0,
+        "step_size": 0.001,
+        "market_min_qty": 0.002,
+        "market_max_qty": 50.0,
+        "market_step_size": 0.002,
+        "tick_size": 0.0,
     }
 
 
@@ -745,6 +879,46 @@ def test_invalid_auto_exit_numbers_are_rejected_before_external_order(monkeypatc
 
     assert response.status_code == 400
     assert order_client.place_order_calls == 0
+
+
+def test_order_execution_uses_precheck_normalized_quantity(monkeypatch):
+    order_client = FakeOrderClient()
+    monkeypatch.setattr(trade, "get_user_id_from_header", lambda auth_header: ("user-1", "token"))
+    monkeypatch.setattr(trade, "_load_user_exchange_record", lambda *args: ({}, "access", "secret"))
+    monkeypatch.setattr(
+        trade,
+        "_build_precheck_payload",
+        lambda **kwargs: _safe_precheck(quantity=0.1234, estimated_amount=98.72, estimated_amount_krw=98.72),
+    )
+    monkeypatch.setattr(trade, "_build_exchange_client", lambda *args: order_client)
+    monkeypatch.setattr(trade, "_create_or_load_manual_order_proposal", lambda *args: ({
+        "id": "manual-normalized-qty",
+        "status": "PENDING",
+    }, True))
+    monkeypatch.setattr(trade, "_claim_trade_proposal_for_execution", lambda *args: {
+        "id": "manual-normalized-qty",
+        "status": "APPROVED",
+    })
+    monkeypatch.setattr(trade, "_patch_trade_proposal_returning", lambda *args, **kwargs: {"id": "manual-normalized-qty"})
+    monkeypatch.setattr(trade, "_patch_trade_proposal", lambda *args, **kwargs: None)
+
+    response = app.test_client().post(
+        "/api/trade/order",
+        headers={"Authorization": "Bearer test"},
+        json={
+            "exchange": "COINONE",
+            "symbol": "XRP",
+            "action": "BUY",
+            "order_type": "LIMIT",
+            "price": 800,
+            "quantity": 0.123456,
+            "broker_env": "MOCK",
+            "idempotency_key": MANUAL_ORDER_KEY,
+        },
+    )
+
+    assert response.status_code == 200
+    assert order_client.last_order_kwargs["qty"] == 0.1234
 
 
 def test_post_order_status_failure_preserves_submitted_proposal(monkeypatch):

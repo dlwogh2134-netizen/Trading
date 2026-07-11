@@ -192,6 +192,22 @@ class CoinoneClient:
             "raw": info,
         }
 
+    def get_order_quantity_rules(self, symbol: str) -> dict:
+        """
+        코인원 주문 수량 제한을 반환합니다.
+        응답 raw에 min_qty, max_qty, qty_unit이 포함된 경우 제안/주문 전 검증에서 사용합니다.
+        """
+        info = self.get_currency_info(symbol)
+        raw = info.get("raw") if isinstance(info.get("raw"), dict) else {}
+        return {
+            "symbol": info.get("symbol") or self._normalize_symbol(symbol),
+            "min_qty": raw.get("min_qty") or raw.get("min_order_qty"),
+            "max_qty": raw.get("max_qty") or raw.get("max_order_qty"),
+            "qty_unit": raw.get("qty_unit") or raw.get("quantity_unit"),
+            "source": "COINONE_CURRENCY_INFO",
+            "raw": raw,
+        }
+
     def get_balance(self) -> dict:
         """
         코인원 계좌 잔고를 조회하여 연결 상태를 검증하고 자산 현황을 반환합니다.

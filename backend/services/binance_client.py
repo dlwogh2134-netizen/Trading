@@ -187,11 +187,22 @@ class BinanceSpotClient:
         quote_asset = str((row or {}).get("quoteAsset") or "").upper()
         if not base_asset or not quote_asset:
             raise RuntimeError("바이낸스 심볼 메타데이터에 기준자산 정보가 없습니다.")
+        filters = {item.get("filterType"): item for item in (row or {}).get("filters", []) or []}
+        lot_size = filters.get("LOT_SIZE") or {}
+        market_lot_size = filters.get("MARKET_LOT_SIZE") or {}
+        price_filter = filters.get("PRICE_FILTER") or {}
 
         result = {
             "symbol": normalized_symbol,
             "base_asset": base_asset,
             "quote_asset": quote_asset,
+            "min_qty": _to_float(lot_size.get("minQty")),
+            "max_qty": _to_float(lot_size.get("maxQty")),
+            "step_size": _to_float(lot_size.get("stepSize")),
+            "market_min_qty": _to_float(market_lot_size.get("minQty")),
+            "market_max_qty": _to_float(market_lot_size.get("maxQty")),
+            "market_step_size": _to_float(market_lot_size.get("stepSize")),
+            "tick_size": _to_float(price_filter.get("tickSize")),
         }
         _SPOT_SYMBOL_INFO_CACHE[cache_key] = result
         return dict(result)

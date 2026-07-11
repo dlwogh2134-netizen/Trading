@@ -409,7 +409,7 @@ def test_run_chatbot_tool_stores_precheck_payload_on_proposal(monkeypatch):
 
     def fake_post_internal(path, auth_header, body=None):
         assert path == "/api/trade/precheck"
-        assert body["exchange"] == "KIS"
+        assert body["exchange"] == "TOSS"
         assert body["symbol"] == "005930"
         assert body["action"] == "BUY"
         return {
@@ -587,7 +587,7 @@ def test_run_chatbot_tool_calculates_quantity_for_ratio_sell(monkeypatch):
             "data": {
                 "summaries": [
                     {
-                        "exchange": "KIS",
+                        "exchange": "TOSS",
                         "env": "MOCK",
                         "holdings": [
                             {"symbol": "000660", "qty": 8},
@@ -636,6 +636,30 @@ def test_incomplete_proposal_request_never_calls_llm_or_inserts(monkeypatch):
     assert result["data"]["reason"] == "missing_order_intent"
     assert "종목" in result["reply"]
     assert inserted == []
+
+
+def test_multi_symbol_trade_request_never_prechecks_or_inserts(monkeypatch):
+    monkeypatch.setattr(
+        tool_registry,
+        "_resolve_symbol",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("모호한 복수 종목 해석 금지")),
+    )
+    monkeypatch.setattr(
+        tool_registry,
+        "_run_chatbot_precheck",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("모호한 복수 종목 사전검증 금지")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        tool_registry,
+        "query_supabase",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("모호한 복수 종목 insert 금지")),
+    )
+
+    result = run_chatbot_tool("Bearer test", "삼성전자랑 하이닉스 중 1주 매수 제안해줘")
+
+    assert result["data"]["reason"] == "missing_order_intent"
+    assert "종목" in result["reply"]
 
 
 def test_precheck_failure_does_not_insert_pending_proposal(monkeypatch):
@@ -741,6 +765,25 @@ def test_coinone_market_order_returns_limit_order_guide_without_insert(monkeypat
     assert "800원에" in result["reply"]
 
 
+def test_coinone_amount_market_proposal_returns_limit_order_guide_without_insert(monkeypatch):
+    monkeypatch.setattr(tool_registry, "_resolve_symbol", lambda *args: {
+        "symbol": "BTC", "asset_type": "CRYPTO", "market": "KR",
+    })
+    monkeypatch.setattr(tool_registry, "get_user_id_from_header", lambda auth_header: ("user-1", "test"))
+    monkeypatch.setattr(tool_registry, "_post_internal", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("지원하지 않는 코인원 시장가성 금액 주문은 사전검증 호출 금지")
+    ))
+    monkeypatch.setattr(tool_registry, "query_supabase", lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("지원하지 않는 코인원 시장가성 금액 주문 insert 금지")
+    ))
+
+    result = run_chatbot_tool("Bearer test", "비트코인 8000만원 매수 제안해줘")
+
+    assert result["data"]["reason"] == "unsupported_order_type"
+    assert result["data"]["symbol"] == "BTC"
+    assert "지정가" in result["reply"]
+
+
 @pytest.mark.parametrize(
     ("message", "expected_env"),
     [
@@ -770,3 +813,65 @@ def test_order_environment_defaults_to_mock_and_keeps_explicit_real(monkeypatch,
 
     assert result["data"]["broker_env"] == expected_env
     assert calls[0]["broker_env"] == expected_env
+
+
+def test_crypto_amount_quantity_is_floored_to_eight_decimals():
+    quantity = tool_registry._quantity_from_amount(1, 6, "CRYPTO")
+
+    assert quantity == 0.16666666
+
+
+def test_crypto_explicit_quantity_is_floored_before_precheck_and_insert(monkeypatch):
+    calls = []
+
+    def fake_query(auth_header, endpoint, method="GET", json_data=None, params=None):
+        calls.append({"endpoint": endpoint, "json_data": json_data})
+        if endpoint == "trade_proposals":
+            return [{"id": "proposal-crypto-precision", "status": "PENDING"}]
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(tool_registry, "_resolve_symbol", lambda *args: {
+        "symbol": "XRP", "asset_type": "CRYPTO", "market": "KR",
+    })
+    monkeypatch.setattr(
+        tool_registry,
+        "_run_chatbot_precheck",
+        lambda **kwargs: calls.append({"endpoint": "precheck", "json_data": kwargs}) or _valid_precheck(),
+        raising=False,
+    )
+    monkeypatch.setattr(tool_registry, "get_user_id_from_header", lambda auth_header: ("user-1", "test"))
+    monkeypatch.setattr(tool_registry, "query_supabase", fake_query)
+
+    result = run_chatbot_tool("Bearer test", "XRP 0.123456789개 800원에 모의로 사줘")
+
+    assert result["data"]["status"] == "PENDING"
+    assert calls[0]["json_data"]["quantity"] == 0.12345678
+    assert calls[1]["json_data"]["volume"] == 0.12345678
+
+
+def test_chatbot_proposal_uses_exchange_normalized_precheck_quantity(monkeypatch):
+    calls = []
+
+    def fake_query(auth_header, endpoint, method="GET", json_data=None, params=None):
+        calls.append({"endpoint": endpoint, "json_data": json_data})
+        if endpoint == "trade_proposals":
+            return [{"id": "proposal-normalized-qty", "status": "PENDING"}]
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(tool_registry, "_resolve_symbol", lambda *args: {
+        "symbol": "XRP", "asset_type": "CRYPTO", "market": "KR",
+    })
+    monkeypatch.setattr(
+        tool_registry,
+        "_run_chatbot_precheck",
+        lambda **kwargs: _valid_precheck(quantity=0.1234, estimated_amount_krw=98.72),
+        raising=False,
+    )
+    monkeypatch.setattr(tool_registry, "get_user_id_from_header", lambda auth_header: ("user-1", "test"))
+    monkeypatch.setattr(tool_registry, "query_supabase", fake_query)
+
+    result = run_chatbot_tool("Bearer test", "XRP 0.12345678개 800원에 모의로 사줘")
+
+    assert result["data"]["status"] == "PENDING"
+    assert calls[0]["json_data"]["volume"] == 0.1234
+    assert calls[0]["json_data"]["raw_order_payload"]["precheck"]["quantity"] == 0.1234
