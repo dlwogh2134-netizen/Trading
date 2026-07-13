@@ -2,7 +2,7 @@ import os
 import re
 import requests
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from backend.services.kis_client import KISClient
 from backend.services.kis_market_universe import build_turnover_snapshot_rows, clean_stock_name
@@ -18,7 +18,6 @@ HOME_STOCK_SCAN_LIMIT = int(os.getenv("HOME_STOCK_SCAN_LIMIT", "120"))
 HOME_STOCK_SCAN_WORKERS = int(os.getenv("HOME_STOCK_SCAN_WORKERS", "4"))
 HOME_STOCK_CACHE_TTL_SECONDS = int(os.getenv("HOME_STOCK_CACHE_TTL_SECONDS", "300"))
 HOME_MARKET_RANK_LIMIT = int(os.getenv("HOME_MARKET_RANK_LIMIT", "50"))
-HOME_MARKET_SNAPSHOT_COHORT_SECONDS = int(os.getenv("HOME_MARKET_SNAPSHOT_COHORT_SECONDS", "1800"))
 HOME_STOCK_PRIORITY_SYMBOLS = [
     symbol.strip().upper()
     for symbol in os.getenv(
@@ -347,24 +346,24 @@ def get_stock_rank_order(ranking: str | None) -> str:
     return "trading_value.desc,updated_at.desc"
 
 
-def latest_snapshot_cutoff(rows: list[dict]) -> datetime | None:
+def latest_snapshot_kst_date(rows: list[dict]) -> date | None:
     parsed_dates = [
-        parsed.astimezone(timezone.utc)
+        parsed.astimezone(KST).date()
         for parsed in (parse_datetime(row.get("as_of")) for row in rows or [])
         if parsed is not None
     ]
     if not parsed_dates:
         return None
-    return max(parsed_dates) - timedelta(seconds=HOME_MARKET_SNAPSHOT_COHORT_SECONDS)
+    return max(parsed_dates)
 
 
 def filter_latest_snapshot_rows(rows: list[dict]) -> list[dict]:
-    cutoff = latest_snapshot_cutoff(rows)
-    if cutoff is None:
+    latest_date = latest_snapshot_kst_date(rows)
+    if latest_date is None:
         return rows
     return [
         row for row in rows
-        if (parse_datetime(row.get("as_of")) or datetime.min.replace(tzinfo=timezone.utc)).astimezone(timezone.utc) >= cutoff
+        if (parse_datetime(row.get("as_of")) or datetime.min.replace(tzinfo=timezone.utc)).astimezone(KST).date() == latest_date
     ]
 
 
