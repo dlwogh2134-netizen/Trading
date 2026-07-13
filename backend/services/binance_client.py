@@ -147,10 +147,14 @@ class BinanceSpotClient:
         if res.status_code != 200:
             raise Exception(f"바이낸스 현재가 조회 실패 (상태 코드 {res.status_code}): {res.text}")
         data = res.json()
+        current_price = float(data.get("lastPrice") or 0)
+        previous_close = float(data.get("openPrice") or 0)
+        change_rate = ((current_price - previous_close) / previous_close) * 100 if current_price and previous_close else float(data.get("priceChangePercent") or 0)
         return {
             "symbol": normalized_symbol,
-            "current_price": float(data.get("lastPrice") or 0),
-            "change_rate": float(data.get("priceChangePercent") or 0),
+            "current_price": current_price,
+            "change_rate": change_rate,
+            "previous_close": previous_close,
             "currency": "USDT",
             "raw": data,
         }
@@ -726,10 +730,14 @@ class BinanceFuturesClient:
         if res.status_code != 200:
             raise Exception(f"바이낸스 선물 현재가 조회 실패 (상태 코드 {res.status_code}): {res.text}")
         data = res.json()
+        current_price = float(data.get("lastPrice") or 0)
+        previous_close = float(data.get("openPrice") or 0)
+        change_rate = ((current_price - previous_close) / previous_close) * 100 if current_price and previous_close else float(data.get("priceChangePercent") or 0)
         return {
             "symbol": normalized_symbol,
-            "current_price": float(data.get("lastPrice") or 0),
-            "change_rate": float(data.get("priceChangePercent") or 0),
+            "current_price": current_price,
+            "change_rate": change_rate,
+            "previous_close": previous_close,
             "currency": "USDT",
             "raw": data,
         }

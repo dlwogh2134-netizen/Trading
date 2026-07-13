@@ -68,6 +68,12 @@ def test_extract_symbol_query_normalizes_common_us_stock_korean_aliases():
     assert tool_registry._extract_symbol_query("테슬라 거래내역 보여줘") == "TSLA"
 
 
+def test_extract_symbol_query_normalizes_common_domestic_stock_aliases():
+    assert tool_registry._extract_symbol_query("현대건설 전망은?") == "000720"
+    assert tool_registry._extract_symbol_query("현대건설우 전망은?") == "000725"
+    assert tool_registry._extract_symbol_query("현대그린푸드 거래내역 보여줘") == "453340"
+
+
 def test_search_trade_history_filters_by_symbol_name(monkeypatch):
     captured_params = {}
     monkeypatch.setattr(tool_registry, "get_user_id_from_header", lambda auth_header: ("user-1", "token"))
@@ -83,6 +89,57 @@ def test_search_trade_history_filters_by_symbol_name(monkeypatch):
     tool_registry.search_trade_history("Bearer test", "테슬라 거래내역 보여줘")
 
     assert captured_params["symbol"] == "eq.TSLA"
+
+
+def test_resolve_symbol_uses_search_candidate_when_lookup_fails(monkeypatch):
+    calls = []
+
+    def fake_get_internal(path, auth_header, params=None):
+        calls.append({"path": path, "params": params})
+        if path == "/api/symbol/lookup":
+            raise RuntimeError("검색 결과가 없습니다.")
+        assert path == "/api/symbol/search"
+        return {
+            "data": [
+                {
+                    "symbol": "000725",
+                    "display_name": "현대건설우",
+                    "asset_type": "STOCK",
+                    "market": "KR",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(tool_registry, "_get_internal", fake_get_internal)
+
+    result = tool_registry._resolve_symbol("Bearer test", "현대건설우")
+
+    assert result["symbol"] == "000725"
+    assert calls[0]["path"] == "/api/symbol/lookup"
+    assert calls[1]["path"] == "/api/symbol/search"
+
+
+def test_asset_outlook_returns_clickable_actions_for_ambiguous_symbol(monkeypatch):
+    def fake_get_internal(path, auth_header, params=None):
+        if path == "/api/symbol/lookup":
+            raise RuntimeError("검색 결과가 없습니다.")
+        assert path == "/api/symbol/search"
+        return {
+            "data": [
+                {"symbol": "000720", "display_name": "현대건설", "asset_type": "STOCK", "market": "KR"},
+                {"symbol": "000725", "display_name": "현대건설우", "asset_type": "STOCK", "market": "KR"},
+            ]
+        }
+
+    monkeypatch.setattr(tool_registry, "_get_internal", fake_get_internal)
+
+    result = tool_registry.get_asset_outlook("Bearer test", "현대건설 전망은?")
+
+    assert "어떤 종목을 말하나요?" in result["reply"]
+    assert result["actions"] == [
+        {"type": "navigate", "label": "현대건설(000720) 조회", "to": "/asset/STOCK/000720"},
+        {"type": "navigate", "label": "현대건설우(000725) 조회", "to": "/asset/STOCK/000725"},
+    ]
 
 
 def test_add_watchlist_item_saves_price_snapshot(monkeypatch):

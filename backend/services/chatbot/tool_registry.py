@@ -31,12 +31,47 @@ _conversation_repository = ChatbotConversationRepository()
 
 SYMBOL_QUERY_ALIASES = {
     "삼전": "삼성전자",
+    "삼성": "삼성전자",
     "하닉": "SK하이닉스",
     "하이닉스": "SK하이닉스",
+    "네이버": "035420",
+    "NAVER": "035420",
+    "카카오": "035720",
+    "엔씨": "036570",
+    "엔씨소프트": "036570",
+    "카카오뱅크": "323410",
+    "카뱅": "323410",
+    "카카오페이": "377300",
+    "카페이": "377300",
+    "현대건설": "000720",
+    "현대건설우": "000725",
+    "현대그린푸드": "453340",
+    "두산에너빌리티": "034020",
+    "두산에너": "034020",
+    "삼성전기": "009150",
+    "삼바": "207940",
+    "삼성바이오로직스": "207940",
+    "엘지에너지솔루션": "373220",
+    "LG에너지솔루션": "373220",
+    "엘지엔솔": "373220",
+    "LG엔솔": "373220",
+    "엘지화학": "051910",
+    "LG화학": "051910",
+    "포스코홀딩스": "005490",
+    "POSCO홀딩스": "005490",
+    "셀트리온": "068270",
+    "GST": "083450",
+    "지에스티": "083450",
+    "쥐에스티": "083450",
+    "기아": "000270",
+    "현대차": "005380",
+    "현대자동차": "005380",
     "애플": "AAPL",
     "마이크로소프트": "MSFT",
     "마소": "MSFT",
     "엔비디아": "NVDA",
+    "엔비": "NVDA",
+    "엔비디아주식": "NVDA",
     "아마존": "AMZN",
     "구글": "GOOGL",
     "알파벳": "GOOGL",
@@ -53,6 +88,20 @@ SYMBOL_QUERY_ALIASES = {
     "인텔": "INTC",
     "팔란티어": "PLTR",
     "우버": "UBER",
+    "큐큐큐": "QQQ",
+    "인베스코QQQ": "QQQ",
+    "인베스코큐큐큐": "QQQ",
+    "나스닥100": "QQQ",
+    "에스피와이": "SPY",
+    "스파이": "SPY",
+    "S&P500": "SPY",
+    "에스앤피500": "SPY",
+    "브이오오": "VOO",
+    "뱅가드S&P500": "VOO",
+    "슈드": "SCHD",
+    "찰스슈왑배당": "SCHD",
+    "티큐큐": "TQQQ",
+    "에스큐큐큐": "SQQQ",
     "비트": "BTC",
     "비트코인": "BTC",
     "이더": "ETH",
@@ -65,6 +114,12 @@ SYMBOL_QUERY_ALIASES = {
     "솔라나": "SOL",
     "에이다": "ADA",
     "트론": "TRX",
+    "수이": "SUI",
+    "체인링크": "LINK",
+    "폴리곤": "POL",
+    "아발란체": "AVAX",
+    "바이낸스코인": "BNB",
+    "비앤비": "BNB",
 }
 
 SYMBOL_COMMAND_PATTERN = re.compile(
@@ -76,6 +131,15 @@ SYMBOL_COMMAND_PATTERN = re.compile(
 KOREAN_MONEY_NUMBER_PATTERN = re.compile(
     r"[일한이삼사오육칠팔구십백천만]+\s*(?:만원|천원|원|만)"
 )
+
+
+class SymbolDisambiguationError(ValueError):
+    """종목명이 여러 후보로 해석될 때 챗봇 선택 버튼 생성을 위해 사용합니다."""
+
+    def __init__(self, query: str, candidates: list[dict]):
+        super().__init__("종목 후보가 여러 개입니다.")
+        self.query = query
+        self.candidates = candidates
 
 
 @lru_cache(maxsize=1)
@@ -102,6 +166,10 @@ def _normalize_symbol_candidate(candidate: str) -> str:
     if not symbol:
         return ""
 
+    symbol = re.sub(r"(의|은|는|이|가|을|를)$", "", symbol).strip()
+    if not symbol:
+        return ""
+
     alias = SYMBOL_QUERY_ALIASES.get(symbol) or SYMBOL_QUERY_ALIASES.get(symbol.upper())
     if alias:
         return alias
@@ -113,6 +181,86 @@ def _normalize_symbol_candidate(candidate: str) -> str:
     if upper_symbol in training_symbols:
         return upper_symbol
     return symbol
+
+
+def normalize_symbol_alias(candidate: str) -> str:
+    """사용자 입력 종목 별칭을 lookup/search 전에 표준 검색어로 정규화합니다."""
+    return _normalize_symbol_candidate(candidate)
+
+
+def _normalize_symbol_result(row: dict) -> dict:
+    symbol = str(row.get("symbol") or "").strip().upper()
+    display_name = str(row.get("display_name") or row.get("name") or symbol).strip()
+    asset_type = str(row.get("asset_type") or "STOCK").strip().upper()
+    market = str(row.get("market") or row.get("market_country") or "").strip().upper()
+    return {
+        **row,
+        "symbol": symbol,
+        "display_name": display_name or symbol,
+        "asset_type": asset_type,
+        "market": market,
+    }
+
+
+def _search_symbol_candidates(auth_header: str, query: str, limit: int = 5) -> list[dict]:
+    if not query:
+        return []
+    try:
+        payload = _get_internal("/api/symbol/search", auth_header, params={"query": query})
+    except Exception:
+        return []
+
+    candidates = []
+    seen = set()
+    for row in payload.get("data") or []:
+        candidate = _normalize_symbol_result(row if isinstance(row, dict) else {})
+        symbol = candidate.get("symbol")
+        if not symbol:
+            continue
+        key = (candidate.get("asset_type"), symbol)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def _asset_route(candidate: dict) -> str:
+    asset_type = str(candidate.get("asset_type") or "STOCK").upper()
+    symbol = str(candidate.get("symbol") or "").upper()
+    return f"/asset/{asset_type}/{symbol}"
+
+
+def _build_symbol_choice_response(query: str, candidates: list[dict]) -> dict:
+    display_query = str(query or "").strip() or "입력한 종목"
+    lines = ["어떤 종목을 말하나요?"]
+    for index, candidate in enumerate(candidates[:5], start=1):
+        symbol = candidate.get("symbol")
+        display_name = candidate.get("display_name") or symbol
+        market = candidate.get("market") or candidate.get("asset_type") or ""
+        market_text = f" / {market}" if market else ""
+        lines.append(f"{index}. {display_name}({symbol}){market_text}")
+
+    actions = [
+        {
+            "type": "navigate",
+            "label": f"{candidate.get('display_name') or candidate.get('symbol')}({candidate.get('symbol')}) 조회",
+            "to": _asset_route(candidate),
+        }
+        for candidate in candidates[:5]
+        if candidate.get("symbol")
+    ]
+    return {
+        "reply": "\n".join(lines),
+        "actions": actions,
+        "data": {
+            "source": "SYMBOL_DISAMBIGUATION",
+            "query": display_query,
+            "candidates": candidates[:5],
+        },
+    }
 
 
 def list_available_tools() -> list[str]:
@@ -189,20 +337,20 @@ def _format_quantity(value) -> str:
 def _extract_symbol_query(text: str) -> str:
     ticker_match = re.search(r"(?<![A-Za-z0-9._-])([A-Za-z][A-Za-z0-9._-]{1,11})(?:의|은|는|이|가|을|를|에|에서)?", text)
     if ticker_match:
-        return _normalize_symbol_candidate(ticker_match.group(1))
+        return normalize_symbol_alias(ticker_match.group(1))
 
     cleaned = SYMBOL_COMMAND_PATTERN.sub(" ", text)
     cleaned = re.sub(r"\d+(?:\.\d+)?\s*(만원|천원|원|만)", " ", cleaned)
     cleaned = KOREAN_MONEY_NUMBER_PATTERN.sub(" ", cleaned)
     cleaned = re.sub(r"(?<![가-힣])만원\s*(이상|이하|초과|미만|넘는|넘어|부터)?", " ", cleaned)
-    cleaned = re.sub(r"(이상|이하|초과|미만|넘는|넘어|부터|전체|최근|상태|매수|매도|취소|체결|완료|실패|조회|검색|확인|내|나의|내가|내역|목록|전망|분석|어때|오를까|괜찮아|살까)", " ", cleaned)
+    cleaned = re.sub(r"(이상|이하|초과|미만|넘는|넘어|부터|전체|최근|상태|매수|매도|취소|체결|완료|실패|조회|검색|확인|내|나의|내가|내역|목록|전망|분석|어때|오를까|괜찮아|살까|해외주식|미국주식|국내주식|해외|미국|국내|주식|주가)", " ", cleaned)
     cleaned = re.sub(r"(?<=\S)(의|은|는|이|가|을|를)$", " ", cleaned)
     cleaned = re.sub(r"[^0-9A-Za-z가-힣._-]+", " ", cleaned)
     candidates = [part.strip() for part in cleaned.split() if part.strip()]
     if not candidates:
         return ""
     candidate = candidates[0]
-    return _normalize_symbol_candidate(candidate)
+    return normalize_symbol_alias(candidate)
 
 
 def _is_likely_symbol_token(value: str) -> bool:
@@ -211,13 +359,28 @@ def _is_likely_symbol_token(value: str) -> bool:
 
 
 def _resolve_symbol(auth_header: str, query: str) -> dict:
-    if not query:
+    normalized_query = normalize_symbol_alias(query)
+    if not normalized_query:
         raise ValueError("종목명 또는 종목코드가 필요합니다.")
-    payload = _get_internal("/api/symbol/lookup", auth_header, params={"query": query})
-    data = payload.get("data") or {}
+    try:
+        payload = _get_internal("/api/symbol/lookup", auth_header, params={"query": normalized_query})
+        data = payload.get("data") or {}
+    except Exception as lookup_error:
+        candidates = _search_symbol_candidates(auth_header, normalized_query)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise SymbolDisambiguationError(normalized_query, candidates) from lookup_error
+        raise ValueError("종목을 찾지 못했습니다.") from lookup_error
+
     if not data.get("symbol"):
+        candidates = _search_symbol_candidates(auth_header, normalized_query)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise SymbolDisambiguationError(normalized_query, candidates)
         raise ValueError("종목을 찾지 못했습니다.")
-    return data
+    return _normalize_symbol_result(data)
 
 
 def _detect_exchange(text: str) -> str | None:
@@ -236,7 +399,7 @@ def _detect_exchange(text: str) -> str | None:
 def _default_exchange_for_asset(asset_type: str, market: str) -> str:
     if str(asset_type or "").upper() == "CRYPTO":
         return "COINONE"
-    return "TOSS"
+    return "TOSS" if str(market or "").upper() == "US" else "KIS"
 
 
 def _detect_env(text: str) -> str | None:
@@ -245,6 +408,68 @@ def _detect_env(text: str) -> str | None:
     if "실전" in text or "실거래" in text or "REAL" in text.upper():
         return "REAL"
     return None
+
+
+def _is_plain_order_requiring_confirmation(message: str, parsed: ParsedOrderIntent) -> bool:
+    """
+    종목/방향/수량만 있는 첫 주문은 바로 사전검증하지 않고 사용자 확인을 먼저 받습니다.
+    """
+    if not _detect_exchange(message):
+        return False
+    if parsed.quantity is None or parsed.quantity <= 0:
+        return False
+    if parsed.price is not None or parsed.amount_krw is not None or parsed.sell_ratio is not None:
+        return False
+    if parsed.broker_env:
+        return False
+    if _detect_exchange(message):
+        return False
+    return True
+
+
+def _format_order_confirmation_reply(symbol_data: dict, parsed: ParsedOrderIntent, exchange: str, broker_env: str) -> str:
+    symbol = str(symbol_data.get("symbol") or parsed.symbol_query).upper()
+    display_name = str(symbol_data.get("display_name") or parsed.symbol_query or symbol).strip()
+    asset_label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
+    side_label = "매수" if parsed.side == "BUY" else "매도"
+    quantity_label = _format_quantity(parsed.quantity)
+    env_label = "모의투자" if broker_env == "MOCK" else "실거래"
+    return (
+        f"{asset_label} {quantity_label}주 {side_label} 말씀하시는 건가요?\n"
+        f"맞으면 '맞아' 또는 '응'이라고 답해 주세요. "
+        f"확인 후 {exchange} {env_label} 기준으로 사전검증을 진행하겠습니다."
+    )
+
+
+def _store_order_confirmation(auth_header: str, message: str, parsed: ParsedOrderIntent, symbol_data: dict, exchange: str, broker_env: str) -> dict:
+    user_id, _ = get_user_id_from_header(auth_header)
+    _conversation_repository.set_pending_action(
+        auth_header,
+        user_id,
+        "trade_order_confirmation",
+        {
+            "message": message,
+            "symbol": str(symbol_data.get("symbol") or parsed.symbol_query).upper(),
+            "symbol_query": parsed.symbol_query,
+            "side": parsed.side,
+            "quantity": parsed.quantity,
+            "exchange": exchange,
+            "broker_env": broker_env,
+        },
+        ttl_seconds=300,
+    )
+    return {
+        "reply": _format_order_confirmation_reply(symbol_data, parsed, exchange, broker_env),
+        "data": {
+            "source": "CHATBOT_ORDER_CONFIRMATION",
+            "status": "PENDING_CONFIRMATION",
+            "exchange": exchange,
+            "symbol": str(symbol_data.get("symbol") or parsed.symbol_query).upper(),
+            "side": parsed.side,
+            "quantity": parsed.quantity,
+            "broker_env": broker_env,
+        },
+    }
 
 
 def _detect_ranking(text: str) -> str:
@@ -478,6 +703,8 @@ def get_asset_price(auth_header: str, message: str) -> dict:
 
     try:
         symbol_data = _resolve_symbol(auth_header, symbol_query)
+    except SymbolDisambiguationError as error:
+        return _build_symbol_choice_response(error.query, error.candidates)
     except Exception:
         if not _is_likely_symbol_token(symbol_query):
             return {
@@ -490,17 +717,30 @@ def get_asset_price(auth_header: str, message: str) -> dict:
     display_name = str(symbol_data.get("display_name") or symbol).strip()
     asset_type = str(symbol_data.get("asset_type") or "").upper()
     market = str(symbol_data.get("market") or "").strip().upper()
+    label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
     exchange = _detect_exchange(message) or _default_exchange_for_asset(asset_type, market)
     broker_env = _detect_env(message) or "REAL"
-    payload = _get_internal(
-        "/api/chart/quote",
-        auth_header,
-        params={
-            "exchange": exchange,
-            "symbol": symbol,
-            "broker_env": broker_env,
-        },
-    )
+    try:
+        payload = _get_internal(
+            "/api/chart/quote",
+            auth_header,
+            params={
+                "exchange": exchange,
+                "symbol": symbol,
+                "broker_env": broker_env,
+            },
+        )
+    except Exception:
+        return {
+            "reply": f"{label} 현재가를 확인하지 못했습니다.\n거래소 시세 조회가 일시적으로 지연되고 있습니다.\n잠시 후 다시 시도해 주세요.",
+            "data": {
+                "source": "ASSET_PRICE",
+                "symbol": symbol,
+                "exchange": exchange,
+                "broker_env": broker_env,
+                "reason": "quote_api_failed",
+            },
+        }
     data = payload.get("data") or {}
     current_price = _to_float(
         data.get("current_price")
@@ -510,7 +750,6 @@ def get_asset_price(auth_header: str, message: str) -> dict:
     )
     change_rate = _to_float(data.get("change_rate"))
     currency = str(data.get("currency") or ("USD" if market == "US" else "KRW")).upper()
-    label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
 
     if current_price <= 0:
         return {
@@ -607,7 +846,10 @@ def _get_watchlist_price_snapshot(auth_header: str, exchange: str, symbol: str) 
 def add_watchlist_item(auth_header: str, message: str) -> dict:
     user_id, _ = get_user_id_from_header(auth_header)
     symbol_query = _extract_symbol_query(message)
-    symbol_data = _resolve_symbol(auth_header, symbol_query)
+    try:
+        symbol_data = _resolve_symbol(auth_header, symbol_query)
+    except SymbolDisambiguationError as error:
+        return _build_symbol_choice_response(error.query, error.candidates)
     symbol = str(symbol_data.get("symbol") or "").upper()
     asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
     market = str(symbol_data.get("market") or "").upper()
@@ -654,7 +896,10 @@ def add_watchlist_item(auth_header: str, message: str) -> dict:
 def remove_watchlist_item(auth_header: str, message: str) -> dict:
     user_id, _ = get_user_id_from_header(auth_header)
     symbol_query = _extract_symbol_query(message)
-    symbol_data = _resolve_symbol(auth_header, symbol_query)
+    try:
+        symbol_data = _resolve_symbol(auth_header, symbol_query)
+    except SymbolDisambiguationError as error:
+        return _build_symbol_choice_response(error.query, error.candidates)
     symbol = str(symbol_data.get("symbol") or "").upper()
     asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
     market = str(symbol_data.get("market") or "").upper()
@@ -735,6 +980,85 @@ def _collect_precheck_blockers(precheck: dict, broker_env: str) -> list[str]:
     return blockers
 
 
+def _exchange_has_mock_env(exchange: str) -> bool:
+    return str(exchange or "").upper() not in {"TOSS", "COINONE"}
+
+
+def _build_missing_order_price_result(
+    symbol: str,
+    side: str | None,
+    exchange: str,
+    broker_env: str,
+) -> dict:
+    return {
+        "reply": (
+            f"{symbol} {side or ''} 매매 제안은 지정가 금액이 필요합니다.\n"
+            f"{exchange}는 모의 계좌 없이 {broker_env} 계좌 기준으로 진행하므로, "
+            "1주/1개당 지정가를 알려주세요. 예: '지정가 3,500원'"
+        ),
+        "data": {
+            "source": "CHATBOT_ORDER_PARSER",
+            "reason": "missing_order_price",
+            "exchange": exchange,
+            "symbol": symbol,
+            "side": side,
+            "broker_env": broker_env,
+        },
+    }
+
+
+def _build_missing_order_env_and_price_result(
+    symbol: str,
+    side: str | None,
+    exchange: str,
+) -> dict:
+    return {
+        "reply": (
+            f"{symbol} {side or ''} 매매 제안을 만들 계좌 환경과 지정가 금액을 알려주세요.\n"
+            "예: '실거래 지정가 3,500원' 또는 '모의 지정가 3,500원'"
+        ),
+        "data": {
+            "source": "CHATBOT_ORDER_PARSER",
+            "reason": "missing_order_env_and_price",
+            "exchange": exchange,
+            "symbol": symbol,
+            "side": side,
+        },
+    }
+
+
+def _build_missing_exchange_result(symbol: str, side: str | None) -> dict:
+    return {
+        "reply": (
+            f"{symbol} {side or ''} 매매 제안을 만들 거래소를 먼저 알려주세요.\n"
+            "예: '토스', 'KIS', '코인원', '바이낸스'"
+        ),
+        "data": {
+            "source": "CHATBOT_ORDER_PARSER",
+            "reason": "missing_exchange",
+            "symbol": symbol,
+            "side": side,
+        },
+    }
+
+
+def _build_unsupported_broker_env_result(exchange: str, broker_env: str, symbol: str) -> dict:
+    env_label = "모의" if broker_env == "MOCK" else broker_env
+    return {
+        "reply": (
+            f"{exchange}는 {env_label} 계좌 환경을 지원하지 않습니다.\n"
+            "실거래 기준으로 진행하려면 '실거래'와 지정가를 함께 다시 입력해 주세요."
+        ),
+        "data": {
+            "source": "CHATBOT_ORDER_PARSER",
+            "reason": "unsupported_broker_env",
+            "exchange": exchange,
+            "broker_env": broker_env,
+            "symbol": symbol,
+        },
+    }
+
+
 def create_trade_proposal(auth_header: str, arguments: dict) -> dict:
     """사용자 승인 전 상태인 PENDING 매매 제안만 생성합니다."""
     enforce_tool_safety("create_trade_proposal", arguments)
@@ -761,6 +1085,8 @@ def create_trade_proposal(auth_header: str, arguments: dict) -> dict:
         raise ValueError("코인원 매매 제안은 지정가 주문만 지원합니다.")
     if broker_env not in {"MOCK", "REAL"}:
         raise ValueError("broker_env는 MOCK 또는 REAL이어야 합니다.")
+    if broker_env == "MOCK" and not _exchange_has_mock_env(exchange):
+        raise ValueError(f"{exchange}는 모의 계좌 환경을 지원하지 않습니다.")
 
     try:
         quantity = float(values.get("quantity") or values.get("volume"))
@@ -838,18 +1164,46 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
     parsed = intent or parse_order_intent(message)
     if not parsed.is_order_request or not parsed.side or not parsed.symbol_query:
         return {
-            "reply": "매매 제안을 만들 종목, 방향, 수량 또는 금액을 함께 알려주세요.",
+            "reply": "매매 제안을 만들 종목, 방향, 수량과 금액을 함께 알려주세요.",
             "data": {"source": "CHATBOT_ORDER_PARSER", "reason": "missing_order_intent"},
         }
 
-    symbol_data = _resolve_symbol(auth_header, parsed.symbol_query)
+    try:
+        symbol_data = _resolve_symbol(auth_header, parsed.symbol_query)
+    except SymbolDisambiguationError as error:
+        return _build_symbol_choice_response(error.query, error.candidates)
     symbol = str(symbol_data.get("symbol") or parsed.symbol_query).upper()
+    display_name = str(symbol_data.get("display_name") or parsed.symbol_query or symbol).strip()
+    asset_label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
     asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
     market = str(symbol_data.get("market") or "").upper()
     exchange = _detect_exchange(message)
     if not exchange:
-        exchange = _default_exchange_for_asset(asset_type, market)
-    broker_env = parsed.broker_env or "MOCK"
+        return _build_missing_exchange_result(symbol, parsed.side)
+    price = parsed.price
+    if parsed.broker_env:
+        broker_env = parsed.broker_env
+    elif _exchange_has_mock_env(exchange):
+        if price is None:
+            return _build_missing_order_env_and_price_result(symbol, parsed.side, exchange)
+        return {
+            "reply": f"{symbol} 매매 제안을 만들 계좌 환경을 알려주세요. 예: '실거래' 또는 '모의'",
+            "data": {
+                "source": "CHATBOT_ORDER_PARSER",
+                "reason": "missing_order_env",
+                "exchange": exchange,
+                "symbol": symbol,
+                "side": parsed.side,
+            },
+        }
+    else:
+        broker_env = "REAL"
+
+    if broker_env == "MOCK" and not _exchange_has_mock_env(exchange):
+        return _build_unsupported_broker_env_result(exchange, broker_env, symbol)
+
+    if price is None and exchange in {"TOSS", "COINONE"}:
+        return _build_missing_order_price_result(symbol, parsed.side, exchange, broker_env)
 
     if exchange == "COINONE" and parsed.order_type == "MARKET":
         return {
@@ -865,7 +1219,6 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
             },
         }
 
-    price = parsed.price
     if price is None and (parsed.amount_krw or parsed.sell_ratio):
         price = _lookup_current_price(auth_header, exchange, symbol, broker_env)
 
@@ -929,7 +1282,7 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
                 },
             }
         return {
-            "reply": f"{symbol} {parsed.side} 매매 제안을 만들 수량을 알려주세요.",
+            "reply": f"{asset_label} {'매수' if parsed.side == 'BUY' else '매도'} 제안을 만들 수량을 알려주세요.",
             "data": {"source": "CHATBOT_ORDER_PARSER", "reason": "missing_quantity", "symbol": symbol},
         }
     quantity = _normalize_order_quantity(quantity, asset_type)
@@ -1347,6 +1700,8 @@ def search_trade_history(auth_header: str, message: str) -> dict:
     if symbol_query:
         try:
             symbol = _resolve_symbol(auth_header, symbol_query).get("symbol") or ""
+        except SymbolDisambiguationError as error:
+            return _build_symbol_choice_response(error.query, error.candidates)
         except Exception:
             symbol = symbol_query.upper() if _is_likely_symbol_token(symbol_query) else ""
 
@@ -1423,6 +1778,8 @@ def list_open_orders(auth_header: str, message: str) -> dict:
     if symbol_query:
         try:
             symbol = _resolve_symbol(auth_header, symbol_query).get("symbol") or ""
+        except SymbolDisambiguationError as error:
+            return _build_symbol_choice_response(error.query, error.candidates)
         except Exception:
             symbol = symbol_query.upper() if _is_likely_symbol_token(symbol_query) else ""
 
@@ -1519,6 +1876,8 @@ def get_asset_outlook(auth_header: str, message: str) -> dict:
     symbol_data = {}
     try:
         symbol_data = _resolve_symbol(auth_header, symbol_query)
+    except SymbolDisambiguationError as error:
+        return _build_symbol_choice_response(error.query, error.candidates)
     except Exception:
         if not _is_likely_symbol_token(symbol_query):
             return {
@@ -1608,6 +1967,20 @@ def run_chatbot_tool(auth_header: str | None, message: str) -> dict | None:
     order_intent = parse_order_intent(text)
     if order_intent.is_order_request:
         enforce_tool_safety("create_trade_proposal", {"message": text})
+        if _is_plain_order_requiring_confirmation(text, order_intent):
+            symbol_data = _resolve_symbol(auth_header, order_intent.symbol_query)
+            asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
+            market = str(symbol_data.get("market") or "").upper()
+            exchange = _default_exchange_for_asset(asset_type, market)
+            broker_env = "MOCK"
+            return _store_order_confirmation(
+                auth_header,
+                text,
+                order_intent,
+                symbol_data,
+                exchange,
+                broker_env,
+            )
         return create_trade_proposal_from_message(auth_header, text, order_intent)
 
     def guarded(tool_name: str, tool_func):

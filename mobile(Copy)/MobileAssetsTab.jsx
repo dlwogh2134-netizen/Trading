@@ -4,6 +4,7 @@ import { supabase } from '../../supabaseClient'
 import { Rate, SectionHeader } from '../../components/DashboardComponents.jsx'
 import { getApiErrorMessage } from '../../lib/apiError.js'
 import AssetLogo from '../../components/AssetLogo.jsx'
+import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 const TAG_REQUIRED_SYMBOLS = new Set(['XRP', 'XLM', 'EOS'])
@@ -544,13 +545,13 @@ export default function AssetsTab({
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Private Asset</p>
             <div className={`${mobileLayout ? 'mt-0.5 gap-1.5' : 'mt-1 gap-2'} flex flex-col sm:flex-row sm:items-center`}>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-white">계좌별 자산 요약</h2>
+              <h2 className="whitespace-nowrap text-sm font-bold uppercase tracking-wider text-white">계좌별 자산 요약</h2>
               {setShowMockAssets ? (
                 <div className="inline-flex w-fit rounded-md border border-slate-700/80 bg-[#0f172a] p-1">
                   <button
                     type="button"
                     onClick={() => setShowMockAssets(true)}
-                    className={`rounded px-3 py-1 text-xs font-bold transition-all ${showMockAssets
+                    className={`min-w-[68px] rounded px-3 py-1 text-center text-xs font-bold leading-tight transition-all ${showMockAssets
                       ? 'bg-slate-700 text-white shadow'
                       : 'text-slate-400 hover:text-white'
                     }`}
@@ -560,7 +561,7 @@ export default function AssetsTab({
                   <button
                     type="button"
                     onClick={() => setShowMockAssets(false)}
-                    className={`rounded px-3 py-1 text-xs font-bold transition-all ${!showMockAssets
+                    className={`min-w-[68px] rounded px-3 py-1 text-center text-xs font-bold leading-tight transition-all ${!showMockAssets
                       ? 'bg-slate-700 text-white shadow'
                       : 'text-slate-400 hover:text-white'
                     }`}
@@ -696,7 +697,7 @@ export default function AssetsTab({
                     <div className="flex min-w-0 items-center gap-3">
                       <AssetLogo symbol={item.id} assetType={item.assetType} name={item.name} size="h-9 w-9" />
                       <div className="min-w-0">
-                        <Link to={`/asset/${item.assetType || 'STOCK'}/${item.id}`} className="block truncate text-sm font-bold text-blue-400 no-underline">
+                        <Link to={preserveMobileDeviceParam(`/asset/${item.assetType || 'STOCK'}/${item.id}`)} className="block truncate text-sm font-bold text-blue-400 no-underline">
                           {item.name}
                         </Link>
                         <div className="mt-0.5 flex min-w-0 items-center gap-2">
@@ -806,7 +807,7 @@ export default function AssetsTab({
                       <div className="flex items-center gap-3">
                         <AssetLogo symbol={item.id} assetType={item.assetType} name={item.name} size="h-8 w-8" />
                         <div className="min-w-0">
-                          <Link to={`/asset/${item.assetType || 'STOCK'}/${item.id}`} className="text-blue-400 hover:text-blue-300 hover:underline block truncate">
+                          <Link to={preserveMobileDeviceParam(`/asset/${item.assetType || 'STOCK'}/${item.id}`)} className="text-blue-400 hover:text-blue-300 hover:underline block truncate">
                             {item.name}
                           </Link>
                           <div className="text-[10px] text-slate-500 font-mono mt-0.5">{item.id}</div>

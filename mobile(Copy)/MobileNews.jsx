@@ -3,16 +3,18 @@ import MobileNewsPage from './MobileNewsPage.jsx'
 
 export default function MobileNews({ isLoggedIn, userEmail, handleLogout }) {
   return (
-    <div className="min-h-screen bg-obsidian-bg px-4 py-4 font-inter text-[#e2e2ec]">
+    <div className="min-h-screen bg-obsidian-bg px-4 pb-4 pt-3 font-inter text-[#e2e2ec]">
       <MobileHeader isLoggedIn={isLoggedIn} handleLogout={handleLogout} />
-      <MobileNewsPage
-        isLoggedIn={isLoggedIn}
-        userEmail={userEmail}
-        handleLogout={handleLogout}
-        hideHeader
-        maxVisiblePages={3}
-        mobileLayout
-      />
+      <div className="-mt-2">
+        <MobileNewsPage
+          isLoggedIn={isLoggedIn}
+          userEmail={userEmail}
+          handleLogout={handleLogout}
+          hideHeader
+          maxVisiblePages={3}
+          mobileLayout
+        />
+      </div>
     </div>
   )
 }

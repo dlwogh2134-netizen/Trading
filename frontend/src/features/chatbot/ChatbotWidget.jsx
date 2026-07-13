@@ -7,6 +7,7 @@ import { buildChatbotCitations } from './chatbotCitations'
 import { buildDisclosurePresentation } from './chatbotDisclosurePresentation'
 import { shouldSubmitChatbotInput } from './chatbotInput'
 import { buildMlRecommendationPresentation } from './chatbotMlRecommendationPresentation'
+import { buildNewsPresentation } from './chatbotNewsPresentation'
 import {
   buildProposalPrecheckSummary,
   isChatbotApprovalProposal,
@@ -138,12 +139,14 @@ function ChatMessage({ message, onAction }) {
   const messageTime = formatMessageTime(message.createdAt)
   const actions = Array.isArray(message.actions) ? message.actions : []
   const disclosurePresentation = buildDisclosurePresentation(message.toolResult)
+  const newsPresentation = buildNewsPresentation(message.toolResult)
   const mlRecommendationPresentation = buildMlRecommendationPresentation(message.toolResult)
   const hasDisclosureCards = !isUser && disclosurePresentation.items.length > 0
+  const hasNewsCards = !isUser && newsPresentation.items.length > 0
   const hasMlRecommendationCards = !isUser && mlRecommendationPresentation.shouldRender
   const citations = !isUser ? buildChatbotCitations(message.toolResult) : []
   const traceBadges = !isUser ? buildChatbotTraceBadges({ traceSteps: message.traceSteps, toolResult: message.toolResult }) : []
-  const hasMessageBody = hasDisclosureCards || hasMlRecommendationCards || Boolean(message.text) || !message.isStreaming
+  const hasMessageBody = hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || Boolean(message.text) || !message.isStreaming
 
   if (!hasMessageBody && traceBadges.length === 0) {
     return null
@@ -151,13 +154,13 @@ function ChatMessage({ message, onAction }) {
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col gap-1 ${hasDisclosureCards || hasMlRecommendationCards ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col gap-1 ${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
         {!isUser && traceBadges.length > 0 && (
           <TraceBadges badges={traceBadges} />
         )}
         {hasMessageBody && (
           <div
-            className={`${hasDisclosureCards || hasMlRecommendationCards ? 'w-full' : 'whitespace-pre-wrap break-words'} rounded-lg px-3 py-2 text-xs leading-5 ${
+            className={`${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards ? 'w-full' : 'whitespace-pre-wrap break-words'} rounded-lg px-3 py-2 text-xs leading-5 ${
               isUser
                 ? 'bg-blue-600 text-[#ffffff]'
                 : 'border border-slate-700/80 bg-[#111827] text-slate-100'
@@ -165,6 +168,8 @@ function ChatMessage({ message, onAction }) {
           >
             {hasMlRecommendationCards && !message.isStreaming ? (
               <MlRecommendationResults presentation={mlRecommendationPresentation} />
+            ) : hasNewsCards && !message.isStreaming ? (
+              <NewsResults presentation={newsPresentation} />
             ) : hasDisclosureCards && !message.isStreaming ? (
               <DisclosureResults presentation={disclosurePresentation} />
             ) : message.text}
@@ -255,6 +260,72 @@ function SignalMetric({ label, value, tone }) {
   )
 }
 
+function NewsResults({ presentation }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-700/70 pb-2">
+        <p className="font-bold text-cyan-200">뉴스 요약</p>
+        <span className="shrink-0 rounded border border-cyan-500/30 bg-cyan-950/30 px-2 py-0.5 text-[10px] font-bold text-cyan-100">
+          {presentation.items.length}건
+        </span>
+      </div>
+
+      {presentation.items.map((item, index) => (
+        <article key={`${item.url || item.title}-${index}`} className="space-y-2 rounded border border-[#334155] bg-[#0f172a]/80 p-3">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="rounded border border-cyan-500/25 bg-cyan-950/25 px-1.5 py-0.5 text-[10px] font-bold text-cyan-200">
+                {item.market}
+              </span>
+              <span className="rounded border border-slate-600/60 bg-slate-900/50 px-1.5 py-0.5 text-[10px] font-medium text-slate-200">
+                {item.source}
+              </span>
+              <span className="rounded border border-slate-600/60 bg-slate-900/50 px-1.5 py-0.5 text-[10px] font-medium text-slate-200">
+                {item.category}
+              </span>
+              {item.symbol ? (
+                <span className="rounded border border-slate-600/60 bg-slate-900/50 px-1.5 py-0.5 text-[10px] font-medium text-slate-200">
+                  {item.symbol}
+                </span>
+              ) : null}
+              {item.publishedAt ? <span className="text-[10px] text-slate-500">{item.publishedAt}</span> : null}
+            </div>
+            <h4 className="break-words font-bold leading-5 text-slate-100">
+              {index + 1}. {item.title}
+            </h4>
+          </div>
+
+          {item.summaryLines.length > 0 ? (
+            <div className="rounded border border-slate-700/70 bg-slate-950/40 px-2 py-1.5 text-slate-200">
+              <p className="mb-1 font-bold text-cyan-100">AI 3줄 요약</p>
+              <div className="space-y-1">
+                {item.summaryLines.map((line, lineIndex) => (
+                  <p key={`${item.title}-${lineIndex}`} className="break-words leading-5">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <dl className="space-y-1">
+            <div className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-2 rounded border border-slate-700/60 bg-slate-950/30 px-2 py-1.5">
+              <dt className="whitespace-nowrap font-bold text-cyan-200">연관 키워드</dt>
+              <dd className="min-w-0 break-words text-slate-100">{item.companyName || '정보 없음'}</dd>
+            </div>
+          </dl>
+
+          {item.url ? (
+            <a href={item.url} target="_blank" rel="noopener noreferrer" className="inline-flex rounded border border-blue-500/50 bg-blue-600 px-2.5 py-1.5 font-bold text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-cyan-300">
+              원문 열기
+            </a>
+          ) : null}
+        </article>
+      ))}
+    </div>
+  )
+}
+
 function TraceBadges({ badges }) {
   return (
     <div className="flex max-w-full flex-wrap gap-1 px-1">
@@ -335,8 +406,8 @@ function DisclosureResults({ presentation }) {
           {item.metrics.length > 0 ? (
             <dl className="space-y-1">
               {item.metrics.map((metric, metricIndex) => (
-                <div key={`${metric.label}-${metricIndex}`} className="grid min-w-0 grid-cols-[minmax(76px,0.8fr)_minmax(0,1.5fr)] gap-2 rounded border border-slate-700/60 bg-slate-950/30 px-2 py-1.5">
-                  <dt className="break-words font-bold text-cyan-200">{metric.label}</dt>
+                <div key={`${metric.label}-${metricIndex}`} className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-2 rounded border border-slate-700/60 bg-slate-950/30 px-2 py-1.5">
+                  <dt className="whitespace-nowrap font-bold text-cyan-200">{metric.label}</dt>
                   <dd className="min-w-0 break-words text-slate-100">{metric.value}</dd>
                 </div>
               ))}
@@ -346,8 +417,8 @@ function DisclosureResults({ presentation }) {
           {item.checks.length > 0 ? (
             <dl className="space-y-1">
               {item.checks.map((check, checkIndex) => (
-                <div key={`${check.question}-${checkIndex}`} className="grid min-w-0 grid-cols-[minmax(76px,0.8fr)_minmax(0,1.5fr)] gap-2 rounded border border-cyan-950/80 bg-[#07111f]/70 px-2 py-1.5">
-                  <dt className="break-words font-bold text-cyan-200">{check.question}</dt>
+                <div key={`${check.question}-${checkIndex}`} className="grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-2 rounded border border-cyan-950/80 bg-[#07111f]/70 px-2 py-1.5">
+                  <dt className="whitespace-nowrap font-bold text-cyan-200">{check.question}</dt>
                   <dd className="min-w-0 break-words text-slate-100">{check.answer}</dd>
                 </div>
               ))}

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import AssetLogo from '../../components/AssetLogo.jsx'
 import MobileHeader from '../../components/mobile/MobileHeader.jsx'
 import useMobileHomeMarket, { getMobileHomeWatchlistKey } from '../../hooks/useMobileHomeMarket.js'
+import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
 
 const INITIAL_RANKING_LIMIT = 10
 const EXPANDED_RANKING_LIMIT = 50
@@ -160,7 +161,7 @@ function SegmentTabs({ items, activeKey, onChange }) {
 
 function RankingCard({ row, category, metric, favoriteKeys, onToggleFavorite }) {
   const symbol = row.code || row.symbol
-  const assetPath = `/asset/${category.assetType}/${symbol}`
+  const assetPath = preserveMobileDeviceParam(`/asset/${category.assetType}/${symbol}`)
   const isFavorite = favoriteKeys.has(getMobileHomeWatchlistKey(row, category.assetType))
   const metricValue = formatValue(row, metric.valueKey)
   const isChangeMetric = metric.valueKey === 'change'

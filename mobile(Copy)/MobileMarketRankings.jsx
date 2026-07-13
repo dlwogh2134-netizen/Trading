@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Header from '../../components/Header.jsx'
 import AssetLogo from '../../components/AssetLogo.jsx'
 import { deleteUserWatchlistItem, fetchUserWatchlist, normalizeWatchlistItem, upsertUserWatchlistItem } from '../../supabaseClient'
+import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -135,7 +136,7 @@ function RankingTable({ rows, titleType = 'stock', ranking = '거래대금', fav
           ) : rows.map((row) => {
             const symbol = row.code || row.symbol
             const assetType = isStock ? 'STOCK' : 'CRYPTO'
-            const assetPath = `/asset/${assetType}/${symbol}`
+            const assetPath = preserveMobileDeviceParam(`/asset/${assetType}/${symbol}`)
             const isFavorite = favoriteKeys.has(getWatchlistKey(row, assetType))
 
             return (
@@ -182,7 +183,7 @@ function RankingTable({ rows, titleType = 'stock', ranking = '거래대금', fav
         ) : rows.map((row) => {
           const symbol = row.code || row.symbol
           const assetType = titleType === 'stock' ? 'STOCK' : 'CRYPTO'
-          const assetPath = `/asset/${assetType}/${symbol}`
+          const assetPath = preserveMobileDeviceParam(`/asset/${assetType}/${symbol}`)
           const isFavorite = favoriteKeys.has(getWatchlistKey(row, assetType))
           const valueKeyMobile = showVolume ? 'volume' : 'value'
 

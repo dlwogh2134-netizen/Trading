@@ -6,6 +6,7 @@ import { deleteUserWatchlistItem, fetchUserWatchlist, supabase, updateUserWatchl
 import AssetLogo from '../../components/AssetLogo.jsx'
 import { SectionHeader } from '../../components/DashboardComponents.jsx'
 import { formatNewsDate, mergeLatestNews } from '../../dashboardUtils.js'
+import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -814,7 +815,7 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
           <SectionHeader title="관심 종목의 차트" action={selectedItem?.id} />
           {selectedItem && (
             <Link
-              to={`/asset/${assetType}/${selectedItem.id}`}
+              to={preserveMobileDeviceParam(`/asset/${assetType}/${selectedItem.id}`)}
               className="rounded bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3 py-1.5 transition active:scale-[0.98]"
             >
               수동 매매 터미널 이동 →

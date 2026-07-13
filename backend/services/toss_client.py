@@ -641,9 +641,9 @@ class TossClient(ExchangeClient):
             url = f"{self.base_url}/api/v1/prices"
             # Toss API는 'symbol' 파라미터 또는 'symbols' 파라미터를 사용합니다.
             # 양방향 대응을 위해 둘 다 지원하도록 순차 조회
-            res = self._send_request("GET", url, headers=headers, params={"symbol": candidate}, timeout=15)
+            res = self._send_request("GET", url, headers=headers, params={"symbols": candidate}, timeout=15)
             if res.status_code != 200:
-                res = self._send_request("GET", url, headers=headers, params={"symbols": candidate}, timeout=15)
+                res = self._send_request("GET", url, headers=headers, params={"symbol": candidate}, timeout=15)
 
             if res.status_code != 200:
                 last_error = f"{candidate}: {res.text}"
@@ -681,14 +681,18 @@ class TossClient(ExchangeClient):
                     or result.get("last_price")
                     or 0.0
                 )
-                change_rate = float(
-                    result.get("changeRate")
-                    or result.get("change_rate")
-                    or result.get("changePercent")
-                    or result.get("change_percent")
-                    or result.get("prdy_ctrt")
-                    or 0.0
+                rate_key = next(
+                    (
+                        key
+                        for key in ("changeRate", "change_rate", "changePercent", "change_percent", "prdy_ctrt")
+                        if result.get(key) not in (None, "")
+                    ),
+                    None,
                 )
+                has_api_change_rate = rate_key is not None
+                change_rate = float(result.get(rate_key) or 0.0) if rate_key else 0.0
+                if rate_key in {"changeRate", "change_rate"} and abs(change_rate) <= 1:
+                    change_rate *= 100.0
                 prev_close = float(
                     result.get("previousClosePrice")
                     or result.get("prev_close_price")
@@ -700,28 +704,20 @@ class TossClient(ExchangeClient):
                 current_price = 0.0
                 change_rate = 0.0
                 prev_close = 0.0
+                has_api_change_rate = False
 
-            # 이전 종가 획득 보조 (캔들 보조 조회)
-            if not prev_close:
+            # Toss 가격 API가 등락률을 직접 주면 캔들 보조 조회로 API 호출을 늘리지 않습니다.
+            if not prev_close and not has_api_change_rate:
                 try:
-                    candle_res = self._send_request(
-                        "GET",
-                        f"{self.base_url}/api/v1/candles",
-                        headers=headers,
-                        params={"symbol": candidate, "interval": "1d", "count": 2},
-                        timeout=15
-                    )
-                    if candle_res.status_code == 200:
-                        candle_data = candle_res.json()
-                        candles = candle_data.get("result", {}).get("candles", []) or candle_data.get("result", [])
-                        if isinstance(candles, list) and len(candles) >= 2:
-                            prev_close = float(candles[-2].get("closePrice") or candles[-2].get("close") or 0.0)
-                        elif isinstance(candles, list) and len(candles) >= 1:
-                            prev_close = float(candles[-1].get("closePrice") or candles[-1].get("close") or 0.0)
+                    candles = self._get_candles_impl(candidate, interval="1d", count=2)
+                    if isinstance(candles, list) and len(candles) >= 2:
+                        prev_close = float(candles[-2].get("close") or 0.0)
+                    elif isinstance(candles, list) and len(candles) >= 1:
+                        prev_close = float(candles[-1].get("close") or 0.0)
                 except Exception:
                     pass
 
-            if current_price and prev_close and not change_rate:
+            if current_price and prev_close and not has_api_change_rate:
                 change_rate = ((current_price - prev_close) / prev_close) * 100 if prev_close else 0.0
 
             if current_price or change_rate or prev_close:
@@ -729,6 +725,7 @@ class TossClient(ExchangeClient):
                     "current_price": current_price,
                     "change_rate": change_rate,
                     "previous_close": prev_close,
+                    "change_rate_source": "TOSS_PRICE" if has_api_change_rate else "CALCULATED",
                     "symbol_used": candidate,
                     "raw": data
                 }

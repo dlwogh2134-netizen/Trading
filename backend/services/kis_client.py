@@ -390,11 +390,30 @@ class KISClient(ExchangeClient):
             try:
                 current_price = float(output.get("stck_prpr", 0))
                 change_rate = float(output.get("prdy_ctrt", 0))
+                price_change = float(output.get("prdy_vrss", 0))
+                price_change_sign = str(output.get("prdy_vrss_sign") or "").strip()
+                if price_change_sign in {"4", "5"} and price_change > 0:
+                    price_change = -price_change
+                elif price_change_sign in {"1", "2"} and price_change < 0:
+                    price_change = abs(price_change)
+                previous_close = float(
+                    output.get("stck_sdpr")
+                    or output.get("stck_prdy_clpr")
+                    or output.get("prdy_clpr")
+                    or output.get("base_pric")
+                    or 0
+                )
+                if current_price and not previous_close and price_change:
+                    previous_close = current_price - price_change
+                if current_price and previous_close:
+                    change_rate = ((current_price - previous_close) / previous_close) * 100
                 trading_volume = float(output.get("acml_vol", 0))
                 trading_value = float(output.get("acml_tr_pbmn", 0))
             except (ValueError, TypeError):
                 current_price = 0.0
                 change_rate = 0.0
+                price_change = 0.0
+                previous_close = 0.0
                 trading_volume = 0.0
                 trading_value = 0.0
 
@@ -404,6 +423,8 @@ class KISClient(ExchangeClient):
         return {
             "current_price": current_price,
             "change_rate": change_rate,
+            "previous_close": previous_close,
+            "price_change": price_change,
             "trading_volume": trading_volume,
             "trading_value": trading_value,
             "raw": data

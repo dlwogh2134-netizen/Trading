@@ -101,8 +101,8 @@ DART_ANALYSIS_SCHEMAS: dict[str, dict[str, Any]] = {
         "summary_limit": 5,
     },
     "주식매수선택권": {
-        "required": ["행사주식수", "행사가격"],
-        "optional": ["부여주식수", "부여대상", "행사기간", "부여일", "상장예정일"],
+        "required": ["부여주식수", "행사가격"],
+        "optional": ["부여대상", "행사기간", "부여일", "상장예정일", "행사주식수"],
         "summary_limit": 5,
     },
     "전환가액 조정": {
@@ -199,6 +199,11 @@ DART_ANALYSIS_SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["변경예정 최대주주"],
         "optional": ["계약금액", "예정지분율", "변경예정일", "계약상대방"],
         "summary_limit": 5,
+    },
+    "최대주주 지분 변동": {
+        "required": [],
+        "optional": ["보고자", "변동주식수", "보유주식수", "보유비율", "변동사유"],
+        "summary_limit": 4,
     },
     "합병": {
         "required": ["합병상대회사", "합병비율"],
@@ -303,10 +308,18 @@ class DartDisclosureAnalysisService:
 
         cached = self.repository.get_disclosure_analysis(clean_rcept_no)
         cached_version = ((cached or {}).get("raw_payload") or {}).get("analysis_version")
-        if not force_refresh and cached and cached_version == DART_ANALYSIS_VERSION and cached.get("plain_summary"):
+        disclosure = self.repository.get_disclosure_by_rcept_no(clean_rcept_no) if self._should_check_disclosure_for_stale_cache(cached) else None
+        if (
+            not force_refresh
+            and cached
+            and cached_version == DART_ANALYSIS_VERSION
+            and cached.get("plain_summary")
+            and not self._is_stale_largest_holder_share_change_cache(cached, disclosure)
+            and not self._is_stale_stock_option_cache(cached)
+        ):
             return {"analysis": cached, "fromCache": True}
 
-        disclosure = self.repository.get_disclosure_by_rcept_no(clean_rcept_no)
+        disclosure = disclosure or self.repository.get_disclosure_by_rcept_no(clean_rcept_no)
         if not disclosure:
             raise LookupError("공시 목록에서 해당 접수번호를 찾을 수 없습니다.")
 
@@ -326,6 +339,72 @@ class DartDisclosureAnalysisService:
         if saved:
             return {"analysis": {**analysis, **saved, "plain_summary": saved.get("plain_summary") or analysis.get("plain_summary")}, "fromCache": False}
         return {"analysis": analysis, "fromCache": False}
+
+    def _should_check_disclosure_for_stale_cache(self, cached: dict[str, Any] | None) -> bool:
+        if not cached:
+            return False
+        raw_payload = cached.get("raw_payload") or {}
+        if self._clean_text(raw_payload.get("report_nm")):
+            return False
+        category = self._clean_text(cached.get("category"))
+        plain_summary = self._clean_text(cached.get("plain_summary"))
+        return category == "정보성 공시" and ("주가 방향성" in plain_summary or "직접" in plain_summary)
+
+    def _is_stale_largest_holder_share_change_cache(
+        self,
+        cached: dict[str, Any] | None,
+        disclosure: dict[str, Any] | None = None,
+    ) -> bool:
+        if not cached:
+            return False
+
+        raw_payload = cached.get("raw_payload") or {}
+        report_name = self._clean_text(raw_payload.get("report_nm") or (disclosure or {}).get("report_nm"))
+        if not self._is_largest_holder_share_change_report(report_name):
+            return False
+
+        category = self._clean_text(cached.get("category"))
+        plain_summary = self._clean_text(cached.get("plain_summary"))
+        sentiment_message = self._clean_text(cached.get("sentiment_message"))
+        key_points = " ".join(self._clean_text(point) for point in cached.get("key_points") or [])
+        stale_text = " ".join([plain_summary, sentiment_message, key_points])
+        return category != "최대주주 지분 변동" or "주가 방향성" in stale_text or "직접 연결" in stale_text
+
+    def _is_largest_holder_share_change_report(self, report_name: str) -> bool:
+        report_compact = re.sub(r"\s+", "", report_name)
+        return self._contains(report_compact, ["최대주주등소유주식변동신고서", "소유주식변동신고서"])
+
+    def _is_stale_stock_option_cache(self, cached: dict[str, Any] | None) -> bool:
+        if not cached:
+            return False
+        raw_payload = cached.get("raw_payload") or {}
+        report_name = self._clean_text(raw_payload.get("report_nm"))
+        category = self._clean_text(cached.get("category"))
+        if category != "주식매수선택권" and "주식매수선택권" not in report_name:
+            return False
+
+        metrics = cached.get("metrics") or []
+        metric_map = {
+            self._clean_text(metric.get("label")): self._clean_text(metric.get("value"))
+            for metric in metrics
+            if isinstance(metric, dict)
+        }
+        target = metric_map.get("부여대상", "")
+        plain_summary = self._clean_text(cached.get("plain_summary"))
+        return (
+            "(명)" in target
+            or "관계회사..." in target
+            or not metric_map.get("부여주식수")
+            or not metric_map.get("행사가격")
+            or self._stock_option_summary_missing_core_metrics(plain_summary, metric_map)
+        )
+
+    def _stock_option_summary_missing_core_metrics(self, summary: str, metric_map: dict[str, str]) -> bool:
+        core_values = [
+            metric_map.get("부여주식수", ""),
+            metric_map.get("행사가격", ""),
+        ]
+        return any(value and value not in summary for value in core_values)
 
     def _fetch_document_text(self, rcept_no: str) -> str:
         response = requests.get(
@@ -384,14 +463,14 @@ class DartDisclosureAnalysisService:
         confidence = self._adjust_confidence_by_required_fields(confidence, required_status, source)
         key_points = self._build_key_points(disclosure, category, sentiment, metrics, source)
         risk_points = self._build_risk_points(category, sentiment, metrics, source)
-        plain_summary = self._plain_summary(category, sentiment, metrics, source, check_items)
+        plain_summary = self._plain_summary(category, sentiment, metrics, source, check_items, text)
 
         return {
             "rcept_no": disclosure["rcept_no"],
             "category": category,
             "sentiment": sentiment,
             "sentiment_label": self._sentiment_label(sentiment),
-            "sentiment_message": self._sentiment_message(sentiment),
+            "sentiment_message": self._sentiment_message_for_category(category, sentiment),
             "confidence": confidence,
             "headline": self._headline(category, sentiment),
             "plain_summary": plain_summary,
@@ -629,7 +708,10 @@ class DartDisclosureAnalysisService:
         if sentiment in ALLOWED_SENTIMENTS:
             next_analysis["sentiment"] = sentiment
             next_analysis["sentiment_label"] = self._sentiment_label(sentiment)
-            next_analysis["sentiment_message"] = self._sentiment_message(sentiment)
+            next_analysis["sentiment_message"] = self._sentiment_message_for_category(
+                self._clean_text(next_analysis.get("category")),
+                sentiment,
+            )
 
         confidence = self._clean_text(refined.get("confidence"))
         if confidence in ALLOWED_CONFIDENCES:
@@ -641,7 +723,8 @@ class DartDisclosureAnalysisService:
 
         plain_summary = self._trim_ai_text(refined.get("plain_summary"), 260)
         if plain_summary:
-            next_analysis["plain_summary"] = plain_summary
+            if not self._should_preserve_rule_plain_summary(next_analysis, plain_summary):
+                next_analysis["plain_summary"] = plain_summary
 
         risk_points = refined.get("risk_points")
         if isinstance(risk_points, list):
@@ -661,6 +744,20 @@ class DartDisclosureAnalysisService:
         next_analysis["updated_at"] = datetime.now(timezone.utc).isoformat()
         return next_analysis
 
+    def _should_preserve_rule_plain_summary(self, analysis: dict[str, Any], refined_summary: str) -> bool:
+        if self._clean_text(analysis.get("category")) != "주식매수선택권":
+            return False
+        metric_map = {
+            self._clean_text(metric.get("label")): self._clean_text(metric.get("value"))
+            for metric in analysis.get("metrics") or []
+            if isinstance(metric, dict)
+        }
+        original_summary = self._clean_text(analysis.get("plain_summary"))
+        return (
+            not self._stock_option_summary_missing_core_metrics(original_summary, metric_map)
+            and self._stock_option_summary_missing_core_metrics(refined_summary, metric_map)
+        )
+
     def _trim_ai_text(self, value: Any, limit: int) -> str:
         text = self._clean_text(value)
         if not text:
@@ -672,7 +769,6 @@ class DartDisclosureAnalysisService:
 
     def _classify(self, report_name: str, text: str, has_detail: bool) -> tuple[str, str, str]:
         report_compact = re.sub(r"\s+", "", report_name)
-        compact = re.sub(r"\s+", "", f"{report_name} {text}")
         head_compact = re.sub(r"\s+", "", f"{report_name} {text[:2500]}")
 
         if self._contains(report_compact, ["유상증자최종발행가액확정", "최종발행가액확정"]):
@@ -783,6 +879,8 @@ class DartDisclosureAnalysisService:
             return "자기주식 처분", "caution", "high" if has_detail else "medium"
         if self._contains(report_compact, ["최대주주변경을수반하는주식양수도계약"]):
             return "최대주주 변경 계약", "caution", "high" if has_detail else "medium"
+        if self._is_largest_holder_share_change_report(report_name):
+            return "최대주주 지분 변동", "info", "medium" if has_detail else "low"
         if self._contains(report_compact, ["최대주주변경"]):
             return "최대주주 변경", "caution", "high" if has_detail else "medium"
         if self._contains(report_compact, ["합병등종료보고서"]):
@@ -1568,22 +1666,24 @@ class DartDisclosureAnalysisService:
         ])
         self._append_metric_if_missing(metrics, "행사주식수", self._normalize_stock_count_value(exercised))
         shares = self._find_pattern_value(text, [
+            r"당해부여\s*주식\s*\(\s*주\s*\)\s*보통주식\s*([0-9][0-9,]*)",
             r"(?:부여|행사)\s*주식수\s*\(\s*주\s*\)\s*([0-9][0-9,]*)",
             r"부여주식수\s*([0-9][0-9,]*)",
             r"총\s*부여\s*수량\s*[:：]?\s*([0-9][0-9,]*)\s*주",
         ])
         self._append_metric_if_missing(metrics, "부여주식수", self._normalize_stock_count_value(shares))
         price = self._find_pattern_value(text, [
+            r"행사가격\s*\(\s*원\s*\)\s*보통주식\s*([0-9][0-9,]*)",
             r"행사가격\s*\(\s*원\s*\)\s*([0-9][0-9,]*)",
             r"행사가액\s*\(\s*원\s*\)\s*([0-9][0-9,.]*)",
             r"행사가액\s*[:：]\s*([0-9][0-9,.]*)\s*원",
         ])
         self._append_metric_if_missing(metrics, "행사가격", self._normalize_won_value(price))
-        target = self._find_pattern_value(text, [
+        target = self._extract_stock_option_target(text) or self._find_pattern_value(text, [
             r"부여대상자\s*([^\n\r]{1,80}?)(?:\s+부여|\s+주식|\s+\d+\.)",
         ])
-        self._append_metric_if_missing(metrics, "부여대상", self._truncate_metric_value(target, 32))
-        period = self._find_pattern_value(text, [
+        self._append_metric_if_missing(metrics, "부여대상", self._truncate_metric_value(target, 40))
+        period = self._extract_stock_option_period(text) or self._find_pattern_value(text, [
             r"행사기간\s*[:：]?\s*([0-9]{4}[.\-/년][^\n\r]{1,40}?)(?:\s+\d+\)|\s+\d+\.|\s+기타|\s*$)",
         ])
         self._append_metric_if_missing(metrics, "행사기간", self._truncate_metric_value(period, 36))
@@ -1596,6 +1696,30 @@ class DartDisclosureAnalysisService:
             r"신주상장예정일\s*([0-9]{4}[.\-/년]\s*[0-9]{1,2}[.\-/월]\s*[0-9]{1,2}\s*일?)",
         ])
         self._append_metric_if_missing(metrics, "상장예정일", self._shorten_metric_value("상장예정일", listing))
+
+    def _extract_stock_option_target(self, text: str) -> str:
+        match = re.search(
+            r"부여대상자\s*\(\s*명\s*\)\s*해당\s*상장회사의\s*이사ㆍ감사\s*또는\s*피용자\s*([0-9][0-9,]*|-)"
+            r"\s*관계회사의\s*이사ㆍ감사\s*또는\s*피용자\s*([0-9][0-9,]*|-)",
+            text,
+        )
+        if not match:
+            return ""
+        company_count = match.group(1)
+        affiliate_count = match.group(2)
+        parts = []
+        if company_count != "-":
+            parts.append(f"상장회사 임직원 {company_count}명")
+        if affiliate_count != "-":
+            parts.append(f"관계회사 임직원 {affiliate_count}명")
+        return ", ".join(parts)
+
+    def _extract_stock_option_period(self, text: str) -> str:
+        date_pattern = r"\d{4}[.\-/년]\s*\d{1,2}[.\-/월]\s*\d{1,2}\s*일?"
+        match = re.search(rf"행사기간\s*시작일\s*({date_pattern})\s*종료일\s*({date_pattern})", text)
+        if not match:
+            return ""
+        return f"{self._clean_text(match.group(1))}~{self._clean_text(match.group(2))}"
 
     def _append_conversion_price_adjustment_metrics(self, text: str, metrics: list[dict[str, str]]) -> None:
         before_from_table = ""
@@ -2223,6 +2347,21 @@ class DartDisclosureAnalysisService:
             ))
             return checks
 
+        if category == "최대주주 지분 변동":
+            checks.append(self._check_item(
+                "변동 주체",
+                metric_map.get("보고자") or "원문 확인 필요",
+                "최대주주 본인인지, 특수관계인인지에 따라 지배구조 해석이 달라질 수 있습니다.",
+                "info",
+            ))
+            checks.append(self._check_item(
+                "변동 규모",
+                metric_map.get("변동주식수") or metric_map.get("보유주식수") or "원문 확인 필요",
+                "증감 수량과 보유비율 변화가 실제 지분 변동의 핵심입니다.",
+                "info",
+            ))
+            return checks
+
         if category == "합병":
             checks.append(self._check_item(
                 "합병 상대",
@@ -2501,6 +2640,8 @@ class DartDisclosureAnalysisService:
             return ["변경후 최대주주", "변경사유", "지분율", "변경일"]
         if category == "최대주주 변경 계약":
             return ["변경예정 최대주주", "계약금액", "예정지분율", "변경예정일", "계약상대방"]
+        if category == "최대주주 지분 변동":
+            return ["보고자", "변동주식수", "보유주식수", "보유비율", "변동사유"]
         if category == "합병":
             return ["합병상대회사", "합병비율", "합병기일", "합병목적"]
         if category == "합병 종료":
@@ -2577,14 +2718,14 @@ class DartDisclosureAnalysisService:
             if plain_amount_match:
                 return f"{plain_amount_match.group(0)}원"
             return ""
-        if label in {"매출액대비", "시가배당율", "합병비율", "지분율", "감자비율", "자기자본대비", "전년동기대비", "직전분기대비", "전년대비", "분할비율", "병합비율", "표면이자율", "만기이자율", "이자율", "발행수익률", "발행주식총수 대비"}:
+        if label in {"매출액대비", "시가배당율", "합병비율", "지분율", "보유비율", "감자비율", "자기자본대비", "전년동기대비", "직전분기대비", "전년대비", "분할비율", "병합비율", "표면이자율", "만기이자율", "이자율", "발행수익률", "발행주식총수 대비"}:
             if label in {"합병비율", "분할비율", "병합비율"} and ratio_match:
                 return ratio_match.group(0)
             if percent_match:
                 return percent_match.group(0)
             number_match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
             return f"{number_match.group(0)}%" if number_match else ""
-        if label in {"신주의 수", "발행주식수", "보통주 신주", "기타주식 신주", "취득예정주식", "처분예정주식", "소각예정주식", "감자주식수", "발행예정주식수", "실제발행주식수", "행사주식수", "매수예정수량", "부여주식수"}:
+        if label in {"신주의 수", "발행주식수", "보통주 신주", "기타주식 신주", "취득예정주식", "처분예정주식", "소각예정주식", "감자주식수", "발행예정주식수", "실제발행주식수", "행사주식수", "매수예정수량", "부여주식수", "변동주식수", "보유주식수"}:
             return stock_match.group(0) if stock_match else ""
         if label in {"납입일", "상장예정일", "계약기간", "전환청구기간", "행사청구기간", "배당기준일", "배당금지급 예정일자", "취득예상기간", "거래일자", "이사회 의결일", "배정기준일", "처분예정기간", "변경일", "변경예정일", "합병기일", "분할기일", "청약예정일", "확정일", "소각예정일", "감자기준일", "거래정지일", "해제일시", "신주권상장예정일", "매매거래정지기간", "효력발생일", "신청일자", "해지일자", "취득예정일", "처분예정일", "투자기간", "영업정지기간", "추진일정", "조회공시요구일", "답변일", "권리락 실시일", "채무보증기간", "사채만기일", "발생일자", "부여일", "적용일", "지정일"}:
             return date_match.group(0) if date_match else ""
@@ -2595,7 +2736,7 @@ class DartDisclosureAnalysisService:
             return self._clean_counterparty(text)
         if label in {"처분목적", "소각목적", "감자사유", "감자방법", "거래정지사유", "위험사유", "상장폐지사유", "개선기간", "심사일정", "시장구분", "변경사유", "합병목적", "분할목적", "청구내용", "판결ㆍ결정내용", "발생사실", "향후대책", "신청사유", "관할법원", "결정내용", "해지사유", "변동사유", "주주환원계획", "목표지표", "이행기간", "공시주기", "주요내용", "투자목적", "투자대상", "영업정지사유", "답변내용", "진행사항", "보증사유", "발행방법", "DR 발행형태", "재해내용", "조치사항", "거래목적", "매수목적", "조정사유", "지정사유", "해제사유", "시장조치", "해소여부", "감사의견", "차입목적", "담보제공사유"}:
             return self._truncate_metric_value(text, 36)
-        if label in {"변경후 최대주주", "합병상대회사", "분할신설회사", "원고", "피고"}:
+        if label in {"변경후 최대주주", "보고자", "합병상대회사", "분할신설회사", "원고", "피고"}:
             return self._clean_counterparty(text)
         if label == "증자방식":
             if "주주배정후실권주일반공모" in re.sub(r"\s+", "", text):
@@ -2656,7 +2797,7 @@ class DartDisclosureAnalysisService:
         source: str,
     ) -> list[str]:
         subject = "정보성 공시입니다." if category == "정보성 공시" else f"{category} 관련 공시입니다."
-        points = [subject, self._sentiment_message(sentiment)]
+        points = [subject, self._sentiment_message_for_category(category, sentiment)]
         if metrics:
             labels = ", ".join(metric["label"] for metric in metrics[:3])
             points.append(f"핵심 확인 항목은 {labels}입니다.")
@@ -2673,6 +2814,7 @@ class DartDisclosureAnalysisService:
         metrics: list[dict[str, str]],
         source: str,
         check_items: list[dict[str, str]] | None = None,
+        disclosure_text: str = "",
     ) -> str:
         metric_map = {metric.get("label"): metric.get("value") for metric in metrics if metric.get("label") and metric.get("value")}
         check_map = {
@@ -3146,6 +3288,23 @@ class DartDisclosureAnalysisService:
             suffix = ", ".join(details)
             return f"최대주주 변경을 수반하는 주식양수도 계약 공시입니다. 실제 변경 완료 전까지 납입 여부와 계약 조건 변동 가능성을 확인해야 합니다{f' ({suffix}).' if suffix else '.'}"
 
+        if category == "최대주주 지분 변동":
+            reporter = metric_map.get("보고자")
+            changed_shares = metric_map.get("변동주식수")
+            holding_shares = metric_map.get("보유주식수")
+            holding_ratio = metric_map.get("보유비율")
+            details = []
+            if reporter:
+                details.append(f"보고자는 {reporter}")
+            if changed_shares:
+                details.append(f"변동주식수는 {changed_shares}")
+            if holding_shares:
+                details.append(f"보유주식수는 {holding_shares}")
+            if holding_ratio:
+                details.append(f"보유비율은 {holding_ratio}")
+            suffix = ", ".join(details)
+            return f"최대주주 또는 특수관계인의 보유주식 변동을 신고한 공시입니다. 변동 주체, 증감 주식 수, 변동 후 보유비율을 원문에서 확인해야 합니다{f' ({suffix}).' if suffix else '.'}"
+
         if category == "합병":
             target = metric_map.get("합병상대회사")
             ratio = metric_map.get("합병비율")
@@ -3316,9 +3475,80 @@ class DartDisclosureAnalysisService:
             return "지속가능경영이나 자율공시 성격의 자료입니다. 주가 방향보다 회사의 비재무 정보 확인에 가깝습니다."
 
         if source == "TITLE_ONLY":
-            return "상세 내용을 아직 확인하지 못해 제목 기준으로만 분류한 공시입니다."
+            title_summary = self._information_disclosure_summary(disclosure_text)
+            return title_summary or "상세 내용을 아직 확인하지 못해 제목 기준으로만 분류한 공시입니다."
+
+        if category == "정보성 공시":
+            content_summary = self._information_disclosure_summary(disclosure_text)
+            if content_summary:
+                return content_summary
 
         return "주가 방향성과 직접 연결하기 어려운 정보성 공시입니다."
+
+    def _information_disclosure_summary(self, text: str) -> str:
+        clean_text = self._clean_text(text)
+        if not clean_text:
+            return ""
+
+        compact_text = re.sub(r"\s+", "", clean_text)
+        if "기업설명회" in compact_text or "IR" in clean_text:
+            purpose = self._extract_information_field(clean_text, ["개최목적", "목적"])
+            date = self._extract_information_field(clean_text, ["개최일시", "일시", "행사일시"])
+            place = self._extract_information_field(clean_text, ["장소", "개최장소"])
+            target = self._extract_information_field(clean_text, ["대상", "참석대상"])
+            main = self._extract_information_field(clean_text, ["주요내용", "내용"])
+
+            details = []
+            if purpose:
+                details.append(f"{purpose}를 목적으로")
+            if target or place:
+                audience = " ".join(item for item in [target, place] if item)
+                details.append(f"{audience}에서")
+            if main:
+                details.append(f"{main}을 진행한다는 내용입니다")
+
+            if details:
+                first_sentence = "기업설명회(IR) 개최를 안내한 공시입니다."
+                second_sentence = " ".join(details).rstrip(".") + "."
+                if date:
+                    second_sentence += f" 개최일시는 {date}입니다."
+                return self._trim_information_summary(f"{first_sentence} {second_sentence}")
+            return "기업설명회(IR) 개최 일정과 진행 내용을 안내한 공시입니다."
+
+        main = self._extract_information_field(clean_text, ["주요내용", "내용", "공시내용"])
+        if main:
+            return self._trim_information_summary(f"정보성 안내 공시입니다. 주요 내용은 {main}입니다.")
+
+        title = re.split(r"\s+(?:개최목적|개최일시|일시|장소|대상|주요내용|내용)\s*[:：]?", clean_text, maxsplit=1)[0]
+        title = self._clean_text(title)
+        if title and len(title) <= 80:
+            return f"{title} 관련 내용을 안내한 공시입니다."
+        return ""
+
+    def _extract_information_field(self, text: str, labels: list[str]) -> str:
+        all_labels = [
+            "개최목적", "목적", "개최일시", "일시", "행사일시", "장소", "개최장소",
+            "대상", "참석대상", "주요내용", "내용", "공시내용", "관련자료",
+        ]
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        next_label_pattern = "|".join(re.escape(label) for label in all_labels)
+        pattern = re.compile(
+            rf"(?:{label_pattern})\s*[:：]?\s*(.+?)(?=\s+(?:{next_label_pattern})\s*[:：]?|$)"
+        )
+        match = pattern.search(text)
+        if not match:
+            return ""
+        value = self._clean_text(match.group(1))
+        value = re.split(r"\s+(?:기타|비고|관련자료)\s*[:：]?", value, maxsplit=1)[0]
+        return self._trim_information_fragment(value)
+
+    def _trim_information_fragment(self, value: str, limit: int = 70) -> str:
+        text = self._clean_text(value).strip(" .")
+        return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+    def _trim_information_summary(self, value: str, limit: int = 230) -> str:
+        text = self._clean_text(value)
+        return text if len(text) <= limit else text[:limit].rstrip() + "..."
 
     def _is_summary_value(self, value: Any) -> bool:
         text = self._clean_text(value)
@@ -3395,6 +3625,8 @@ class DartDisclosureAnalysisService:
             return ["새 최대주주의 재무 여력, 지분율, 경영권 안정성을 확인해야 합니다."]
         if category == "최대주주 변경 계약":
             return ["계약금 납입 여부, 잔금 일정, 계약 해제 가능성과 실제 최대주주 변경 완료 여부를 확인해야 합니다."]
+        if category == "최대주주 지분 변동":
+            return ["변동 주체, 증감 주식 수, 변동 후 보유비율과 변동 사유를 원문에서 확인해야 합니다."]
         if category == "합병":
             return ["합병비율, 주식매수청구권, 합병 상대의 재무상태와 시너지 실현 가능성을 확인해야 합니다."]
         if category == "합병 종료":
@@ -3457,6 +3689,11 @@ class DartDisclosureAnalysisService:
             "caution": "방향성이 애매해 세부 조건 확인이 필요한 공시입니다.",
             "info": "주가 방향성과 직접 연결하기 어려운 정보성 공시입니다.",
         }.get(sentiment, "주가 방향성과 직접 연결하기 어려운 정보성 공시입니다.")
+
+    def _sentiment_message_for_category(self, category: str, sentiment: str) -> str:
+        if category == "최대주주 지분 변동":
+            return "최대주주 또는 특수관계인의 보유주식 변동 내역을 확인하는 공시입니다."
+        return self._sentiment_message(sentiment)
 
     def _contains(self, text: str, keywords: list[str]) -> bool:
         return any(keyword in text for keyword in keywords)

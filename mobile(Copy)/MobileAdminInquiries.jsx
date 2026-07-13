@@ -66,14 +66,25 @@ function Icon({ name, className = 'h-5 w-5' }) {
 
 function SummaryCard({ label, value, icon, tone }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
-      <div className="flex items-center gap-3">
-        <span className={`grid h-10 w-10 place-items-center rounded-full border border-current/30 bg-white/[0.03] ${tone}`}>
-          <Icon name={icon} className="h-5 w-5" />
+    <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-2.5 text-center">
+      <div className="grid justify-items-center gap-1.5">
+        <span className={`grid h-8 w-8 place-items-center rounded-full border border-current/30 bg-white/[0.03] ${tone}`}>
+          <Icon name={icon} className="h-4 w-4" />
         </span>
-        <p className="text-xs font-bold text-slate-400">{label}</p>
+        <p className="break-keep text-[10px] font-bold leading-4 text-slate-400">{label}</p>
       </div>
-      <p className="mt-3 font-mono text-2xl font-extrabold text-white">{value}</p>
+      <p className="mt-1 font-mono text-lg font-extrabold text-white">{value}</p>
+    </div>
+  )
+}
+
+function InquiryMeta({ label, value, emphasized = false }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-slate-800 bg-[#0b1223] px-3 py-2">
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className={`mt-1 min-w-0 break-words text-xs leading-5 ${emphasized ? 'font-bold text-ai-cyan' : 'text-slate-300'}`}>
+        {value || '-'}
+      </p>
     </div>
   )
 }
@@ -282,23 +293,15 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
             </select>
           </div>
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="mt-5 grid grid-cols-3 gap-2">
             <SummaryCard label="전체 문의" value={summary.total} icon="document" tone="text-ai-cyan" />
             <SummaryCard label="답변 대기" value={summary.waiting} icon="clock" tone="text-amber-400" />
             <SummaryCard label="답변 완료" value={summary.completed} icon="check" tone="text-emerald-400" />
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-lg border border-slate-700/80 bg-slate-surface p-3 sm:p-4">
-          <div className="hidden grid-cols-[minmax(180px,1.5fr)_120px_180px_120px_120px] rounded-t-lg bg-[#0f172a] text-xs font-bold text-slate-400 lg:grid">
-            <div className="px-4 py-3">제목</div>
-            <div className="px-4 py-3">유형</div>
-            <div className="px-4 py-3">작성자</div>
-            <div className="px-4 py-3">상태</div>
-            <div className="px-4 py-3">작성일</div>
-          </div>
-
-          <div className="overflow-hidden rounded-lg border border-slate-800 lg:rounded-b-lg lg:rounded-t-none lg:border-t-0">
+        <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-3 sm:p-4">
+          <div className="rounded-lg border border-slate-800">
             {isLoading ? (
               <div className="border-t border-slate-800 px-4 py-10 text-center text-sm font-bold text-slate-400">문의 목록을 불러오는 중입니다.</div>
             ) : loadError ? (
@@ -312,39 +315,44 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
                   <button
                     type="button"
                     aria-expanded={isExpanded}
-                    className="grid w-full grid-cols-1 gap-2 px-4 py-4 text-left text-sm text-slate-300 transition hover:bg-white/[0.03] sm:grid-cols-2 lg:grid-cols-[minmax(180px,1.5fr)_120px_180px_120px_120px] lg:gap-0 lg:px-0 lg:py-0"
+                    className="grid w-full gap-3 px-3 py-4 text-left text-sm text-slate-300 transition hover:bg-white/[0.03]"
                     onClick={() => setExpandedInquiryId(isExpanded ? null : item.id)}
                   >
-                    <span className="min-w-0 font-bold text-white sm:col-span-2 lg:col-span-1 lg:px-4 lg:py-3">{item.title}</span>
-                    <span className="text-xs text-slate-400 lg:px-4 lg:py-3 lg:text-sm lg:text-slate-300">{inquiryTypeLabels[item.inquiryType] || '-'}</span>
-                    <span className="min-w-0 truncate text-xs text-slate-400 lg:px-4 lg:py-3 lg:text-sm lg:text-slate-300">{item.userEmail}</span>
-                    <span className="text-xs font-bold text-slate-200 lg:px-4 lg:py-3 lg:text-sm lg:font-normal lg:text-slate-300">{inquiryStatusLabels[item.status] || item.status}</span>
-                    <span className="text-xs text-slate-500 sm:text-right lg:px-4 lg:py-3 lg:text-left lg:text-sm lg:text-slate-300">{formatDate(item.createdAt)}</span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">제목</p>
+                      <p className="mt-1 min-w-0 break-words text-base font-extrabold leading-6 text-white">{item.title}</p>
+                    </div>
+                    <div className="grid gap-2">
+                      <InquiryMeta label="유형" value={inquiryTypeLabels[item.inquiryType] || '-'} />
+                      <InquiryMeta label="작성자" value={item.userEmail} />
+                      <InquiryMeta label="상태" value={inquiryStatusLabels[item.status] || item.status} emphasized />
+                      <InquiryMeta label="작성일" value={formatDate(item.createdAt)} />
+                    </div>
                   </button>
 
                   {isExpanded ? (
-                    <div className="grid gap-3 bg-[#0f172a]/70 px-3 py-4 text-xs leading-5 text-slate-300 sm:px-4 md:grid-cols-2">
+                    <div className="grid gap-3 bg-[#0f172a]/70 px-3 py-4 text-xs leading-5 text-slate-300 sm:px-4">
                       <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                         <p className="font-bold text-slate-500">문의 내용</p>
-                        <p className="mt-2 whitespace-pre-wrap">{item.content}</p>
+                        <p className="mt-2 whitespace-pre-wrap break-words">{item.content}</p>
                       </div>
                       <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                         <p className="font-bold text-slate-500">기존 답변</p>
-                        <p className="mt-2 whitespace-pre-wrap">{item.answer || '아직 등록된 답변이 없습니다.'}</p>
+                        <p className="mt-2 whitespace-pre-wrap break-words">{item.answer || '아직 등록된 답변이 없습니다.'}</p>
                       </div>
                       <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                         <p className="font-bold text-slate-500">첨부파일</p>
-                        <p className="mt-2 flex items-center gap-2">
-                          <Icon name="paperclip" className="h-4 w-4 text-ai-cyan" />
-                          {item.fileName || '첨부파일 없음'}
+                        <p className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2">
+                          <Icon name="paperclip" className="h-4 w-4 shrink-0 text-ai-cyan" />
+                          <span className="min-w-0 break-words">{item.fileName || '첨부파일 없음'}</span>
                         </p>
                       </div>
                       <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                         <p className="font-bold text-slate-500">처리 상태</p>
-                        <p className="mt-2">{inquiryStatusLabels[item.status] || item.status}</p>
+                        <p className="mt-2 break-words">{inquiryStatusLabels[item.status] || item.status}</p>
                       </div>
                       {canReply ? (
-                        <div className="flex justify-stretch md:col-span-2 md:justify-end">
+                        <div className="flex justify-stretch">
                           <button
                             type="button"
                             className="inline-flex w-full items-center justify-center gap-2 rounded border border-ai-cyan/40 px-3 py-2 text-xs font-bold text-ai-cyan transition hover:border-ai-cyan hover:bg-ai-cyan/10 sm:w-auto sm:py-1.5"

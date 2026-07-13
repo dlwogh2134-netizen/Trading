@@ -616,7 +616,7 @@ function buildQualityDetail(dataset) {
 
 function AuditBadge({ status, children }) {
   return (
-    <span className={`rounded border px-2 py-1 text-[10px] font-bold ${getHealthTone(status)}`}>
+    <span className={`inline-flex shrink-0 items-center whitespace-nowrap rounded border px-2 py-1 text-[10px] font-bold ${getHealthTone(status)}`}>
       {children || getHealthLabel(status)}
     </span>
   )
@@ -632,8 +632,8 @@ function GuardSummary({ guardReport, compact = false }) {
   const failedCount = guardReport.failed_checks?.length ?? 0
 
   return (
-    <div className="space-y-1 inline-block" title={tooltipText}>
-      <div className="flex items-center gap-1 whitespace-nowrap">
+    <div className="min-w-0 space-y-1" title={tooltipText}>
+      <div className="flex min-w-0 items-center gap-1">
         <AuditBadge status={guardReport.passed ? 'healthy' : 'warning'}>
           {guardReport.passed 
             ? '승격 통과' 
@@ -643,7 +643,7 @@ function GuardSummary({ guardReport, compact = false }) {
       {!compact && failedLines.length ? (
         <div className="space-y-1 mt-1">
           {failedLines.map((line) => (
-            <p key={line} className="break-all text-[10px] leading-4 text-amber-200">
+            <p key={line} className="break-words text-[10px] leading-4 text-amber-200">
               {line}
             </p>
           ))}
@@ -683,12 +683,12 @@ function TrustMetric({ label, check, hint }) {
   const status = check?.passed ? 'healthy' : 'warning'
   return (
     <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-bold text-white">{label}</p>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+        <p className="min-w-0 break-keep text-xs font-bold leading-5 text-white">{label}</p>
         <AuditBadge status={status}>{check?.passed ? '통과' : '확인'}</AuditBadge>
       </div>
-      <p className="mt-2 font-mono text-lg font-bold text-ai-cyan">{formatTrustValue(check)}</p>
-      <p className="mt-1 text-[10px] leading-4 text-slate-500">{hint}</p>
+      <p className="mt-2 break-words font-mono text-base font-bold text-ai-cyan">{formatTrustValue(check)}</p>
+      <p className="mt-1 break-keep text-[10px] leading-4 text-slate-500">{hint}</p>
     </div>
   )
 }
@@ -754,7 +754,7 @@ function OperationalTrustPanel({ data, loading, error }) {
                   </span>
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="mt-4 grid gap-2.5">
                   <TrustMetric
                     label="데이터 품질"
                     check={findGuardCheck(guard, 'dataset_quality')}
@@ -792,7 +792,7 @@ function OperationalTrustPanel({ data, loading, error }) {
                     <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">보강 필요 항목</p>
                     <div className="mt-2 space-y-1">
                       {failedLines.map((line) => (
-                        <p key={line} className="break-all text-[10px] leading-5 text-amber-100">{line}</p>
+                        <p key={line} className="break-words text-[10px] leading-5 text-amber-100">{line}</p>
                       ))}
                     </div>
                   </div>
@@ -1142,13 +1142,13 @@ function ServingAuditPanel({ data, loading, error, onRefresh }) {
                   </div>
                 ) : null}
 
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <div className="rounded border border-slate-800 bg-black/10 p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">현재 서빙 기준</p>
+                <div className="mt-4 grid gap-2">
+                  <div className="min-w-0 rounded border border-slate-800 bg-black/10 p-3">
+                    <p className="mb-2 break-keep text-[10px] font-bold uppercase tracking-wider text-slate-500">현재 서빙 기준</p>
                     <GuardSummary guardReport={report.current_guard} compact />
                   </div>
-                  <div className="rounded border border-slate-800 bg-black/10 p-3">
-                    <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">추천 후보 기준</p>
+                  <div className="min-w-0 rounded border border-slate-800 bg-black/10 p-3">
+                    <p className="mb-2 break-keep text-[10px] font-bold uppercase tracking-wider text-slate-500">추천 후보 기준</p>
                     <GuardSummary guardReport={report.recommended_guard} compact />
                   </div>
                 </div>
@@ -1277,88 +1277,76 @@ function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-800 bg-[#0f172a]">
-      <table className="min-w-full text-left text-xs text-slate-300">
-        <thead className="text-[10px] uppercase tracking-wider text-slate-500">
-          <tr>
-            <th className="px-3 py-2">작업</th>
-            <th className="px-3 py-2">유형</th>
-            <th className="px-3 py-2">상태</th>
-            <th className="px-3 py-2">설정</th>
-            <th className="px-3 py-2">검증</th>
-            <th className="px-3 py-2">시작</th>
-            <th className="px-3 py-2">종료</th>
-            <th className="px-3 py-2 text-right">로그</th>
-          </tr>
-        </thead>
-        <tbody>
-          {jobs.map((job) => (
-            <tr key={job.id} className="border-t border-slate-800 align-top transition hover:bg-white/5">
-              <td className="px-3 py-2">
-                <p className="font-semibold text-white truncate max-w-[150px]" title={job.label || job.exchange || job.id}>
-                  {job.label || job.exchange || job.id}
+    <div className="grid gap-2.5">
+      {jobs.map((job) => (
+        <article key={job.id} className="rounded-lg border border-slate-800 bg-[#0f172a] p-3 text-xs text-slate-300">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-white" title={job.label || job.exchange || job.id}>
+                {job.label || job.exchange || job.id}
+              </p>
+              <p className="mt-1 truncate font-mono text-[10px] text-slate-500" title={job.output || job.config || ''}>
+                {formatPath(job.output) || formatPath(job.config) || job.interval || '-'}
+              </p>
+            </div>
+            <span className={`shrink-0 rounded border px-2 py-1 text-[9px] font-bold ${
+              job.status === 'success'
+                ? 'border-emerald-500/40 bg-emerald-950/20 text-emerald-300'
+                : job.status === 'failed'
+                  ? 'border-red-500/40 bg-red-950/20 text-red-300'
+                  : 'border-ai-cyan/40 bg-ai-cyan/5 text-ai-cyan'
+            }`}>
+              {String(job.status || 'running').toUpperCase()}
+            </span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="rounded bg-slate-950/50 px-2.5 py-2">
+              <p className="text-[10px] font-bold text-slate-500">유형</p>
+              <p className="mt-1 truncate font-mono text-[11px] text-slate-300">{job.type || '-'}</p>
+            </div>
+            <div className="rounded bg-slate-950/50 px-2.5 py-2">
+              <p className="text-[10px] font-bold text-slate-500">실패</p>
+              <p className="mt-1 font-mono text-[11px] text-amber-300">{job.failure_count || 0}건</p>
+            </div>
+            <div className="rounded bg-slate-950/50 px-2.5 py-2">
+              <p className="text-[10px] font-bold text-slate-500">시작</p>
+              <p className="mt-1 font-mono text-[11px] text-slate-300">{formatTime(job.started_at)}</p>
+            </div>
+            <div className="rounded bg-slate-950/50 px-2.5 py-2">
+              <p className="text-[10px] font-bold text-slate-500">종료</p>
+              <p className="mt-1 font-mono text-[11px] text-slate-300">{formatTime(job.finished_at)}</p>
+            </div>
+          </div>
+
+          <div className="mt-3 rounded bg-slate-950/50 px-2.5 py-2">
+            {job.training_audit?.promotion_guard ? (
+              <GuardSummary guardReport={job.training_audit.promotion_guard} compact />
+            ) : job.guard_report ? (
+              <GuardSummary guardReport={job.guard_report} compact />
+            ) : job.serving_audit_report ? (
+              <div className="space-y-1">
+                <AuditBadge status={job.serving_audit_report.status}>
+                  {job.serving_audit_report.status === 'healthy' ? '서빙 정상' : '서빙 경고'}
+                </AuditBadge>
+                <p className="text-[10px] text-slate-500">
+                  차단 {job.serving_audit_report.blocking_count ?? 0}건
                 </p>
-                {job.output ? (
-                  <p className="mt-1 truncate font-mono text-[10px] text-slate-500 max-w-[150px]" title={job.output}>
-                    {formatPath(job.output)}
-                  </p>
-                ) : null}
-                {job.failure_count ? (
-                  <p className="mt-1 text-[10px] text-amber-300">실패 심볼 {job.failure_count}건</p>
-                ) : null}
-              </td>
-              <td className="px-3 py-2 font-mono text-[10px] text-slate-400">{job.type}</td>
-              <td className="px-3 py-2">
-                <span className={`rounded border px-2 py-0.5 text-[9px] font-bold ${
-                  job.status === 'success'
-                    ? 'border-emerald-500/40 text-emerald-300 bg-emerald-950/20'
-                    : job.status === 'failed'
-                      ? 'border-red-500/40 text-red-300 bg-red-950/20'
-                      : 'border-ai-cyan/40 text-ai-cyan bg-ai-cyan/5'
-                }`}>
-                  {String(job.status || 'running').toUpperCase()}
-                </span>
-              </td>
-              <td className="px-3 py-2">
-                <p className="truncate font-mono text-[10px] text-slate-400 max-w-[150px]" title={job.config || job.interval || '-'}>
-                  {formatPath(job.config) || job.interval || '-'}
-                </p>
-              </td>
-              <td className="px-3 py-2">
-                <div className="min-w-[180px] space-y-1">
-                  {job.training_audit?.promotion_guard ? (
-                    <GuardSummary guardReport={job.training_audit.promotion_guard} compact />
-                  ) : job.guard_report ? (
-                    <GuardSummary guardReport={job.guard_report} compact />
-                  ) : job.serving_audit_report ? (
-                    <div className="space-y-1">
-                      <AuditBadge status={job.serving_audit_report.status}>
-                        {job.serving_audit_report.status === 'healthy' ? '서빙 정상' : '서빙 경고'}
-                      </AuditBadge>
-                      <p className="text-[10px] text-slate-500">
-                        차단 {job.serving_audit_report.blocking_count ?? 0}건
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-slate-500">감사 정보 없음</p>
-                  )}
-                </div>
-              </td>
-              <td className="px-3 py-2 font-mono text-[10px] text-slate-400 whitespace-nowrap">{formatTime(job.started_at)}</td>
-              <td className="px-3 py-2 font-mono text-[10px] text-slate-400 whitespace-nowrap">{formatTime(job.finished_at)}</td>
-              <td className="px-3 py-2 text-right">
-                <button
-                  type="button"
-                  onClick={() => onShowLog?.(job)}
-                  className="rounded border border-slate-700 bg-slate-800/40 px-2 py-1 text-[10px] font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white"
-                >
-                  로그 보기
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </div>
+            ) : (
+              <p className="text-[10px] text-slate-500">감사 정보 없음</p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onShowLog?.(job)}
+            className="mt-3 w-full rounded border border-slate-700 bg-slate-800/40 px-3 py-2 text-[11px] font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white"
+          >
+            로그 보기
+          </button>
+        </article>
+      ))}
     </div>
   )
 }
@@ -1384,83 +1372,77 @@ function RegistryPanel({ title, rows = [], loading, error, onActivate, activatin
           아직 레지스트리 정보가 없습니다.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-800 bg-[#0f172a]">
-          <table className="min-w-full text-left text-xs text-slate-300">
-            <thead className="text-[10px] uppercase tracking-wider text-slate-500">
-              <tr>
-                <th className="px-3 py-2">모델 버전</th>
-                <th className="px-3 py-2">CV 구분력</th>
-                <th className="px-3 py-2">상위 10%</th>
-                <th className="px-3 py-2">상태</th>
-                <th className="px-3 py-2">승격 검증</th>
-                <th className="px-3 py-2">작업</th>
-                <th className="px-3 py-2">경로</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const guardReport = promotionChecks[`${row.asset_type}:${row.model_version}`]
+        <div className="grid gap-2.5">
+          {rows.map((row) => {
+            const guardReport = promotionChecks[`${row.asset_type}:${row.model_version}`]
 
-                return (
-                <tr key={`${row.asset_type}-${row.model_version}`} className="border-t border-slate-800 align-top">
-                  <td className="px-3 py-2">
-                    <p className="font-mono text-white">{row.model_version}</p>
-                    <p className="mt-1 text-[10px] text-slate-500">{row.version || '-'}</p>
-                  </td>
-                  <td className="px-3 py-2 font-mono">{formatMetric(row.cv_roc_auc || row.roc_auc)}</td>
-                  <td className="px-3 py-2 font-mono">{formatMetric(row.cv_top10_precision)}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {row.is_latest ? (
-                        <span className="rounded border border-slate-600 px-2 py-1 text-[10px] font-bold text-slate-300">최신</span>
-                      ) : null}
-                      {row.is_recommended ? (
-                        <span className="rounded border border-emerald-500/40 px-2 py-1 text-[10px] font-bold text-emerald-300">추천</span>
-                      ) : null}
-                      {row.is_serving ? (
-                        <span className="rounded border border-ai-cyan/40 px-2 py-1 text-[10px] font-bold text-ai-cyan">서비스 적용</span>
-                      ) : null}
-                      {!row.is_latest && !row.is_recommended && !row.is_serving ? (
-                        <span className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-500">분석 중</span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">
-                    {guardReport ? (
-                      <GuardSummary guardReport={guardReport} compact />
-                    ) : promotionChecksLoading ? (
-                      <p className="text-[10px] text-slate-500">검증 중...</p>
-                    ) : (
-                      <p className="text-[10px] text-slate-500">검증 정보 없음</p>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={() => onActivate?.(row)}
-                      disabled={Boolean(activatingKey) || row.is_serving}
-                      className={`rounded border px-2 py-1 text-[10px] font-bold transition ${
-                        row.is_serving
-                          ? 'border-slate-700 text-slate-500'
-                          : 'border-ai-cyan/40 text-ai-cyan hover:bg-ai-cyan/10'
-                      } disabled:cursor-not-allowed disabled:opacity-50`}
-                    >
-                      {activatingKey === `${row.asset_type}:${row.model_version}`
-                        ? '반영 중...'
-                        : row.is_serving
-                          ? '반영됨'
-                          : '서비스 반영'}
-                    </button>
-                  </td>
-                  <td className="px-3 py-2 font-mono text-[10px] text-slate-500">
-                    <div className="max-w-[200px] truncate block" title={row.summary_path || row.metrics_path}>
-                      {formatPath(row.summary_path || row.metrics_path)}
-                    </div>
-                  </td>
-                </tr>
-              )})}
-            </tbody>
-          </table>
+            return (
+              <article key={`${row.asset_type}-${row.model_version}`} className="rounded-lg border border-slate-800 bg-[#0f172a] p-3 text-xs text-slate-300">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-sm font-bold text-white">{row.model_version}</p>
+                    <p className="mt-1 truncate text-[10px] text-slate-500">{row.version || '-'}</p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                    {row.is_latest ? (
+                      <span className="rounded border border-slate-600 px-2 py-1 text-[10px] font-bold text-slate-300">최신</span>
+                    ) : null}
+                    {row.is_recommended ? (
+                      <span className="rounded border border-emerald-500/40 px-2 py-1 text-[10px] font-bold text-emerald-300">추천</span>
+                    ) : null}
+                    {row.is_serving ? (
+                      <span className="rounded border border-ai-cyan/40 px-2 py-1 text-[10px] font-bold text-ai-cyan">서비스</span>
+                    ) : null}
+                    {!row.is_latest && !row.is_recommended && !row.is_serving ? (
+                      <span className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-500">분석 중</span>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="rounded bg-slate-950/50 px-2.5 py-2">
+                    <p className="text-[10px] font-bold text-slate-500">CV 구분력</p>
+                    <p className="mt-1 font-mono text-[11px] text-white">{formatMetric(row.cv_roc_auc || row.roc_auc)}</p>
+                  </div>
+                  <div className="rounded bg-slate-950/50 px-2.5 py-2">
+                    <p className="text-[10px] font-bold text-slate-500">상위 10%</p>
+                    <p className="mt-1 font-mono text-[11px] text-white">{formatMetric(row.cv_top10_precision)}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded bg-slate-950/50 px-2.5 py-2">
+                  {guardReport ? (
+                    <GuardSummary guardReport={guardReport} compact />
+                  ) : promotionChecksLoading ? (
+                    <p className="text-[10px] text-slate-500">검증 중...</p>
+                  ) : (
+                    <p className="text-[10px] text-slate-500">검증 정보 없음</p>
+                  )}
+                </div>
+
+                <p className="mt-2 truncate font-mono text-[10px] text-slate-500" title={row.summary_path || row.metrics_path}>
+                  {formatPath(row.summary_path || row.metrics_path)}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => onActivate?.(row)}
+                  disabled={Boolean(activatingKey) || row.is_serving}
+                  className={`mt-3 w-full rounded border px-3 py-2 text-[11px] font-bold transition ${
+                    row.is_serving
+                      ? 'border-slate-700 text-slate-500'
+                      : 'border-ai-cyan/40 text-ai-cyan hover:bg-ai-cyan/10'
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {activatingKey === `${row.asset_type}:${row.model_version}`
+                    ? '반영 중...'
+                    : row.is_serving
+                      ? '반영됨'
+                      : '서비스 반영'}
+                </button>
+              </article>
+            )
+          })}
         </div>
       )}
     </div>
@@ -1470,15 +1452,15 @@ function RegistryPanel({ title, rows = [], loading, error, onActivate, activatin
 function ReadinessItem({ label, status, detail }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-bold text-white">{label}</p>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
+        <p className="min-w-0 break-keep text-sm font-bold leading-5 text-white">{label}</p>
         <span className={`rounded border px-2 py-1 text-[10px] font-bold ${
           status ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300'
         }`}>
           {status ? '준비 완료' : '확인 필요'}
         </span>
       </div>
-      <p className="mt-2 break-all whitespace-pre-line font-mono text-[10px] leading-5 text-slate-500">{formatPathInText(detail)}</p>
+      <p className="mt-2 whitespace-pre-wrap break-words font-mono text-[10px] leading-5 text-slate-500">{formatPathInText(detail)}</p>
     </div>
   )
 }
@@ -1514,7 +1496,7 @@ function ReadinessPanel({ data, loading, error, onRefresh }) {
           아직 준비 상태 정보가 없습니다.
         </div>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <ReadinessItem
             label="Toss 키"
             status={data.keys?.toss_ready}
@@ -2750,16 +2732,16 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
         <Header isLoggedIn={isLoggedIn} userEmail={userEmail} handleLogout={handleLogout} />
       )}
 
-      <main className="mx-auto flex max-w-7xl flex-col gap-6">
+      <main className="mx-auto flex max-w-7xl flex-col gap-4">
         {/* 관리자 내부 탭 */}
-        <div className="flex overflow-x-auto border-b border-slate-800">
+        <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-[#0f172a] p-1">
           <button
             type="button"
             onClick={() => setAdminTab('ml')}
-            className={`shrink-0 px-4 py-3 text-sm font-bold border-b-2 transition sm:px-6 ${
+            className={`rounded-md px-3 py-2 text-xs font-bold transition ${
               adminTab === 'ml'
-                ? 'border-ai-cyan text-white bg-ai-cyan/5'
-                : 'border-transparent text-slate-400 hover:text-white'
+                ? 'bg-ai-cyan text-slate-950'
+                : 'text-slate-400 hover:bg-slate-800/70 hover:text-white'
             }`}
           >
             ML 운영 콘솔
@@ -2767,10 +2749,10 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
           <button
             type="button"
             onClick={() => setAdminTab('inquiries')}
-            className={`shrink-0 px-4 py-3 text-sm font-bold border-b-2 transition sm:px-6 ${
+            className={`rounded-md px-3 py-2 text-xs font-bold transition ${
               adminTab === 'inquiries'
-                ? 'border-ai-cyan text-white bg-ai-cyan/5'
-                : 'border-transparent text-slate-400 hover:text-white'
+                ? 'bg-ai-cyan text-slate-950'
+                : 'text-slate-400 hover:bg-slate-800/70 hover:text-white'
             }`}
           >
             사용자 문의 관리
@@ -2779,12 +2761,12 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
 
         {adminTab === 'ml' && (
           <>
-            <section className="ai-glass rounded-lg p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
+            <section className="ai-glass rounded-lg p-4">
+          <div className="grid gap-3">
+            <div className="min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">ML Operations</p>
-              <h2 className="mt-2 text-2xl font-bold text-white">ML 운영 콘솔</h2>
-              <p className="mt-2 text-sm leading-6 text-slate-400">
+              <h2 className="mt-1 text-xl font-bold text-white">ML 운영 콘솔</h2>
+              <p className="mt-1 break-keep text-xs leading-5 text-slate-400">
                 기본 화면은 운영 상태, 서빙 감사, 활성 신호, v8 자동화 실행, 최근 작업 이력만 표시합니다.
               </p>
             </div>
@@ -2792,7 +2774,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             <button
               type="button"
               onClick={() => setShowAdvancedTools((prev) => !prev)}
-              className="w-full rounded border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white sm:w-auto"
+              className="w-full rounded border border-slate-700 bg-[#0f172a] px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white"
             >
               {showAdvancedTools ? '고급 도구 접기' : '고급 도구 열기'}
             </button>

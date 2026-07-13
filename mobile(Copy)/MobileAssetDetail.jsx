@@ -5,6 +5,13 @@ import { supabase, deleteUserWatchlistItem, ensureNewsSummaries, fetchUserWatchl
 import Header from '../../components/Header.jsx'
 import AssetLogo from '../../components/AssetLogo.jsx'
 import { getApiErrorMessage } from '../../lib/apiError.js'
+import {
+  MobileAssetChartSection,
+  MobileAssetCommunitySection,
+  MobileAssetNewsDisclosureSection,
+  MobileAssetOrderSection,
+} from './detail/MobileAssetDetailSections.jsx'
+import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 const OPEN_ORDER_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,ord_type,currency,broker_env,external_order_id,status,created_at'
@@ -265,7 +272,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [, setTrades] = useState([])
   const [userBalance, setUserBalance] = useState(null)
   const [balanceMessage, setBalanceMessage] = useState('')
-  const [activeTab, setActiveTab] = useState('news') // news | community
+  const [activeTab, setActiveTab] = useState('news') // news | disclosure
+  const [activeDetailSection, setActiveDetailSection] = useState('order') // chart | order | newsDisclosure | community
+  const isChartSectionActive = activeDetailSection === 'chart'
+  const isOrderSectionActive = activeDetailSection === 'order'
+  const isNewsDisclosureSectionActive = activeDetailSection === 'newsDisclosure'
+  const isCommunitySectionActive = activeDetailSection === 'community'
   const [newsList, setNewsList] = useState([])
   const [loadingNews, setLoadingNews] = useState(false)
   const [newsSyncing, setNewsSyncing] = useState(false)
@@ -410,7 +422,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const lastCandleSignatureRef = useRef('')
   const orderbookTradesInFlightRef = useRef(false)
   const candlesInFlightRef = useRef(false)
-  const manualOrderIdempotencyRef = useRef(null)
 
   const isIntradayInterval = !['1d', '1w', '1M'].includes(chartInterval)
   const effectiveOrderPrice = orderType === 'LIMIT' ? Number(price || 0) : currentPrice
@@ -915,7 +926,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           query: symbol || '',
           assetType: normalizedRouteAssetType,
         })
-        navigate(`/search/not-found?${params.toString()}`, { replace: true })
+        navigate(preserveMobileDeviceParam(`/search/not-found?${params.toString()}`), { replace: true })
       }
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -926,7 +937,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         query: symbol || '',
         assetType: normalizedRouteAssetType,
       })
-      navigate(`/search/not-found?${params.toString()}`, { replace: true })
+      navigate(preserveMobileDeviceParam(`/search/not-found?${params.toString()}`), { replace: true })
     } finally {
       if (metadataAbortControllerRef.current === controller) {
         metadataAbortControllerRef.current = null
@@ -1027,12 +1038,39 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const fetchNewsList = async () => {
     setLoadingNews(true)
     try {
-      const newsSymbol = resolvedAssetType === 'STOCK' ? getExchangeSymbol(exchange) : getDetailBaseSymbol()
-      const response = await fetch(`${API_BASE_URL}/api/news?symbol=${encodeURIComponent(newsSymbol)}&limit=10`)
-      const resData = await response.json()
-      if (resData.success && resData.data && resData.data.items) {
-        setNewsList(resData.data.items)
+      const primarySymbol = resolvedAssetType === 'STOCK' ? getExchangeSymbol(exchange) : getDetailBaseSymbol()
+      const rawSymbol = String(symbol || '').trim()
+      const displayQuery = String(displayName || '').trim()
+      const seen = new Set()
+      const requestItems = [
+        { param: 'symbol', value: primarySymbol },
+        { param: 'symbol', value: getExchangeSymbol(exchange) },
+        { param: 'symbol', value: getDetailBaseSymbol() },
+        { param: 'symbol', value: resolvedSymbol },
+        { param: 'symbol', value: rawSymbol },
+        { param: 'query', value: displayQuery },
+      ].filter((item) => {
+        const value = String(item.value || '').trim()
+        if (!value) return false
+        const key = `${item.param}:${value.toUpperCase()}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        item.value = value
+        return true
+      })
+
+      for (const item of requestItems) {
+        const params = new URLSearchParams({ [item.param]: item.value, limit: '10' })
+        const response = await fetch(`${API_BASE_URL}/api/news?${params.toString()}`)
+        const resData = await response.json()
+        const items = resData.success && resData.data && resData.data.items ? resData.data.items : []
+        if (items.length > 0) {
+          setNewsList(items)
+          return
+        }
       }
+
+      setNewsList([])
     } catch (e) {
       console.error("뉴스 로드 실패:", e)
     } finally {
@@ -1960,8 +1998,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         }
       }
 
-      // 2차 fallback: 일봉 캔들 2개로 직접 계산
-      const candleUrl = `${API_BASE_URL}/api/chart/candles?exchange=${chartEx}&symbol=${encodeURIComponent(chartSymbol)}&interval=1d&broker_env=${chartEnv}&count=2`
+      // Backend candle cache is keyed by symbol/interval, not count. Keep this fallback
+      // at chart-sized count so the quote fallback does not poison the chart with 2 candles.
+      const candleUrl = `${API_BASE_URL}/api/chart/candles?exchange=${chartEx}&symbol=${encodeURIComponent(chartSymbol)}&interval=1d&broker_env=${chartEnv}&count=300`
       const candleRes = await fetch(candleUrl, { headers })
       if (candleRes.ok) {
         const candleJson = await candleRes.json()
@@ -2372,6 +2411,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   // 3. TradingView Lightweight Charts 차트 초기 생성 및 리사이즈 대응
   useEffect(() => {
     if (!symbolLookupReady) return
+    if (!isChartSectionActive) return
     if (!chartContainerRef.current || chartRef.current) return
 
     let chart = null
@@ -2475,7 +2515,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     } catch (err) {
       console.error('TradingView 차트 생성 치명적 에러:', err)
     }
-  }, [symbolLookupReady])
+  }, [symbolLookupReady, isChartSectionActive])
 
   // 4. 차트 데이터만 갱신하고 초기 1회만 fitContent 적용
   useEffect(() => {
@@ -2498,7 +2538,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     } catch (err) {
       console.error('차트 데이터 갱신 실패:', err)
     }
-  }, [candleData, isChartExpanded])
+  }, [candleData, isChartExpanded, isChartSectionActive])
 
   useEffect(() => {
     if (!candleSeriesRef.current) return
@@ -2600,31 +2640,18 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         leverage: exchange === 'BINANCE_UM_FUTURES' ? Number(futuresLeverage) : null,
         margin_type: exchange === 'BINANCE_UM_FUTURES' ? futuresMarginType : null
       }
-      const orderFingerprint = JSON.stringify(payload)
-      if (manualOrderIdempotencyRef.current?.fingerprint !== orderFingerprint) {
-        manualOrderIdempotencyRef.current = {
-          fingerprint: orderFingerprint,
-          key: crypto.randomUUID(),
-        }
-      }
-      const idempotencyKey = manualOrderIdempotencyRef.current.key
-      payload.idempotency_key = idempotencyKey
 
       const response = await fetch(`${API_BASE_URL}/api/trade/order`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': authHeader,
-          'Idempotency-Key': idempotencyKey
+          'Authorization': authHeader
         },
         body: JSON.stringify(payload)
       })
 
       const resData = await response.json()
 
-      if (resData.success || resData.error?.code === 'ORDER_NOT_ACCEPTED') {
-        manualOrderIdempotencyRef.current = null
-      }
       if (resData.success) {
         const autoExitMessage = resData.auto_exit ? ` / ${resData.auto_exit}` : ''
         setTradeMessage({
@@ -2774,6 +2801,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     replies.sort((left, right) => new Date(left.created_at) - new Date(right.created_at))
   })
   const communityRootPosts = communityPosts.filter((post) => !post.parent_id)
+  const detailSectionTabs = [
+    { id: 'order', label: '주문' },
+    { id: 'chart', label: '차트' },
+    { id: 'newsDisclosure', label: '뉴스·공시' },
+    { id: 'community', label: '커뮤니티' },
+  ]
+  const showLeftDetailColumn = isChartSectionActive || isNewsDisclosureSectionActive || isCommunitySectionActive
 
   if (!symbolLookupReady) {
     return (
@@ -2799,7 +2833,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         {/* 뒤로가기 버튼 */}
         <div className="mt-2 mb-4">
           <button
-            onClick={() => navigate('/')}
+            onClick={() => navigate(preserveMobileDeviceParam('/'))}
             className="flex items-center gap-2 text-xs font-bold text-slate-400 hover:text-white transition-all bg-transparent border-none cursor-pointer outline-none"
           >
             <span>← 홈으로 돌아가기</span>
@@ -2891,32 +2925,56 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           </div>
         </div>
 
+        <nav className="sticky top-0 z-30 mb-5 grid grid-cols-4 overflow-hidden rounded-xl border border-[#1f2945] bg-[#061321]/95 shadow-[0_10px_24px_rgba(0,0,0,0.28)] backdrop-blur-md">
+          {detailSectionTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => {
+                setActiveDetailSection(tab.id)
+                if (tab.id === 'newsDisclosure' && activeTab === 'community') {
+                  setActiveTab('news')
+                }
+              }}
+              className={`min-h-12 border-r border-[#1f2945] px-1.5 text-[12px] font-black transition last:border-r-0 ${
+                activeDetailSection === tab.id
+                  ? 'bg-blue-900/80 text-white shadow-[inset_0_-2px_0_rgba(34,211,238,0.9)]'
+                  : 'bg-[#0f172a] text-slate-400 active:bg-slate-800'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
         {/* 2. 메인 3열(3-column) WTS 레이아웃 */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           
           {/* [1열: 좌측 - 컴팩트 차트 및 저비용 정보 패널] */}
-          <div className={`${showLevel2Panel ? 'lg:col-span-6' : 'lg:col-span-8'} flex flex-col gap-5`}>
+          <div className={`${showLeftDetailColumn ? 'flex' : 'hidden'} ${showLevel2Panel ? 'lg:col-span-6' : 'lg:col-span-12'} flex-col gap-5`}>
             
             {/* 차트 카드 */}
-            {isChartExpanded && (
-              <button
-                type="button"
-                aria-label="차트 크게보기 닫기"
-                onClick={() => setIsChartExpanded(false)}
-                className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
-              />
-            )}
-            <div className={chartCardClassName}>
-              <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
-                    <span className="text-xs font-bold text-white">{isChartExpanded ? '실시간 통합 차트 크게보기' : '컴팩트 차트'}</span>
+            {isChartSectionActive ? (
+            <MobileAssetChartSection>
+              {isChartExpanded && (
+                <button
+                  type="button"
+                  aria-label="차트 크게보기 닫기"
+                  onClick={() => setIsChartExpanded(false)}
+                  className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+                />
+              )}
+              <div className={chartCardClassName}>
+                <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-3 bg-cyan-400 rounded-full" />
+                      <span className="text-xs font-bold text-white">{isChartExpanded ? '실시간 통합 차트 크게보기' : '컴팩트 차트'}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-mono">
+                      마지막 차트 확인 {formatTimestamp(marketFeeds.candles.checkedAt)}
+                    </p>
                   </div>
-                  <p className="text-[10px] text-slate-500 font-mono">
-                    마지막 차트 확인 {formatTimestamp(marketFeeds.candles.checkedAt)}
-                  </p>
-                </div>
                 
                 {/* 캔들 주기 변경 탭 */}
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -2977,15 +3035,17 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               </div>
 
               {/* 차트 영역 */}
-              <div className={chartPanelClassName}>
-                <div className={`absolute inset-0 flex items-center justify-center bg-[#0e1529]/95 z-10 rounded transition-opacity duration-200 ${loadingChart ? 'opacity-100' : 'opacity-0 pointer-events-none hidden'}`}>
-                  <span className="text-xs text-cyan-400 font-mono animate-pulse">시세 차트 로드 중...</span>
+                <div className={chartPanelClassName}>
+                  <div className={`absolute inset-0 flex items-center justify-center bg-[#0e1529]/95 z-10 rounded transition-opacity duration-200 ${loadingChart ? 'opacity-100' : 'opacity-0 pointer-events-none hidden'}`}>
+                    <span className="text-xs text-cyan-400 font-mono animate-pulse">시세 차트 로드 중...</span>
+                  </div>
+                  <div ref={chartContainerRef} className="h-full w-full" />
                 </div>
-                <div ref={chartContainerRef} className="h-full w-full" />
               </div>
-            </div>
+            </MobileAssetChartSection>
+            ) : null}
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="hidden grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
                 <p className="text-[10px] font-bold tracking-[0.08em] text-slate-500">보유 현황</p>
                 <p className="mt-2 font-mono text-sm font-black text-white">{holdingSummaryLabel}</p>
@@ -3003,7 +3063,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+            <div className="hidden rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
               <div className="mb-3 flex flex-col gap-3 border-b border-[#1f2945] pb-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex items-center gap-2">
@@ -3164,7 +3224,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               )}
             </div>
 
-            <div className="rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
+            <div className="hidden rounded-xl border border-[#1f2945] bg-[#0e1529]/90 p-4 backdrop-blur-md">
               <div className="mb-3 flex flex-col gap-3 border-b border-[#1f2945] pb-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="flex items-center gap-2">
@@ -3521,12 +3581,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
             </div>
 
             {/* 하단 RAG 뉴스 / 종목 정보 탭 카드 */}
+            {isNewsDisclosureSectionActive || isCommunitySectionActive ? (
             <div className="bg-[#0e1529]/90 border border-[#1f2945] rounded-xl p-5 backdrop-blur-md">
+              {isNewsDisclosureSectionActive ? (
               <div className="flex border-b border-[#1f2945] pb-2 mb-4">
                 {[
                   { id: 'news', label: '뉴스' },
-                  { id: 'disclosure', label: '공시' },
-                  { id: 'community', label: '커뮤니티' }
+                  { id: 'disclosure', label: '공시' }
                 ].map(t => (
                   <button
                     key={t.id}
@@ -3537,9 +3598,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                   </button>
                 ))}
               </div>
+              ) : null}
 
-              {activeTab === 'news' && (
-                <div className="max-h-[360px] overflow-y-auto pr-1">
+              <MobileAssetNewsDisclosureSection>
+                {isNewsDisclosureSectionActive && activeTab === 'news' && (
+                  <div className="max-h-[360px] overflow-y-auto pr-1">
                   <section className="min-h-[220px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
                     <div className="mb-3 flex items-center justify-between gap-3 border-b border-[#1f2945]/50 pb-2">
                       <h3 className="text-sm font-bold text-cyan-200">뉴스</h3>
@@ -3627,8 +3690,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 </div>
               )}
 
-              {activeTab === 'disclosure' && (
-                <div className="max-h-[360px] overflow-y-auto pr-1">
+                {isNewsDisclosureSectionActive && activeTab === 'disclosure' && (
+                  <div className="max-h-[360px] overflow-y-auto pr-1">
                   <section className="min-h-[220px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
                     <div className="mb-3 flex items-center justify-between gap-3 border-b border-[#1f2945]/50 pb-2">
                       <h3 className="text-sm font-bold text-cyan-200">공시</h3>
@@ -3843,8 +3906,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                 </div>
               )}
 
-              {activeTab === 'community' && (
-                <div className="max-h-[420px] overflow-y-auto pr-1">
+              </MobileAssetNewsDisclosureSection>
+
+              <MobileAssetCommunitySection>
+                {isCommunitySectionActive && (
+                  <div className="max-h-[420px] overflow-y-auto pr-1">
                   <section className="min-h-[260px] rounded-lg border border-[#1f2945]/70 bg-[#07111f]/70 p-4">
                     <div className="mb-3 flex flex-col gap-2 border-b border-[#1f2945]/50 pb-3 sm:flex-row sm:items-center sm:justify-between">
                       <div>
@@ -4053,12 +4119,15 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                     </div>
                   </section>
                 </div>
-              )}
+                )}
+              </MobileAssetCommunitySection>
             </div>
+            ) : null}
           </div>
 
           {/* [2열: 우측 - 주문 패널 & 내 보유 주식] */}
-          <div className={`${showLevel2Panel ? 'lg:col-span-3' : 'lg:col-span-4'} flex flex-col gap-5`}>
+          <div className={`${isOrderSectionActive ? 'flex' : 'hidden'} lg:col-span-12 flex-col gap-5`}>
+            <MobileAssetOrderSection>
 
             {/* AI 시그널 카드 */}
             <div className="bg-[#0e1529]/90 border border-cyan-500/30 rounded-xl p-4 flex flex-col gap-3 backdrop-blur-md">
@@ -4920,6 +4989,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
               )}
             </div>
 
+            </MobileAssetOrderSection>
           </div>
 
         </div>

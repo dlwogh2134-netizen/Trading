@@ -174,23 +174,23 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
       {!hideHeader ? <Header isLoggedIn={isLoggedIn} userEmail={userEmail} handleLogout={handleLogout} /> : null}
 
       <main className="mx-auto max-w-7xl">
-        <section className="ai-glass rounded-lg p-4 sm:p-6">
-          <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <h2 className="text-2xl font-bold text-white">News Board</h2>
-              <p className="mt-1 text-sm text-slate-400">
+        <section className={`ai-glass rounded-lg ${mobileLayout ? 'p-3' : 'p-4 sm:p-6'}`}>
+          <div className={`${mobileLayout ? 'mb-4 gap-3' : 'mb-5 gap-4'} flex min-w-0 flex-col lg:flex-row lg:items-end lg:justify-between`}>
+            <div className="min-w-0">
+              <h2 className={`${mobileLayout ? 'whitespace-nowrap text-xl leading-7' : 'text-2xl'} font-bold text-white`}>News Board</h2>
+              <p className={`${mobileLayout ? 'mt-1 text-xs leading-5' : 'mt-1 text-sm'} text-slate-400`}>
                 Supabase에 적재된 국내·해외 뉴스를 게시판 형태로 보여줍니다.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[140px_170px_minmax(220px,1fr)]">
+            <div className={`grid w-full min-w-0 grid-cols-1 ${mobileLayout ? 'gap-2' : 'gap-3 sm:grid-cols-[140px_170px_minmax(220px,1fr)]'}`}>
               <select
                 value={newsMarket}
                 onChange={(event) => {
                   setNewsMarket(event.target.value)
                   setPage(1)
                 }}
-                className="rounded border border-slate-700 bg-[#0F172A] px-3 py-2 text-sm text-white"
+                className="min-w-0 w-full rounded border border-slate-700 bg-[#0F172A] px-3 py-2 text-sm text-white"
               >
                 {marketOptions.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -205,7 +205,7 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
                   setNewsCategory(event.target.value)
                   setPage(1)
                 }}
-                className="rounded border border-slate-700 bg-[#0F172A] px-3 py-2 text-sm text-white"
+                className="min-w-0 w-full rounded border border-slate-700 bg-[#0F172A] px-3 py-2 text-sm text-white"
               >
                 {categoryOptions.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -228,31 +228,32 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
                   }
                 }}
                 placeholder="종목명, 티커, 키워드 검색"
-                className="min-w-0 rounded border border-slate-700 bg-[#0F172A] px-3 py-2 text-sm text-white"
+                className="min-w-0 w-full rounded border border-slate-700 bg-[#0F172A] px-3 py-2 text-sm text-white"
               />
             </div>
           </div>
 
-          <div className="mb-6 rounded-xl border border-slate-800 bg-[#0c1019]/80 p-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
+          <div className={`${mobileLayout ? 'mb-4 p-3' : 'mb-6 p-4'} rounded-xl border border-slate-800 bg-[#0c1019]/80`}>
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-white">카테고리 기준</h3>
-                <p className="mt-1 text-xs text-slate-400">검색 아래에서 각 카테고리 의미를 바로 확인할 수 있습니다.</p>
+                <p className="mt-1 break-keep text-xs leading-5 text-slate-400">뉴스를 고르는 기준을 빠르게 확인할 수 있습니다.</p>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="text-[11px] text-slate-500">종목은 검색창 직접 입력이 더 정확합니다.</div>
+              <div className={`${mobileLayout ? 'w-full items-center justify-between' : 'items-center'} flex min-w-0 gap-2 sm:flex-row sm:gap-3`}>
+                <div className="min-w-0 break-keep text-[11px] leading-4 text-slate-500">종목명은 검색창에 직접 입력하면 더 정확합니다.</div>
                 <button
                   type="button"
                   onClick={() => setIsCategoryGuideOpen((prev) => !prev)}
-                  className="rounded border border-slate-700 px-3 py-1.5 text-[11px] text-slate-300 hover:border-ai-cyan/50 hover:text-white"
+                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full border border-ai-cyan/35 bg-ai-cyan/10 px-3 text-[11px] font-black text-ai-cyan transition hover:border-ai-cyan hover:bg-ai-cyan/15 hover:text-cyan-200"
                 >
-                  {isCategoryGuideOpen ? '접기' : '펼치기'}
+                  <span>{isCategoryGuideOpen ? '접기' : '펼치기'}</span>
+                  <span className="text-[10px] leading-none">{isCategoryGuideOpen ? '▲' : '▼'}</span>
                 </button>
               </div>
             </div>
 
             {isCategoryGuideOpen ? (
-              <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
+              <div className={`${mobileLayout ? 'mt-3 gap-2' : 'mt-4 gap-3 lg:grid-cols-2 xl:grid-cols-3'} grid grid-cols-1`}>
                 {categoryGuide.map((item) => {
                   const isActive = newsCategory === item.key
                   return (
@@ -260,12 +261,15 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
                       key={item.key}
                       className={
                         isActive
-                          ? 'rounded-lg border border-ai-cyan/50 bg-ai-cyan/10 p-3'
+                          ? 'rounded-lg border border-ai-cyan/50 bg-ai-cyan/10 p-3 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]'
                           : 'rounded-lg border border-slate-800 bg-[#0a0d14] p-3'
                       }
                     >
-                      <div className="text-sm font-semibold text-white">{item.title}</div>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">{item.description}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 truncate text-sm font-semibold text-white">{item.title}</div>
+                        {isActive ? <span className="shrink-0 rounded-full bg-ai-cyan px-2 py-0.5 text-[10px] font-black text-slate-950">선택</span> : null}
+                      </div>
+                      <p className="mt-1 break-keep text-xs leading-5 text-slate-400">{item.description}</p>
                     </div>
                   )
                 })}

@@ -144,11 +144,14 @@ class CoinoneClient:
             change_rate = self._to_float(ticker.get("change_rate_24h"))
         elif yesterday_last > 0:
             change_rate = ((current_price - yesterday_last) / yesterday_last) * 100.0
+        if current_price > 0 and yesterday_last > 0:
+            change_rate = ((current_price - yesterday_last) / yesterday_last) * 100.0
 
         return {
             "symbol": target_currency,
             "current_price": current_price,
             "change_rate": change_rate,
+            "previous_close": yesterday_last,
             "currency": "KRW",
             "raw": data,
         }

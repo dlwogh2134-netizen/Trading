@@ -112,11 +112,15 @@ export default function MobileRoutes({
           <Route
             path="/admin/ml-data"
             element={(
-              <MobileAdminMlData
-                isLoggedIn={isLoggedIn}
-                userEmail={userEmail}
-                handleLogout={handleLogout}
-              />
+              <div className="min-h-screen bg-obsidian-bg px-3 py-4 font-inter text-[#e2e2ec]">
+                <MobileHeader isLoggedIn={isLoggedIn} handleLogout={handleLogout} />
+                <MobileAdminMlData
+                  isLoggedIn={isLoggedIn}
+                  userEmail={userEmail}
+                  handleLogout={handleLogout}
+                  hideHeader
+                />
+              </div>
             )}
           />
           <Route path="/login" element={<MobileLogin />} />

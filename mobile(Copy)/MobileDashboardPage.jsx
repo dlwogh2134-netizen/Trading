@@ -1388,8 +1388,8 @@ export default function MobileDashboardPage({
                 {/* 실시간 적용 환율 상태 모니터링 뱃지 */}
                 <div className="flex items-center gap-2 text-xs text-slate-400 font-sans">
                   <span className={`w-1.5 h-1.5 rounded-full ${(!balance?.exchange_rate || balance.exchange_rate === 1500) ? 'bg-amber-400' : 'bg-[#38bdf8] animate-pulse'}`} />
-                  <span className="font-bold">적용 환율:</span>
-                  <span className="font-mono font-bold text-white">
+                  <span className="whitespace-nowrap font-bold">적용 환율:</span>
+                  <span className="whitespace-nowrap font-mono font-bold text-white">
                     ₩{toNumber(balance?.exchange_rate || 1500).toLocaleString(undefined, { maximumFractionDigits: 1 })}
                   </span>
                   {(!balance?.exchange_rate || balance.exchange_rate === 1500) ? (

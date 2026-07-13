@@ -975,6 +975,57 @@ def _as_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _recalculate_change_rate(current_price, previous_close) -> float:
+    current = _as_float(current_price)
+    previous = _as_float(previous_close)
+    if current <= 0 or previous <= 0:
+        return 0.0
+    return round(((current - previous) / previous) * 100.0, 4)
+
+
+def _normalize_live_quote_prices(live_quote: dict | None) -> tuple[float | None, float | None, float | None]:
+    quote = live_quote if isinstance(live_quote, dict) else {}
+    current_price = _as_float(
+        quote.get("current_price")
+        or quote.get("price")
+        or quote.get("last")
+        or quote.get("close")
+    )
+    previous_close = _as_float(
+        quote.get("previous_close")
+        or quote.get("prev_close")
+        or quote.get("prev_close_price")
+        or quote.get("base_price")
+        or quote.get("open_price")
+    )
+    price_change = _as_float(
+        quote.get("price_change")
+        or quote.get("change_price")
+        or quote.get("priceChange")
+    )
+    price_change_sign = str(quote.get("price_change_sign") or quote.get("change_sign") or "").strip()
+    if price_change_sign in {"4", "5"} and price_change > 0:
+        price_change = -price_change
+    elif price_change_sign in {"1", "2"} and price_change < 0:
+        price_change = abs(price_change)
+    if current_price > 0 and previous_close <= 0 and price_change:
+        previous_close = current_price - price_change
+
+    change_rate = None
+    if str(quote.get("change_rate_source") or "").upper() == "TOSS_PRICE" and quote.get("change_rate") is not None:
+        change_rate = _as_float(quote.get("change_rate"))
+    elif current_price > 0 and previous_close > 0:
+        change_rate = _recalculate_change_rate(current_price, previous_close)
+    elif quote.get("change_rate") is not None:
+        change_rate = _as_float(quote.get("change_rate"))
+
+    return (
+        current_price if current_price > 0 else None,
+        previous_close if previous_close > 0 else None,
+        change_rate,
+    )
+
+
 def _pick_nested_value(data: dict | None, keys: tuple[str, ...]):
     if not isinstance(data, dict):
         return None
@@ -3570,10 +3621,11 @@ def get_quote():
         exchange = "TOSS"
 
     auth_header = request.headers.get("Authorization")
-    change_rate = get_cached_change_rate(exchange, symbol, broker_env, auth_header)
+    change_rate = 0.0 if auth_header else get_cached_change_rate(exchange, symbol, broker_env, auth_header)
 
     # Fallback: change_rate가 0이면 일봉 캔들 캐시에서 전일 종가 기반으로 직접 계산
     current_price = None
+    previous_close = None
     live_quote = {}
     if auth_header:
         try:
@@ -3581,15 +3633,10 @@ def get_quote():
             record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
             client = _build_exchange_client(exchange, broker_env, record, access_key, secret_key)
             live_quote = client.get_price(symbol) if client and hasattr(client, "get_price") else {}
-            current_price = float(
-                live_quote.get("current_price")
-                or live_quote.get("price")
-                or live_quote.get("last")
-                or live_quote.get("close")
-                or 0
-            ) or None
-            if live_quote.get("change_rate") is not None:
-                change_rate = float(live_quote.get("change_rate") or 0.0)
+            normalized_price, previous_close, normalized_change_rate = _normalize_live_quote_prices(live_quote)
+            current_price = normalized_price
+            if normalized_change_rate is not None:
+                change_rate = normalized_change_rate
         except Exception as quote_error:
             current_app.logger.warning(f"차트 현재가 조회 실패: {str(quote_error)}")
 
@@ -3616,6 +3663,9 @@ def get_quote():
             "symbol": symbol,
             "currency": _currency_for_quote(exchange, symbol),
             **({"current_price": current_price} if current_price is not None else {}),
+            **({"previous_close": previous_close} if "previous_close" in locals() and previous_close is not None else {}),
+            **({"change_rate_source": live_quote.get("change_rate_source")} if isinstance(live_quote, dict) and live_quote.get("change_rate_source") else {}),
+            **({"symbol_used": live_quote.get("symbol_used")} if isinstance(live_quote, dict) and live_quote.get("symbol_used") else {}),
         }
     })
 

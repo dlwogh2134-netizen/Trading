@@ -200,7 +200,7 @@ function Icon({ name, className = 'h-5 w-5' }) {
 
 function Widget({ children, className = '' }) {
   return (
-    <section className={`min-h-0 rounded-lg border border-slate-700/80 bg-slate-surface p-5 ${className}`}>
+    <section className={`min-h-0 rounded-lg border border-slate-700/80 bg-slate-surface p-4 ${className}`}>
       {children}
     </section>
   )
@@ -224,7 +224,7 @@ function WidgetTitle({ title, icon, action }) {
 
 function EmptyState({ message, icon = 'inbox' }) {
   return (
-    <div className="grid h-full min-h-24 place-items-center border-t border-slate-800 px-4 py-5 text-center text-sm text-slate-500">
+    <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-slate-800 bg-[#0f172a] px-4 py-6 text-center text-sm text-slate-500">
       <div>
         <span className="mx-auto mb-2 grid h-11 w-11 place-items-center rounded-lg border border-slate-700/70 bg-[#0f172a] text-slate-500">
           <Icon name={icon} className="h-6 w-6" />
@@ -242,27 +242,27 @@ function Pagination({ currentPage, totalPages, totalItems, pageSize, onPageChang
   const endItem = Math.min(currentPage * pageSize, totalItems)
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 bg-[#0f172a] px-4 py-3 text-xs font-bold text-slate-400">
-      <span>
+    <div className="grid gap-3 rounded-lg border border-slate-800 bg-[#0f172a] px-3 py-3 text-xs font-bold text-slate-400">
+      <span className="text-center">
         {startItem}-{endItem} / {totalItems}
       </span>
-      <div className="flex items-center gap-2">
+      <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2">
         <button
           type="button"
           disabled={currentPage === 1}
-          className="grid h-8 w-8 place-items-center rounded border border-slate-700 text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan disabled:cursor-not-allowed disabled:opacity-40"
+          className="grid h-10 w-11 place-items-center rounded border border-slate-700 text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => onPageChange(currentPage - 1)}
           aria-label="이전 페이지"
         >
           <Icon name="chevronLeft" className="h-4 w-4" />
         </button>
-        <span className="min-w-16 text-center text-slate-300">
+        <span className="rounded border border-slate-800 bg-slate-900/60 px-3 py-2 text-center text-slate-300">
           {currentPage} / {totalPages}
         </span>
         <button
           type="button"
           disabled={currentPage === totalPages}
-          className="grid h-8 w-8 place-items-center rounded border border-slate-700 text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan disabled:cursor-not-allowed disabled:opacity-40"
+          className="grid h-10 w-11 place-items-center rounded border border-slate-700 text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan disabled:cursor-not-allowed disabled:opacity-40"
           onClick={() => onPageChange(currentPage + 1)}
           aria-label="다음 페이지"
         >
@@ -325,38 +325,37 @@ function InquiryTable({
   const [expandedInquiryId, setExpandedInquiryId] = useState(null)
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-slate-800">
-      <div className="grid grid-cols-[minmax(180px,1.5fr)_120px_130px_120px] bg-[#0f172a] text-xs font-bold text-slate-400">
-        {inquiryColumns.map((column) => (
-          <div key={column.key} className="px-4 py-2.5">
-            {column.label}
-          </div>
-        ))}
-      </div>
-
-      <div className="min-h-0 flex-1">
+    <div className="flex min-h-0 flex-col">
+      <div className="grid min-h-0 gap-2.5">
         {inquiries.length > 0 ? (
           inquiries.map((item) => {
             const rowId = item.id || `${item.title}-${item.createdAt}`
             const isExpanded = expandedInquiryId === rowId
 
             return (
-              <div key={rowId} className="border-t border-slate-800 text-sm text-slate-300">
+              <div key={rowId} className="overflow-hidden rounded-lg border border-slate-800 bg-[#0f172a] text-sm text-slate-300">
                 <button
                   type="button"
                   aria-expanded={isExpanded}
-                  className="grid w-full grid-cols-[minmax(180px,1.5fr)_120px_130px_120px] text-left transition hover:bg-white/[0.03]"
+                  className="grid w-full gap-3 px-3 py-3 text-left transition hover:bg-white/[0.03]"
                   onClick={() => setExpandedInquiryId(isExpanded ? null : rowId)}
                 >
-                  {inquiryColumns.map((column) => (
-                    <span key={column.key} className="px-4 py-3">
-                      {item[column.key] || '-'}
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-extrabold text-white">{item.title || '-'}</span>
+                    <span className="mt-1 block truncate text-[11px] font-bold text-slate-500">{item.createdAt || '-'}</span>
+                  </span>
+                  <span className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-300">
+                      {item.type || '-'}
                     </span>
-                  ))}
+                    <span className="rounded-full border border-ai-cyan/25 bg-ai-cyan/10 px-2.5 py-1 text-[11px] font-bold text-ai-cyan">
+                      {item.status || '-'}
+                    </span>
+                  </span>
                 </button>
 
                 {isExpanded ? (
-                  <div className="grid gap-3 bg-[#0f172a]/70 px-4 py-4 text-xs leading-5 text-slate-300 md:grid-cols-2">
+                  <div className="grid gap-3 border-t border-slate-800 bg-[#0f172a]/70 px-3 py-3 text-xs leading-5 text-slate-300">
                     <div className="rounded-lg border border-slate-800 bg-slate-surface p-3">
                       <p className="font-bold text-slate-500">문의 내용</p>
                       <p className="mt-2 whitespace-pre-wrap">{item.content || '등록된 문의 내용이 없습니다.'}</p>
@@ -385,11 +384,11 @@ function InquiryTable({
                       <p className="mt-2">{item.status || '-'}</p>
                     </div>
                     {showDeleteAction && item.statusCode === 'RECEIVED' ? (
-                      <div className="flex justify-end md:col-span-2">
+                      <div className="flex">
                         <button
                           type="button"
                           disabled={deletingInquiryIds.has(item.id)}
-                          className="inline-flex items-center gap-2 rounded border border-red-500/40 px-3 py-1.5 text-xs font-bold text-red-300 transition hover:border-red-400 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex w-full items-center justify-center gap-2 rounded border border-red-500/40 px-3 py-2 text-xs font-bold text-red-300 transition hover:border-red-400 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
                           onClick={() => onDeleteInquiry?.(item)}
                         >
                           <Icon name="trash" className="h-4 w-4" />
@@ -695,16 +694,16 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
   }
 
   const renderInquiryForm = () => (
-    <Widget className="h-full">
+    <Widget>
       <WidgetTitle title="문의 작성" />
-      <form className="grid min-h-0 gap-3 lg:grid-cols-2" onSubmit={handleSubmit}>
-        <div className="grid grid-cols-[98px_minmax(0,1fr)] items-center gap-3">
+      <form className="grid min-h-0 gap-4" onSubmit={handleSubmit}>
+        <div className="grid gap-1.5">
           <label className="text-xs font-bold text-slate-400" htmlFor="inquiry-type">문의 유형 <span className="text-red-400">*</span></label>
           <select
             id="inquiry-type"
             value={formState.type}
             onChange={(event) => updateField('type', event.target.value)}
-            className="w-full rounded border border-slate-700 bg-[#0f172a] px-3 py-1.5 text-sm text-white focus:border-ai-cyan focus:outline-none"
+            className="h-11 w-full rounded border border-slate-700 bg-[#0f172a] px-3 text-sm text-white focus:border-ai-cyan focus:outline-none"
             required
           >
             {inquiryTypes.map((item) => (
@@ -715,7 +714,7 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
           </select>
         </div>
 
-        <div className="grid grid-cols-[60px_minmax(0,1fr)] items-center gap-1.5">
+        <div className="grid gap-1.5">
           <label className="text-xs font-bold text-slate-400" htmlFor="inquiry-title">제목 <span className="text-red-400">*</span></label>
           <input
             id="inquiry-title"
@@ -723,27 +722,27 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
             value={formState.title}
             onChange={(event) => updateField('title', event.target.value)}
             placeholder="제목을 입력해주세요"
-            className="w-full rounded border border-slate-700 bg-[#0f172a] px-3 py-1.5 text-sm text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
+            className="h-11 w-full rounded border border-slate-700 bg-[#0f172a] px-3 text-sm text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
             required
           />
         </div>
 
-        <div className="grid min-h-0 grid-cols-[98px_minmax(0,1fr)] gap-3 lg:col-span-2">
-          <label className="pt-2 text-xs font-bold text-slate-400" htmlFor="inquiry-content">문의 내용 <span className="text-red-400">*</span></label>
+        <div className="grid min-h-0 gap-1.5">
+          <label className="text-xs font-bold text-slate-400" htmlFor="inquiry-content">문의 내용 <span className="text-red-400">*</span></label>
           <textarea
             id="inquiry-content"
             value={formState.content}
             onChange={(event) => updateField('content', event.target.value)}
             placeholder="문의 내용을 입력해주세요"
-            className="h-full min-h-44 resize-none rounded border border-slate-700 bg-[#0f172a] px-3 py-2 text-sm leading-5 text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
+            className="min-h-56 w-full resize-y rounded border border-slate-700 bg-[#0f172a] px-3 py-3 text-sm leading-6 text-white placeholder:text-slate-600 focus:border-ai-cyan focus:outline-none"
             required
           />
         </div>
 
-        <div className="grid grid-cols-[98px_minmax(0,1fr)] items-center gap-3 lg:col-span-2">
+        <div className="grid gap-1.5">
           <p className="text-xs font-bold text-slate-400">첨부파일</p>
-          <div className="flex items-center gap-3 rounded border border-slate-800 bg-[#0f172a] px-3 py-1.5">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-slate-700 px-3 py-1 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white">
+          <div className="grid gap-2 rounded border border-slate-800 bg-[#0f172a] p-3">
+            <label className="inline-flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded border border-slate-700 px-3 text-xs font-bold text-slate-300 transition hover:border-ai-cyan hover:text-white">
               <Icon name="paperclip" className="h-4 w-4" />
               파일 선택
               <input
@@ -757,15 +756,15 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
             <span className="min-w-0 truncate text-xs text-slate-500">{formState.fileName || '선택된 파일이 없습니다.'}</span>
           </div>
           {formErrors.file ? (
-            <p className="col-start-2 text-xs font-bold text-red-300">{formErrors.file}</p>
+            <p className="text-xs font-bold text-red-300">{formErrors.file}</p>
           ) : null}
         </div>
 
-        <div className="flex justify-end lg:col-span-2">
+        <div className="flex">
           <button
             type="submit"
             disabled={submitLoading}
-            className="w-full rounded bg-ai-cyan px-5 py-2 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-40"
+            className="h-11 w-full rounded bg-ai-cyan px-5 text-sm font-bold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitLoading ? '등록 중' : '문의 등록'}
           </button>
@@ -878,13 +877,13 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
   )
 
   const renderRecentPanel = () => (
-    <Widget className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+    <Widget className="grid gap-3">
       <WidgetTitle
         title={inquiryHomeSections.recent.title}
         icon={inquiryHomeSections.recent.icon}
         action={renderSortSelect('recent-inquiry-sort')}
       />
-      <div className="flex min-h-0 flex-col gap-3">
+      <div className="flex flex-col gap-3">
         <div className="flex flex-wrap gap-2">
           {inquiryStatusItems.map((item) => (
             <button
@@ -908,16 +907,16 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
   )
 
   const renderInquirySummaryPanel = () => (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <div className="grid grid-cols-3 gap-2">
       {summaryItems.map((item) => (
-        <div key={item.key} className="rounded-lg border border-slate-800 bg-[#0f172a] p-3">
-          <div className="flex items-center gap-3">
-            <span className={`grid h-9 w-9 place-items-center rounded-full border border-current/30 bg-white/[0.03] ${item.tone}`}>
-              <Icon name={item.icon} className="h-4.5 w-4.5" />
+        <div key={item.key} className="rounded-lg border border-slate-800 bg-[#0f172a] p-2.5 text-center">
+          <div className="grid justify-items-center gap-1.5">
+            <span className={`grid h-8 w-8 place-items-center rounded-full border border-current/30 bg-white/[0.03] ${item.tone}`}>
+              <Icon name={item.icon} className="h-4 w-4" />
             </span>
-            <p className="text-xs font-bold text-slate-400">{item.label}</p>
+            <p className="break-keep text-[10px] font-bold leading-4 text-slate-400">{item.label}</p>
           </div>
-          <p className="mt-2 font-mono text-xl font-extrabold text-white">
+          <p className="mt-1 font-mono text-lg font-extrabold text-white">
             {inquiries.length ? summaryCounts[item.key] : '-'}
           </p>
         </div>
@@ -926,19 +925,19 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
   )
 
   const renderHome = () => (
-    <main className="mx-auto grid max-w-7xl grid-cols-1 gap-6">
+    <main className="mx-auto grid max-w-7xl grid-cols-1 gap-4">
       <Widget className="shrink-0">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-ai-cyan/20 bg-ai-cyan/10 text-ai-cyan">
-              <Icon name="message" className="h-7 w-7" />
+        <div className="grid gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-ai-cyan/20 bg-ai-cyan/10 text-ai-cyan">
+              <Icon name="message" className="h-5 w-5" />
             </span>
-            <div>
-              <h1 className="text-2xl font-extrabold text-white">1:1 문의 센터</h1>
-              <p className="mt-1 text-sm text-slate-400">계좌, 주문, 입출금, 시스템 문의를 한곳에서 관리합니다.</p>
+            <div className="min-w-0">
+              <h1 className="text-xl font-extrabold text-white">1:1 문의 센터</h1>
+              <p className="mt-1 break-keep text-xs leading-5 text-slate-400">계좌, 주문, 입출금, 시스템 문의를 한곳에서 관리합니다.</p>
             </div>
           </div>
-          <BackToCustomerCenterButton onClick={() => navigate(INQUIRY_ROUTES.home)} />
+          <BackToCustomerCenterButton className="w-full justify-center" onClick={() => navigate(INQUIRY_ROUTES.home)} />
         </div>
       </Widget>
 
@@ -948,19 +947,21 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
   )
 
   const renderHistory = () => (
-    <main className="mx-auto grid max-w-7xl grid-cols-1 gap-6">
-      <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-lg border border-slate-700/80 bg-slate-surface p-4">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
+    <main className="mx-auto grid max-w-7xl grid-cols-1 gap-4">
+      <section className="rounded-lg border border-slate-700/80 bg-slate-surface p-4">
+        <div className="mb-4 grid gap-3">
+          <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">History</p>
             <h1 className="mt-1 text-xl font-extrabold text-white">문의 내역</h1>
-            <p className="mt-2 text-sm text-slate-400">등록한 문의와 답변 상태를 확인합니다.</p>
+            <p className="mt-1 break-keep text-xs leading-5 text-slate-400">등록한 문의와 답변 상태를 확인합니다.</p>
           </div>
-          {renderSortSelect('history-inquiry-sort')}
+          <div className="flex justify-end">
+            {renderSortSelect('history-inquiry-sort')}
+          </div>
         </div>
-        <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+        <div className="grid gap-4">
           {renderInquirySummaryPanel()}
-          <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3">
+          <div className="grid gap-3">
             {renderInquiryList(paginatedHistoryInquiries, '문의 내역이 없습니다.', 'inbox', { showDeleteAction: true })}
             <Pagination
               currentPage={historyPage}
@@ -970,8 +971,8 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
               onPageChange={setHistoryPage}
             />
           </div>
-          <div className="flex justify-end">
-            <BackToCustomerCenterButton onClick={() => navigate(INQUIRY_ROUTES.home)} />
+          <div className="flex">
+            <BackToCustomerCenterButton className="w-full justify-center" onClick={() => navigate(INQUIRY_ROUTES.home)} />
           </div>
         </div>
       </section>

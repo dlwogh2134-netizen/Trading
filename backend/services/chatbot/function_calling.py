@@ -97,6 +97,17 @@ FUNCTION_SCHEMAS = [
         },
     },
     {
+        "name": "get_asset_outlook",
+        "description": "특정 주식 또는 코인의 전망, 리스크, 최근 뉴스/공시 흐름을 조회합니다.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "종목명, 별칭 또는 종목코드. 예: 현대건설우, GST, 리플"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "search_web",
         "description": "내부 RAG, DB, 기존 뉴스/공시 API를 우선 확인하고 부족할 때 Tavily로 최신 웹 검색을 수행합니다.",
         "parameters": {
