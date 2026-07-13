@@ -397,9 +397,9 @@ class KISClient(ExchangeClient):
                 elif price_change_sign in {"1", "2"} and price_change < 0:
                     price_change = abs(price_change)
                 previous_close = float(
-                    output.get("stck_sdpr")
-                    or output.get("stck_prdy_clpr")
+                    output.get("stck_prdy_clpr")
                     or output.get("prdy_clpr")
+                    or output.get("stck_sdpr")
                     or output.get("base_pric")
                     or 0
                 )

@@ -3,7 +3,7 @@
 FUNCTION_SCHEMAS = [
     {
         "name": "get_home_market_rankings",
-        "description": "홈 화면 필터 기준으로 주식 또는 코인 순위를 조회합니다.",
+        "description": "홈 화면 필터 기준으로 주식 또는 코인 순위를 프로젝트 내부 DB/API 기준으로 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -16,7 +16,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "get_portfolio_summary",
-        "description": "로그인한 사용자의 평가 자산과 주문가능 현금 요약을 조회합니다.",
+        "description": "로그인한 사용자의 개인 거래소 API와 DB를 사용해 평가 자산과 주문가능 현금 요약을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -27,7 +27,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "add_watchlist_item",
-        "description": "로그인한 사용자의 관심종목에 종목을 추가합니다.",
+        "description": "로그인한 사용자의 Supabase DB 관심종목에 종목을 추가합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -38,7 +38,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "get_holdings",
-        "description": "로그인한 사용자의 보유 주식 또는 코인 현황을 조회합니다.",
+        "description": "로그인한 사용자의 개인 Toss/KIS/Coinone/Binance API와 DB 기준으로 보유 주식 또는 코인 현황을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -49,7 +49,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "search_trade_history",
-        "description": "거래금액 또는 종목 조건으로 거래내역을 조회합니다.",
+        "description": "로그인한 사용자의 Supabase DB 및 거래소 동기화 데이터를 기준으로 거래금액 또는 종목 조건의 거래내역을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -61,7 +61,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "list_open_orders",
-        "description": "로그인한 사용자의 미체결 주문 목록을 조회합니다.",
+        "description": "로그인한 사용자의 DB와 거래소 주문 상태 동기화 데이터를 기준으로 미체결 주문 목록을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -74,7 +74,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "get_exchange_rate",
-        "description": "달러, 엔화, 유로, 위안, 테더(USDT) 등 주요 통화의 환율을 조회합니다.",
+        "description": "프로젝트 환율 API와 거래소/시세 API를 우선 사용해 달러, 엔화, 유로, 위안, 테더(USDT) 등 주요 통화의 환율을 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -85,7 +85,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "get_asset_price",
-        "description": "특정 주식 또는 코인의 현재가와 등락률을 조회합니다.",
+        "description": "특정 주식 또는 코인의 현재가와 등락률을 Toss/KIS/Coinone/Binance API 기준으로 조회합니다. OpenAI 일반 지식으로 가격을 답하지 않습니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -98,7 +98,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "get_asset_outlook",
-        "description": "특정 주식 또는 코인의 전망, 리스크, 최근 뉴스/공시 흐름을 조회합니다.",
+        "description": "특정 주식 또는 코인의 전망, 리스크, 최근 뉴스/공시 흐름을 내부 RAG/DB/API와 필요한 경우 웹 검색 결과 기준으로 조회합니다.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -109,7 +109,7 @@ FUNCTION_SCHEMAS = [
     },
     {
         "name": "search_web",
-        "description": "내부 RAG, DB, 기존 뉴스/공시 API를 우선 확인하고 부족할 때 Tavily로 최신 웹 검색을 수행합니다.",
+        "description": "내부 RAG, DB, 기존 뉴스/공시 API를 우선 확인하고 부족할 때만 Tavily로 최신 웹 검색을 수행합니다. 검색 결과 요약에만 OpenAI를 사용합니다.",
         "parameters": {
             "type": "object",
             "properties": {

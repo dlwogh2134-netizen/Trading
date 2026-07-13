@@ -1,4 +1,26 @@
 from backend.routes import trade
+from backend.services.kis_client import KISClient
+
+
+class _FakeKISResponse:
+    status_code = 200
+    text = ""
+
+    def json(self):
+        return {
+            "rt_cd": "0",
+            "output": {
+                "stck_prpr": "1909000",
+                "stck_sdpr": "1800000",
+                "stck_prdy_clpr": "1900000",
+                "prdy_clpr": "1890000",
+                "base_pric": "1880000",
+                "prdy_vrss": "9000",
+                "prdy_ctrt": "0.47",
+                "acml_vol": "10",
+                "acml_tr_pbmn": "19090000",
+            },
+        }
 
 
 def test_recalculate_change_rate_from_current_and_previous_close():
@@ -61,3 +83,17 @@ def test_extract_previous_close_from_kis_signed_down_price_difference():
     assert current_price == 1891000
     assert previous_close == 1900000
     assert change_rate == -0.4737
+
+
+def test_kis_price_prefers_previous_close_before_standard_price(monkeypatch):
+    client = KISClient("appkey", "appsecret", "cano", env="REAL")
+
+    def fake_request(*args, **kwargs):
+        return _FakeKISResponse()
+
+    monkeypatch.setattr(client, "_request_with_token_retry", fake_request)
+
+    quote = client.get_price("000660")
+
+    assert quote["previous_close"] == 1900000
+    assert round(quote["change_rate"], 4) == 0.4737
