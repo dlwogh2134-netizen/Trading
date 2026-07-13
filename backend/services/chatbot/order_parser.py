@@ -30,6 +30,8 @@ ORDER_KEYWORDS = (
 
 ORDER_CREATION_PATTERNS = (
     "매매 제안",
+    "매매요청",
+    "매매 요청",
     "매수 제안",
     "매도 제안",
     "주문 만들어",
@@ -54,6 +56,8 @@ ORDER_STRATEGY_PATTERNS = (
 
 DIRECT_ORDER_CREATION_PATTERNS = (
     "매매 제안",
+    "매매요청",
+    "매매 요청",
     "매수 제안",
     "매도 제안",
     "주문 만들어",
@@ -68,6 +72,7 @@ DIRECT_ORDER_CREATION_PATTERNS = (
 
 BUY_KEYWORDS = ("사줘", "사자", "매수", "구매", "담아")
 SELL_KEYWORDS = ("팔아줘", "팔자", "매도", "처분", "정리")
+BUY_DEFAULT_PATTERNS = ("매매요청", "매매 요청", "매매 제안")
 COMMAND_WORDS = (
     *ORDER_CREATION_PATTERNS,
     "제안",
@@ -150,6 +155,10 @@ def _detect_side(text: str) -> str | None:
         return "SELL"
     if any(keyword in text for keyword in BUY_KEYWORDS):
         return "BUY"
+    if any(keyword in text for keyword in BUY_DEFAULT_PATTERNS) and (
+        _extract_quantity(text) is not None or _extract_price(text) is not None
+    ):
+        return "BUY"
     return None
 
 
@@ -173,7 +182,10 @@ def _extract_symbol_query(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return ""
-    return _strip_korean_particle(cleaned.split()[0].strip())
+    token = _strip_korean_particle(cleaned.split()[0].strip())
+    if token in {"에", "에서", "로", "으로"}:
+        return ""
+    return token
 
 
 def _looks_like_multi_symbol_choice(text: str) -> bool:

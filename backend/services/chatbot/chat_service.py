@@ -28,6 +28,7 @@ from backend.services.chatbot.tool_registry import (
     search_trade_history,
     search_web,
 )
+from backend.services.chatbot.order_parser import parse_order_intent
 from backend.services.chatbot.safety_guard import enforce_tool_safety
 from backend.services.knowledge_repository import KnowledgeRepository
 from backend.services.supabase_client import safe_query_supabase
@@ -360,7 +361,9 @@ class ChatbotService:
         user_id: str | None,
         action: str,
     ) -> dict:
-        if action == "trade_proposal_missing_env_and_price":
+        if action == "trade_proposal_missing_intent":
+            reply = "매매 제안을 만들 종목, 방향, 수량과 금액을 함께 알려주세요. 예: 도지코인 5개 코인원 지정가 100원 매매요청"
+        elif action == "trade_proposal_missing_env_and_price":
             reply = "계좌 환경과 지정가 금액을 함께 알려주세요. 예: 실거래 지정가 3,500원"
         elif action == "trade_proposal_missing_env":
             reply = "계좌 환경을 알려주세요. 예: 실거래 또는 모의"
@@ -442,9 +445,22 @@ class ChatbotService:
         tool_data: dict | None,
     ) -> None:
         data = tool_data if isinstance(tool_data, dict) else {}
+        if data.get("source") == "ASSET_PRICE" and data.get("symbol"):
+            self._set_pending_action(
+                auth_header,
+                user_id,
+                "last_asset_price_context",
+                {
+                    "symbol": data.get("symbol"),
+                    "display_name": data.get("display_name"),
+                    "message": user_text,
+                },
+            )
+            return
         if data.get("source") != "CHATBOT_ORDER_PARSER":
             return
         reason_to_action = {
+            "missing_order_intent": "trade_proposal_missing_intent",
             "missing_quantity": "trade_proposal_missing_quantity",
             "missing_order_price": "trade_proposal_missing_price",
             "missing_order_env": "trade_proposal_missing_env",
@@ -470,6 +486,11 @@ class ChatbotService:
     ) -> dict | None:
         if action == "portfolio_summary":
             return get_portfolio_summary(auth_header, text or "평가 자산 요약해줘")
+        if action == "trade_proposal_missing_intent":
+            pending_payload = payload if isinstance(payload, dict) else {}
+            original_message = str(pending_payload.get("message") or "").strip()
+            merged_message = f"{original_message} {text}".strip() if original_message else str(text or "").strip()
+            return run_chatbot_tool(auth_header, merged_message)
         if action == "trade_proposal_missing_quantity":
             pending_payload = payload if isinstance(payload, dict) else {}
             original_message = str(pending_payload.get("message") or "").strip()
@@ -506,6 +527,16 @@ class ChatbotService:
                 else original_message
             )
             return create_trade_proposal_from_message(auth_header, merged_message)
+        if action == "last_asset_price_context":
+            pending_payload = payload if isinstance(payload, dict) else {}
+            symbol_name = str(pending_payload.get("display_name") or pending_payload.get("symbol") or "").strip()
+            current_text = str(text or "").strip()
+            if not symbol_name or not current_text:
+                return None
+            intent = parse_order_intent(current_text)
+            if not intent.is_order_request or intent.symbol_query:
+                return None
+            return run_chatbot_tool(auth_header, f"{symbol_name} {current_text}".strip())
         return None
 
     @staticmethod
@@ -624,6 +655,7 @@ class ChatbotService:
 
         pending_peek = self._peek_pending_action(auth_header, user_id)
         trade_detail_pending_actions = {
+            "trade_proposal_missing_intent",
             "trade_proposal_missing_quantity",
             "trade_proposal_missing_price",
             "trade_proposal_missing_env",
@@ -654,6 +686,31 @@ class ChatbotService:
                     trace_steps = self._emit_tool_trace_steps(trace_callback, tool_data)
                     self._record_exchange(auth_header, user_id, text, tool_result["reply"])
                     self._maybe_set_pending_from_tool_result(auth_header, user_id, f"{str(pending_payload.get('message') or '').strip()} {text}".strip(), tool_data)
+                    return {
+                        "reply": tool_result["reply"],
+                        "actions": tool_result.get("actions") or [],
+                        "meta": {
+                            "user_id": user_id,
+                            "available_tools": list_available_tools(),
+                            "tool_result": tool_data,
+                            "trace_steps": trace_steps,
+                            "pending_action": pending_action,
+                            "source": "PROJECT_TOOL_PENDING",
+                        },
+                    }
+
+        if pending_peek == "last_asset_price_context":
+            pending_action, pending_payload = self._consume_pending_action(
+                auth_header,
+                user_id,
+            )
+            if pending_action:
+                tool_result = self._run_pending_action(pending_action, auth_header, text, pending_payload)
+                if tool_result:
+                    tool_data = tool_result.get("data")
+                    trace_steps = self._emit_tool_trace_steps(trace_callback, tool_data)
+                    self._record_exchange(auth_header, user_id, text, tool_result["reply"])
+                    self._maybe_set_pending_from_tool_result(auth_header, user_id, text, tool_data)
                     return {
                         "reply": tool_result["reply"],
                         "actions": tool_result.get("actions") or [],

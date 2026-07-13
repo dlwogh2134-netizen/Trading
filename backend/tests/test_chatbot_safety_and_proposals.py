@@ -365,6 +365,55 @@ def test_run_chatbot_tool_creates_pending_proposal_from_limit_order_message(monk
     assert calls[0]["json_data"]["broker_env"] == "MOCK"
 
 
+def test_run_chatbot_tool_treats_coinone_limit_trade_request_without_side_as_buy(monkeypatch):
+    calls = []
+
+    def fake_query(auth_header, endpoint, method="GET", json_data=None, params=None):
+        calls.append({
+            "auth_header": auth_header,
+            "endpoint": endpoint,
+            "method": method,
+            "json_data": json_data,
+            "params": params,
+        })
+        if endpoint == "trade_proposals":
+            return [{"id": "proposal-doge", "status": "PENDING"}]
+        raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+    monkeypatch.setattr(
+        "backend.services.chatbot.tool_registry.query_supabase",
+        fake_query,
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.tool_registry.get_user_id_from_header",
+        lambda auth_header: ("user-1", "test"),
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.tool_registry._resolve_symbol",
+        lambda auth_header, query: {
+            "symbol": "DOGE",
+            "display_name": "도지코인",
+            "asset_type": "CRYPTO",
+            "market": "KR",
+        },
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.tool_registry._run_chatbot_precheck",
+        lambda **kwargs: _valid_precheck(),
+        raising=False,
+    )
+
+    result = run_chatbot_tool("Bearer test", "도지코인 5개 코인원 지정가 100원 매매요청")
+
+    assert result["data"]["status"] == "PENDING"
+    assert calls[0]["json_data"]["symbol"] == "DOGE"
+    assert calls[0]["json_data"]["side"] == "BUY"
+    assert calls[0]["json_data"]["volume"] == 5
+    assert calls[0]["json_data"]["price"] == 100
+    assert calls[0]["json_data"]["exchange"] == "COINONE"
+    assert calls[0]["json_data"]["broker_env"] == "REAL"
+
+
 def test_run_chatbot_tool_calculates_quantity_for_amount_order(monkeypatch):
     calls = []
 

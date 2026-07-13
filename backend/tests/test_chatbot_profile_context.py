@@ -531,6 +531,113 @@ def test_reply_retries_trade_proposal_when_user_provides_missing_price(monkeypat
     assert tool_calls == ["금호건설 1주사줘", "금호건설 1주사줘 지정가 3500원에"]
 
 
+def test_reply_uses_previous_price_symbol_for_followup_trade_request(monkeypatch):
+    boundary = FakeConversationSupabaseBoundary()
+    tool_calls = []
+
+    def fake_run_chatbot_tool(auth_header, text):
+        tool_calls.append(text)
+        if text == "도지코인 얼마인지 봐주고":
+            return {
+                "reply": "도지코인(DOGE) 현재가는 107원입니다.",
+                "data": {
+                    "source": "ASSET_PRICE",
+                    "symbol": "DOGE",
+                    "display_name": "도지코인",
+                },
+            }
+        if text == "도지코인 5개 지정가 100원에 코인원에서 매매요청":
+            return {
+                "reply": "DOGE BUY 매매 제안을 생성했습니다.",
+                "data": {
+                    "source": "TRADE_PROPOSAL_CREATED",
+                    "symbol": "DOGE",
+                    "status": "PENDING",
+                },
+            }
+        return None
+
+    monkeypatch.setattr(
+        "backend.services.chatbot.conversation_repository.query_supabase",
+        boundary.query,
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.chat_service.run_chatbot_tool",
+        fake_run_chatbot_tool,
+    )
+
+    service = ChatbotService()
+    service.llm_client = FakeLLMClient()
+    service.rag_service = FakeRAGService()
+
+    first = service.reply("도지코인 얼마인지 봐주고", user_id="user-1", auth_header="Bearer test")
+    assert "도지코인" in first["reply"]
+
+    second = service.reply("5개 지정가 100원에 코인원에서 매매요청", user_id="user-1", auth_header="Bearer test")
+
+    assert second["reply"] == "DOGE BUY 매매 제안을 생성했습니다."
+    assert second["meta"]["source"] == "PROJECT_TOOL_PENDING"
+    assert tool_calls == [
+        "도지코인 얼마인지 봐주고",
+        "도지코인 5개 지정가 100원에 코인원에서 매매요청",
+    ]
+
+
+def test_reply_retries_trade_proposal_when_user_provides_all_missing_order_details(monkeypatch):
+    boundary = FakeConversationSupabaseBoundary()
+    tool_calls = []
+
+    def fake_run_chatbot_tool(auth_header, text):
+        tool_calls.append(text)
+        if text == "매매 제안 만들어줘":
+            return {
+                "reply": "매매 제안을 만들 종목, 방향, 수량과 금액을 함께 알려주세요.",
+                "data": {
+                    "source": "CHATBOT_ORDER_PARSER",
+                    "reason": "missing_order_intent",
+                },
+            }
+        if text == "매매 제안 만들어줘 도지코인 5개 코인원 지정가 100원":
+            return {
+                "reply": "DOGE BUY 매매 제안을 생성했습니다.",
+                "data": {
+                    "source": "TRADE_PROPOSAL_CREATED",
+                    "symbol": "DOGE",
+                    "status": "PENDING",
+                },
+            }
+        return None
+
+    monkeypatch.setattr(
+        "backend.services.chatbot.conversation_repository.query_supabase",
+        boundary.query,
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.chat_service.run_chatbot_tool",
+        fake_run_chatbot_tool,
+    )
+
+    service = ChatbotService()
+    service.llm_client = FakeLLMClient()
+    service.rag_service = FakeRAGService()
+
+    first = service.reply("매매 제안 만들어줘", user_id="user-1", auth_header="Bearer test")
+    assert "종목" in first["reply"]
+    assert service.conversation_repository.peek_pending_action(
+        "Bearer test",
+        "user-1",
+    ) == "trade_proposal_missing_intent"
+
+    second = service.reply("도지코인 5개 코인원 지정가 100원", user_id="user-1", auth_header="Bearer test")
+
+    assert second["reply"] == "DOGE BUY 매매 제안을 생성했습니다."
+    assert second["meta"]["source"] == "PROJECT_TOOL_PENDING"
+    assert tool_calls == [
+        "매매 제안 만들어줘",
+        "매매 제안 만들어줘 도지코인 5개 코인원 지정가 100원",
+    ]
+
+
 def test_reply_retries_trade_proposal_when_user_provides_missing_exchange(monkeypatch):
     boundary = FakeConversationSupabaseBoundary()
     tool_calls = []

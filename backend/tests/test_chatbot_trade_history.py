@@ -176,6 +176,47 @@ def test_run_chatbot_tool_combines_price_and_outlook(monkeypatch):
     assert "전망 응답" in result["reply"]
 
 
+def test_run_chatbot_tool_combines_multiple_asset_prices(monkeypatch):
+    calls = []
+
+    def fake_get_asset_price(auth_header, message):
+        calls.append(message)
+        if message == "DOGE 현재가 알려줘":
+            return {"reply": "도지코인(DOGE) 현재가는 107원입니다.", "data": {"source": "ASSET_PRICE", "symbol": "DOGE"}}
+        if message == "BTC 현재가 알려줘":
+            return {"reply": "비트코인(BTC) 현재가는 93,480,000원입니다.", "data": {"source": "ASSET_PRICE", "symbol": "BTC"}}
+        raise AssertionError(f"unexpected price query: {message}")
+
+    monkeypatch.setattr(tool_registry, "get_asset_price", fake_get_asset_price)
+
+    result = tool_registry.run_chatbot_tool("Bearer test", "도지랑 비트코인이랑 얼마야")
+
+    assert calls == ["DOGE 현재가 알려줘", "BTC 현재가 알려줘"]
+    assert result["data"]["source"] == "MULTI_ASSET_PRICE"
+    assert result["data"]["symbols"] == ["DOGE", "BTC"]
+    assert "도지코인(DOGE)" in result["reply"]
+    assert "비트코인(BTC)" in result["reply"]
+
+
+def test_run_chatbot_tool_combines_comma_separated_asset_prices(monkeypatch):
+    calls = []
+
+    def fake_get_asset_price(auth_header, message):
+        calls.append(message)
+        symbol = message.split()[0]
+        return {"reply": f"{symbol} 가격 응답", "data": {"source": "ASSET_PRICE", "symbol": symbol}}
+
+    monkeypatch.setattr(tool_registry, "get_asset_price", fake_get_asset_price)
+
+    result = tool_registry.run_chatbot_tool("Bearer test", "도지, 비트코인 얼마야")
+
+    assert calls == ["DOGE 현재가 알려줘", "BTC 현재가 알려줘"]
+    assert result["data"]["source"] == "MULTI_ASSET_PRICE"
+    assert result["data"]["symbols"] == ["DOGE", "BTC"]
+    assert "DOGE 가격 응답" in result["reply"]
+    assert "BTC 가격 응답" in result["reply"]
+
+
 def test_compound_info_does_not_intercept_order_with_news(monkeypatch):
     calls = []
 

@@ -1204,7 +1204,7 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
             },
         }
     else:
-        broker_env = "MOCK" if asset_type == "CRYPTO" else "REAL"
+        broker_env = "MOCK" if asset_type == "CRYPTO" and not explicit_exchange else "REAL"
 
     if exchange == "COINONE" and parsed.order_type == "MARKET":
         return {
@@ -1973,6 +1973,49 @@ def _is_asset_price_request(text: str) -> bool:
     return bool(_extract_symbol_query(value))
 
 
+def _extract_multi_price_symbol_queries(text: str) -> list[str]:
+    value = str(text or "")
+    if not _is_asset_price_request(value):
+        return []
+    has_multi_separator = bool(re.search(r"(,|，|랑|와|과|하고|및|/)", value))
+    matches = []
+    for alias, symbol in SYMBOL_QUERY_ALIASES.items():
+        alias_text = str(alias or "").strip()
+        if not alias_text:
+            continue
+        start = value.find(alias_text)
+        if start < 0:
+            continue
+        matches.append((start, len(alias_text), normalize_symbol_alias(symbol)))
+
+    upper_value = value.upper()
+    for symbol in sorted(_load_training_universe_symbols(), key=len, reverse=True):
+        if len(symbol) < 2:
+            continue
+        start = upper_value.find(symbol)
+        if start < 0:
+            continue
+        normalized = symbol[:-4] if symbol.endswith("USDT") and len(symbol) > 4 else symbol
+        matches.append((start, len(symbol), normalized))
+
+    matches.sort(key=lambda item: (item[0], -item[1]))
+    selected = []
+    occupied_until = -1
+    seen = set()
+    for start, length, symbol in matches:
+        if start < occupied_until:
+            continue
+        occupied_until = start + length
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        selected.append(symbol)
+
+    if len(selected) < 2 or not has_multi_separator:
+        return []
+    return selected
+
+
 def _has_concrete_symbol_query(text: str) -> bool:
     symbol_query = _extract_symbol_query(text)
     if not symbol_query:
@@ -2046,6 +2089,32 @@ def _build_category_clarification_result(message: str) -> dict | None:
     return None
 
 
+def _run_multi_asset_price_tool(auth_header: str, message: str) -> dict | None:
+    symbols = _extract_multi_price_symbol_queries(message)
+    if len(symbols) < 2:
+        return None
+
+    results = []
+    replies = []
+    for symbol in symbols:
+        enforce_tool_safety("get_asset_price", {"message": f"{symbol} 현재가 알려줘"})
+        price_result = get_asset_price(auth_header, f"{symbol} 현재가 알려줘")
+        data = price_result.get("data") if isinstance(price_result, dict) else {}
+        results.append(data if isinstance(data, dict) else {})
+        reply = str((price_result or {}).get("reply") or "").strip()
+        if reply:
+            replies.append(reply)
+
+    return {
+        "reply": "\n\n".join(replies),
+        "data": {
+            "source": "MULTI_ASSET_PRICE",
+            "symbols": symbols,
+            "results": results,
+        },
+    }
+
+
 def _run_compound_info_tool(auth_header: str, message: str) -> dict | None:
     text = str(message or "")
     if not _is_asset_price_request(text):
@@ -2117,6 +2186,10 @@ def run_chatbot_tool(auth_header: str | None, message: str) -> dict | None:
     clarification = _build_category_clarification_result(text)
     if clarification:
         return clarification
+
+    multi_price_result = _run_multi_asset_price_tool(auth_header, text)
+    if multi_price_result:
+        return multi_price_result
 
     compound_result = _run_compound_info_tool(auth_header, text)
     if compound_result:
