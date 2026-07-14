@@ -1440,7 +1440,6 @@ export default function ChatbotWidget({
                   <div className="h-12 w-px shrink-0 bg-slate-700" aria-hidden="true" />
                 </>
               ) : null}
->>>>>>> pr-206
               <textarea
                 ref={inputRef}
                 value={input}
