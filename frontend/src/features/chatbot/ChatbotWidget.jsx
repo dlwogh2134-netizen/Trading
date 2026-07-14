@@ -533,7 +533,6 @@ function DisclosureResults({ presentation }) {
   )
 }
 
-<<<<<<< HEAD
 function ChatOrderForm({ onClose, onSubmit }) {
   const [exchange, setExchange] = useState('TOSS')
   const [brokerEnv, setBrokerEnv] = useState('REAL')
