@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useMemo, useState } from 'react'
 import Header from '../components/Header.jsx'
 import { supabase } from '../supabaseClient'
 import AdminInquiries from './AdminInquiries.jsx'
+import AdminUsers from './AdminUsers.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -2775,6 +2776,17 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
           >
             사용자 문의 관리
           </button>
+          <button
+            type="button"
+            onClick={() => setAdminTab('users')}
+            className={`shrink-0 px-4 py-3 text-sm font-bold border-b-2 transition sm:px-6 ${
+              adminTab === 'users'
+                ? 'border-ai-cyan text-white bg-ai-cyan/5'
+                : 'border-transparent text-slate-400 hover:text-white'
+            }`}
+          >
+            유저 관리
+          </button>
         </div>
 
         {adminTab === 'ml' && (
@@ -3340,6 +3352,15 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
 
         {adminTab === 'inquiries' && (
           <AdminInquiries
+            isLoggedIn={isLoggedIn}
+            userEmail={userEmail}
+            handleLogout={handleLogout}
+            hideHeader
+          />
+        )}
+
+        {adminTab === 'users' && (
+          <AdminUsers
             isLoggedIn={isLoggedIn}
             userEmail={userEmail}
             handleLogout={handleLogout}

@@ -34,6 +34,7 @@ backend/
 │   ├── home.py
 │   ├── keys.py
 │   ├── ml.py
+│   ├── admin_users.py
 │   ├── news.py
 │   ├── disclosures.py
 │   ├── trade.py
@@ -114,6 +115,7 @@ backend/
   - 전체 사용자 미완료 주문 상태 동기화 스케줄러
 - `routes/`
   - HTTP API 입구
+  - `admin_users.py`는 관리자 전용 사용자 목록 및 실제 챗봇 토큰 사용량 API를 제공하고, 집계·정렬·페이지 제한은 service-role 전용 Supabase RPC에 위임합니다.
   - `disclosures.py`는 OpenDART 공시 목록 조회 및 수동 동기화 API를 담당
   - `transfer.py`는 코인원 ↔ 바이낸스 가상자산 출금 사전검증, 수수료 조회, 승인, 상태 추적 API를 담당
   - `knowledge.py`는 Obsidian Markdown 노트 동기화와 앱 자동메모리 조회 API를 담당
@@ -176,6 +178,7 @@ frontend/
     └── pages/
         ├── AdminInquiryPanel.jsx
         ├── AdminMlData.jsx
+        ├── AdminUsers.jsx
         ├── AssetDetail.jsx
         ├── AssetsTab.jsx
         ├── Dashboard.jsx
@@ -204,6 +207,10 @@ frontend/
 - `AdminMlData.jsx`
   - ML 운영 콘솔
   - readiness, serving audit, 활성 신호, 자동화 실행, 작업 이력, 고급 도구
+  - 관리자 유저 관리 탭에서 `AdminUsers.jsx`를 렌더링
+- `AdminUsers.jsx`
+  - 관리자 유저 관리 탭의 데스크톱/반응형 UI
+  - UTC 기준 실제 챗봇 토큰 사용량 집계와 사용자별 사용 내역을 조회
 - `supabaseClient.js`, `lib/supabaseClient.js`
   - Supabase 초기화 경로가 2개 존재
   - 향후 통합 시 import 호출부 전수 확인이 필요

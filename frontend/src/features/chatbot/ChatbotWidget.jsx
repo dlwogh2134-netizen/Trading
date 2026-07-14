@@ -19,6 +19,7 @@ import {
   formatChatbotProposalNumber,
 } from './chatbotTimeline'
 import { buildChatbotTraceBadges } from './chatbotTrace'
+import { buildTradeHistoryPresentation } from './chatbotTradeHistoryPresentation'
 
 const INITIAL_MESSAGES = [
   {
@@ -44,7 +45,32 @@ function formatMessageTime(createdAt) {
   if (!createdAt) return ''
 
   try {
+    const formatted = new Intl.DateTimeFormat('ko-KR', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: getUserTimeZone(),
+    }).formatToParts(new Date(createdAt))
+    const dayPeriod = formatted.find((part) => part.type === 'dayPeriod')?.value || ''
+    const hour = formatted.find((part) => part.type === 'hour')?.value || ''
+    const minute = formatted.find((part) => part.type === 'minute')?.value || ''
+    return [dayPeriod, hour && minute ? `${hour}:${minute}` : ''].filter(Boolean).join(' ')
+  } catch {
+    try {
+      return new Date(createdAt).toTimeString().slice(0, 5)
+    } catch {
+      return ''
+    }
+  }
+}
+
+function formatMessageDateTime(createdAt) {
+  if (!createdAt) return ''
+
+  try {
     return new Intl.DateTimeFormat('ko-KR', {
+      month: '2-digit',
+      day: '2-digit',
       hour: 'numeric',
       minute: '2-digit',
       hour12: true,
@@ -137,16 +163,19 @@ function TradeProposalCard({ proposal, proposalActionId, onApprove, onReject }) 
 function ChatMessage({ message, onAction }) {
   const isUser = message.role === 'user'
   const messageTime = formatMessageTime(message.createdAt)
+  const messageDateTime = formatMessageDateTime(message.createdAt)
   const actions = Array.isArray(message.actions) ? message.actions : []
   const disclosurePresentation = buildDisclosurePresentation(message.toolResult)
   const newsPresentation = buildNewsPresentation(message.toolResult)
   const mlRecommendationPresentation = buildMlRecommendationPresentation(message.toolResult)
+  const tradeHistoryPresentation = buildTradeHistoryPresentation(message.toolResult)
   const hasDisclosureCards = !isUser && disclosurePresentation.items.length > 0
   const hasNewsCards = !isUser && newsPresentation.items.length > 0
   const hasMlRecommendationCards = !isUser && mlRecommendationPresentation.shouldRender
+  const hasTradeHistoryTable = !isUser && tradeHistoryPresentation.shouldRender
   const citations = !isUser ? buildChatbotCitations(message.toolResult) : []
   const traceBadges = !isUser ? buildChatbotTraceBadges({ traceSteps: message.traceSteps, toolResult: message.toolResult }) : []
-  const hasMessageBody = hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || Boolean(message.text) || !message.isStreaming
+  const hasMessageBody = hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || hasTradeHistoryTable || Boolean(message.text) || !message.isStreaming
 
   if (!hasMessageBody && traceBadges.length === 0) {
     return null
@@ -154,13 +183,13 @@ function ChatMessage({ message, onAction }) {
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col gap-1 ${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col gap-1 ${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || hasTradeHistoryTable ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
         {!isUser && traceBadges.length > 0 && (
           <TraceBadges badges={traceBadges} />
         )}
         {hasMessageBody && (
           <div
-            className={`${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards ? 'w-full' : 'whitespace-pre-wrap break-words'} rounded-lg px-3 py-2 text-xs leading-5 ${
+            className={`${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || hasTradeHistoryTable ? 'w-full' : 'whitespace-pre-wrap break-words'} rounded-lg px-3 py-2 text-xs leading-5 ${
               isUser
                 ? 'bg-blue-600 text-[#ffffff]'
                 : 'border border-slate-700/80 bg-[#111827] text-slate-100'
@@ -170,13 +199,19 @@ function ChatMessage({ message, onAction }) {
               <MlRecommendationResults presentation={mlRecommendationPresentation} />
             ) : hasNewsCards && !message.isStreaming ? (
               <NewsResults presentation={newsPresentation} />
+            ) : hasTradeHistoryTable && !message.isStreaming ? (
+              <TradeHistoryResults presentation={tradeHistoryPresentation} />
             ) : hasDisclosureCards && !message.isStreaming ? (
               <DisclosureResults presentation={disclosurePresentation} />
             ) : message.text}
           </div>
         )}
         {hasMessageBody && messageTime && (
-          <time className="px-1 text-[10px] font-medium text-slate-500" dateTime={message.createdAt}>
+          <time
+            className="max-w-full shrink-0 whitespace-nowrap px-1 text-[10px] font-medium leading-4 text-slate-500"
+            dateTime={message.createdAt}
+            title={messageDateTime || undefined}
+          >
             {messageTime}
           </time>
         )}
@@ -197,6 +232,55 @@ function ChatMessage({ message, onAction }) {
         {!isUser && citations.length > 0 && (
           <CitationList citations={citations} />
         )}
+      </div>
+    </div>
+  )
+}
+
+function TradeHistoryResults({ presentation }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-700/70 pb-2">
+        <p className="font-bold text-cyan-200">{presentation.title || '거래내역'}</p>
+        <span className="shrink-0 rounded border border-cyan-500/30 bg-cyan-950/30 px-2 py-0.5 text-[10px] font-bold text-cyan-100">
+          {presentation.count}건
+        </span>
+      </div>
+
+      <div className="overflow-x-auto rounded border border-slate-700/80">
+        <table className="w-full min-w-[760px] border-collapse text-left text-[11px]">
+          <thead className="bg-slate-950/70 text-[10px] uppercase tracking-[0.08em] text-slate-400">
+            <tr>
+              <th className="whitespace-nowrap px-2.5 py-2 font-bold">일시</th>
+              <th className="whitespace-nowrap px-2.5 py-2 font-bold">거래소</th>
+              <th className="px-2.5 py-2 font-bold">종목</th>
+              <th className="whitespace-nowrap px-2.5 py-2 font-bold">구분</th>
+              <th className="whitespace-nowrap px-2.5 py-2 text-right font-bold">체결가</th>
+              <th className="whitespace-nowrap px-2.5 py-2 text-right font-bold">수량</th>
+              <th className="whitespace-nowrap px-2.5 py-2 text-right font-bold">정산금액</th>
+              <th className="whitespace-nowrap px-2.5 py-2 font-bold">상태</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800/90">
+            {presentation.items.map((item, index) => (
+              <tr key={`${item.date}-${item.exchange}-${item.assetName}-${index}`} className="bg-slate-950/25">
+                <td className="whitespace-nowrap px-2.5 py-2 font-mono text-slate-300">
+                  {item.date.replaceAll('-', '.')} {item.time}
+                </td>
+                <td className="whitespace-nowrap px-2.5 py-2 font-mono text-slate-200">{item.exchange}</td>
+                <td className="min-w-0 px-2.5 py-2 font-bold text-slate-100">
+                  <span className="block max-w-40 truncate" title={item.assetName}>{item.assetName}</span>
+                  <span className="mt-0.5 block font-mono text-[10px] font-medium text-slate-500">{item.symbol}</span>
+                </td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-slate-200">{item.side}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono font-bold text-slate-100">{item.priceText}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono font-bold text-slate-100">{item.quantityText}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-right font-mono font-bold text-cyan-100">{item.amountText}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-slate-200">{item.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )
@@ -445,6 +529,312 @@ function DisclosureResults({ presentation }) {
   )
 }
 
+function ChatOrderForm({ onClose, onSubmit }) {
+  const [exchange, setExchange] = useState('TOSS')
+  const [brokerEnv, setBrokerEnv] = useState('REAL')
+  const [side, setSide] = useState('BUY')
+  const [symbolQuery, setSymbolQuery] = useState('')
+  const [quantity, setQuantity] = useState('1')
+  const [orderType, setOrderType] = useState('LIMIT')
+  const [price, setPrice] = useState('')
+
+  const [isConditional, setIsConditional] = useState(false)
+  const [conditionalCategory, setConditionalCategory] = useState('SELL_STOP_LIMIT') // SELL_STOP_LIMIT, BUY_TRIGGER
+  const [targetProfitRate, setTargetProfitRate] = useState('3')
+  const [stopLossRate, setStopLossRate] = useState('-3')
+  const [buyTriggerPrice, setBuyTriggerPrice] = useState('')
+  const [conditionalMode, setConditionalMode] = useState('PROPOSAL')
+
+  useEffect(() => {
+    if (exchange === 'TOSS' || exchange === 'COINONE') {
+      setBrokerEnv('REAL')
+    }
+  }, [exchange])
+
+  const handleSubmitForm = (e) => {
+    e.preventDefault()
+    if (!symbolQuery.trim()) {
+      alert('종목명을 입력하세요.')
+      return
+    }
+    const qtyVal = parseFloat(quantity)
+    if (isNaN(qtyVal) || qtyVal <= 0) {
+      alert('올바른 수량을 입력하세요.')
+      return
+    }
+
+    let priceVal = null
+    if (orderType === 'LIMIT') {
+      priceVal = parseFloat(price)
+      if (isNaN(priceVal) || priceVal <= 0) {
+        alert('올바른 지정가를 입력하세요.')
+        return
+      }
+    }
+
+    let condPriceVal = null
+    let profitRateVal = 0.0
+    let lossRateVal = 0.0
+    let condType = 'BUY_LIMIT'
+
+    if (isConditional) {
+      if (conditionalCategory === 'BUY_TRIGGER') {
+        condPriceVal = parseFloat(buyTriggerPrice)
+        if (isNaN(condPriceVal) || condPriceVal <= 0) {
+          alert('올바른 조건매수 가격을 입력하세요.')
+          return
+        }
+        condType = 'BUY_LIMIT'
+      } else {
+        profitRateVal = parseFloat(targetProfitRate)
+        lossRateVal = parseFloat(stopLossRate)
+        if (isNaN(profitRateVal) || isNaN(lossRateVal)) {
+          alert('올바른 익절/손절 비율을 입력하세요.')
+          return
+        }
+        condType = 'STOP_LIMIT'
+      }
+    }
+
+    onSubmit({
+      is_structured_order: true,
+      exchange,
+      broker_env: brokerEnv,
+      side,
+      symbol_query: symbolQuery,
+      quantity: qtyVal,
+      order_type: orderType,
+      price: priceVal,
+      is_conditional: isConditional,
+      conditional_type: condType,
+      conditional_price: condPriceVal,
+      target_profit_rate: profitRateVal,
+      stop_loss_rate: lossRateVal,
+      conditional_mode: conditionalMode,
+    })
+  }
+
+  const isMockDisabled = exchange === 'TOSS' || exchange === 'COINONE'
+  const isMarketDisabled = exchange === 'COINONE'
+
+  return (
+    <form onSubmit={handleSubmitForm} className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/90 p-3.5 text-xs text-slate-100 backdrop-blur-md">
+      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5">
+        <h3 className="font-bold text-ai-cyan">반자율 주문 제안 생성기</h3>
+        <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-200">닫기</button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">거래소</label>
+          <select
+            value={exchange}
+            onChange={(e) => {
+              const val = e.target.value;
+              setExchange(val);
+              if (val === 'COINONE') {
+                setOrderType('LIMIT');
+              }
+            }}
+            className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan"
+          >
+            <option value="TOSS">TOSS (주식)</option>
+            <option value="COINONE">COINONE (코인)</option>
+            <option value="KIS">한국투자증권</option>
+            <option value="BINANCE">BINANCE (선물)</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">투자 환경</label>
+          <select
+            value={brokerEnv}
+            disabled={isMockDisabled}
+            onChange={(e) => setBrokerEnv(e.target.value)}
+            className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <option value="REAL">실제투자 (REAL)</option>
+            <option value="MOCK">모의투자 (MOCK)</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">구분</label>
+          <div className="flex rounded border border-slate-700 bg-slate-950 p-0.5">
+            <button
+              type="button"
+              onClick={() => setSide('BUY')}
+              className={`flex-1 rounded py-0.5 font-bold ${side === 'BUY' ? 'bg-emerald-600 text-white' : 'text-slate-400'}`}
+            >
+              매수
+            </button>
+            <button
+              type="button"
+              onClick={() => setSide('SELL')}
+              className={`flex-1 rounded py-0.5 font-bold ${side === 'SELL' ? 'bg-rose-600 text-white' : 'text-slate-400'}`}
+            >
+              매도
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">주문 유형</label>
+          <div className="flex rounded border border-slate-700 bg-slate-950 p-0.5">
+            <button
+              type="button"
+              onClick={() => setOrderType('LIMIT')}
+              className={`flex-1 rounded py-0.5 font-bold ${orderType === 'LIMIT' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+            >
+              지정가
+            </button>
+            <button
+              type="button"
+              disabled={isMarketDisabled}
+              onClick={() => setOrderType('MARKET')}
+              className={`flex-1 rounded py-0.5 font-bold disabled:cursor-not-allowed disabled:opacity-40 ${orderType === 'MARKET' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}
+            >
+              시장가
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">종목</label>
+          <input
+            type="text"
+            value={symbolQuery}
+            onChange={(e) => setSymbolQuery(e.target.value)}
+            placeholder="예: 이노스페이스, AAPL"
+            className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan"
+          />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">수량</label>
+          <input
+            type="number"
+            step="any"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            placeholder="수량"
+            className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan font-mono"
+          />
+        </div>
+      </div>
+
+      {orderType === 'LIMIT' && (
+        <div>
+          <label className="mb-1 block text-[10px] text-slate-400">주문 단가</label>
+          <input
+            type="number"
+            step="any"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder="단가 입력"
+            className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan font-mono"
+          />
+        </div>
+      )}
+
+      <div className="border-t border-slate-800 pt-2">
+        <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 font-bold">
+          <input
+            type="checkbox"
+            checked={isConditional}
+            onChange={(e) => setIsConditional(e.target.checked)}
+            className="rounded border-slate-700 bg-slate-950 text-ai-cyan focus:ring-0 focus:ring-offset-0"
+          />
+          조건감시(스케줄링) 설정 추가
+        </label>
+      </div>
+
+      {isConditional && (
+        <div className="space-y-2 rounded border border-slate-800 bg-slate-950/40 p-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-[10px] text-slate-400">감시 구분</label>
+              <select
+                value={conditionalCategory}
+                onChange={(e) => setConditionalCategory(e.target.value)}
+                className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan"
+              >
+                <option value="SELL_STOP_LIMIT">조건 매도 (수익률 % 감시)</option>
+                <option value="BUY_TRIGGER">조건 매수 (지정 가격 도달)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[10px] text-slate-400">실행 모드</label>
+              <select
+                value={conditionalMode}
+                onChange={(e) => setConditionalMode(e.target.value)}
+                className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan"
+              >
+                <option value="PROPOSAL">제안 생성 (PROPOSAL)</option>
+                <option value="AUTO">자동 주문 (AUTO)</option>
+              </select>
+            </div>
+          </div>
+
+          {conditionalCategory === 'SELL_STOP_LIMIT' ? (
+            <div className="grid grid-cols-2 gap-2 border-t border-slate-800/80 pt-1.5">
+              <div>
+                <label className="mb-1 block text-[10px] text-slate-400">익절 목표 (%)</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={targetProfitRate}
+                  onChange={(e) => setTargetProfitRate(e.target.value)}
+                  placeholder="예: 5 (+5%)"
+                  className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan font-mono"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] text-slate-400">손절 제한 (%)</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={stopLossRate}
+                  onChange={(e) => setStopLossRate(e.target.value)}
+                  placeholder="예: -3 (-3%)"
+                  className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan font-mono"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="border-t border-slate-800/80 pt-1.5">
+              <label className="mb-1 block text-[10px] text-slate-400">감시 기준가격</label>
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  step="any"
+                  value={buyTriggerPrice}
+                  onChange={(e) => setBuyTriggerPrice(e.target.value)}
+                  placeholder="기준가격 입력"
+                  className="flex-1 rounded border border-slate-700 bg-slate-950 p-1.5 text-slate-200 outline-none focus:border-ai-cyan font-mono"
+                />
+                <span className="text-[10px] text-slate-400">원/USD 이하 도달 시 매수</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        type="submit"
+        className="w-full rounded bg-ai-cyan py-1.5 text-xs font-bold text-[#07111f] transition hover:brightness-110"
+      >
+        매매 제안 전송
+      </button>
+    </form>
+  )
+}
+
 export default function ChatbotWidget({ enabled = true, isLoggedIn = false }) {
   const navigate = useNavigate()
   const [isOpen, setIsOpen] = useState(false)
@@ -452,6 +842,7 @@ export default function ChatbotWidget({ enabled = true, isLoggedIn = false }) {
   const [messages, setMessages] = useState(INITIAL_MESSAGES)
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [showOrderForm, setShowOrderForm] = useState(false)
   const [pendingProposals, setPendingProposals] = useState([])
   const [proposalActionId, setProposalActionId] = useState('')
   const widgetInstanceId = useId()
@@ -627,6 +1018,7 @@ export default function ChatbotWidget({ enabled = true, isLoggedIn = false }) {
         throw new Error(buildApiErrorText(payload, '매매 제안 거절에 실패했습니다.'))
       }
       setPendingProposals((items) => items.filter((item) => item.id !== proposalId))
+      addMessage('assistant', '매매 제안이 정상적으로 거절(취소)되었습니다.')
     } catch (error) {
       addMessage('assistant', buildApiErrorText(error, '매매 제안 거절에 실패했습니다.'))
     } finally {
@@ -655,6 +1047,8 @@ export default function ChatbotWidget({ enabled = true, isLoggedIn = false }) {
         throw new Error(buildApiErrorText(payload, '매매 제안 승인에 실패했습니다.'))
       }
       setPendingProposals((items) => items.filter((item) => item.id !== proposal.id))
+      const successMsg = payload.message || `${proposal.symbol || proposal.ticker} ${proposal.side === 'BUY' ? '매수' : '매도'} 주문이 성공적으로 제출되었습니다.`
+      addMessage('assistant', successMsg)
     } catch (error) {
       addMessage('assistant', buildApiErrorText(error, '매매 제안 승인에 실패했습니다.'))
     } finally {
@@ -774,6 +1168,55 @@ export default function ChatbotWidget({ enabled = true, isLoggedIn = false }) {
     }
   }
 
+  const handleFormSubmit = async (structuredPayload) => {
+    setShowOrderForm(false)
+    if (!isLoggedIn) {
+      navigate('/login')
+      closeChat()
+      return
+    }
+    if (isSending) return
+
+    const priceText = structuredPayload.order_type === 'LIMIT' ? `${structuredPayload.price.toLocaleString()}원 지정가` : '시장가'
+    let condText = ''
+    if (structuredPayload.is_conditional) {
+      if (structuredPayload.conditional_type === 'BUY_LIMIT') {
+        condText = ` (조건매수: ${structuredPayload.conditional_price.toLocaleString()}원 이하 감시, 실행: ${structuredPayload.conditional_mode})`
+      } else {
+        condText = ` (조건매도: 익절 +${structuredPayload.target_profit_rate}%, 손절 ${structuredPayload.stop_loss_rate}%, 실행: ${structuredPayload.conditional_mode})`
+      }
+    }
+    const displayMsg = `[주문 폼 전송] ${structuredPayload.exchange} (${structuredPayload.broker_env}) ${structuredPayload.symbol_query} ${structuredPayload.quantity}주 ${structuredPayload.side === 'BUY' ? '매수' : '매도'} ${priceText}${condText}`
+
+    addMessage('user', displayMsg)
+    setIsSending(true)
+    const assistantMessageId = addStreamingAssistantMessage()
+
+    try {
+      await streamChatbotMessage(
+        displayMsg,
+        {
+          onTrace: (traceStep) => appendAssistantTrace(assistantMessageId, traceStep),
+          onDelta: (textChunk) => appendAssistantDelta(assistantMessageId, textChunk),
+          onDone: (payload) => completeAssistantStream(assistantMessageId, payload),
+        },
+        {
+          timezone: getUserTimeZone(),
+          structured_order: structuredPayload
+        },
+      )
+    } catch (error) {
+      completeAssistantStream(assistantMessageId, {
+        reply: error.message || '챗봇 연결 중 문제가 발생했습니다.',
+        actions: [],
+        meta: {},
+      })
+    } finally {
+      setIsSending(false)
+      window.setTimeout(() => inputRef.current?.focus(), 80)
+    }
+  }
+
   const handleSubmit = (event) => {
     event.preventDefault()
     submitMessage()
@@ -856,15 +1299,33 @@ export default function ChatbotWidget({ enabled = true, isLoggedIn = false }) {
                   <button
                     key={message}
                     type="button"
-                    onClick={() => submitMessage(message)}
+                    onClick={() => {
+                      if (message === '매매 제안 만들어줘') {
+                        setShowOrderForm((prev) => !prev)
+                      } else {
+                        submitMessage(message)
+                      }
+                    }}
                     disabled={isSending}
-                    className="rounded border border-slate-700 px-2.5 py-1.5 text-[11px] font-bold text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan disabled:opacity-50"
+                    className={`rounded border px-2.5 py-1.5 text-[11px] font-bold transition disabled:opacity-50 ${
+                      message === '매매 제안 만들어줘'
+                        ? 'border-ai-cyan/60 bg-ai-cyan/10 text-ai-cyan hover:bg-ai-cyan hover:text-[#07111f]'
+                        : 'border-slate-700 text-slate-300 hover:border-ai-cyan hover:text-ai-cyan'
+                    }`}
                   >
                     {message}
                   </button>
                 ))}
               </div>
             ) : null}
+            {showOrderForm && (
+              <div className="mb-3 max-h-[320px] overflow-y-auto rounded-lg border border-slate-800 bg-[#070b14]/90 p-0.5">
+                <ChatOrderForm
+                  onClose={() => setShowOrderForm(false)}
+                  onSubmit={handleFormSubmit}
+                />
+              </div>
+            )}
             <form onSubmit={handleSubmit} className="flex items-end gap-2">
               <textarea
                 ref={inputRef}

@@ -336,6 +336,17 @@ def _format_quantity(value) -> str:
     return f"{qty:,.8f}".rstrip("0").rstrip(".")
 
 
+def _format_trade_datetime_parts(value) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if not text:
+        return "-", "-"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.date().isoformat(), parsed.strftime("%H:%M:%S")
+    except ValueError:
+        return text[:10] or "-", "-"
+
+
 def _extract_symbol_query(text: str) -> str:
     ticker_match = re.search(r"(?<![A-Za-z0-9._-])([A-Za-z][A-Za-z0-9._-]{1,11})(?:의|은|는|이|가|을|를|에|에서)?", text)
     if ticker_match:
@@ -345,7 +356,7 @@ def _extract_symbol_query(text: str) -> str:
     cleaned = re.sub(r"\d+(?:\.\d+)?\s*(만원|천원|원|만)", " ", cleaned)
     cleaned = KOREAN_MONEY_NUMBER_PATTERN.sub(" ", cleaned)
     cleaned = re.sub(r"(?<![가-힣])만원\s*(이상|이하|초과|미만|넘는|넘어|부터)?", " ", cleaned)
-    cleaned = re.sub(r"(이상|이하|초과|미만|넘는|넘어|부터|전체|최근|상태|매수|매도|취소|체결|완료|실패|조회|검색|확인|내|나의|내가|내역|목록|전망|분석|어때|오를까|괜찮아|살까|해외주식|미국주식|국내주식|해외|미국|국내|주식|주가)", " ", cleaned)
+    cleaned = re.sub(r"(이상|이하|초과|미만|넘는|넘어|부터|전체|최근|상태|매수|매도|취소|미체결주문|미체결내역|미체결|체결|완료|실패|조회|검색|확인|내|나의|내가|내역|목록|전망|분석|어때|오를까|괜찮아|살까|해외주식|미국주식|국내주식|해외|미국|국내|주식|주가)", " ", cleaned)
     cleaned = re.sub(r"(?<=\S)(의|은|는|이|가|을|를)$", " ", cleaned)
     cleaned = re.sub(r"[^0-9A-Za-z가-힣._-]+", " ", cleaned)
     candidates = [part.strip() for part in cleaned.split() if part.strip()]
@@ -753,11 +764,15 @@ def get_asset_price(auth_header: str, message: str) -> dict:
 
     if current_price <= 0:
         return {
-            "reply": f"{label} 현재가를 확인하지 못했습니다.\n거래소 API 키, 허용 IP, 장 운영 상태를 확인해 주세요.",
+            "reply": f"{label}의 현재가 정보를 거래소에서 실시간으로 가져오지 못했습니다. 거래소 미지원 종목이거나 일시적 지연 상태일 수 있습니다. (지정가 매매 제안 생성은 정상적으로 시도하실 수 있습니다.)",
             "data": {
                 "source": "ASSET_PRICE",
                 "symbol": symbol,
                 "exchange": exchange,
+                "broker_env": broker_env,
+                "current_price": None,
+                "change_rate": 0.0,
+                "currency": currency,
                 "reason": "missing_price",
             },
         }
@@ -1171,6 +1186,16 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
         symbol_data = _resolve_symbol(auth_header, parsed.symbol_query)
     except SymbolDisambiguationError as error:
         return _build_symbol_choice_response(error.query, error.candidates)
+    except (ValueError, RuntimeError) as error:
+        return {
+            "reply": f"'{parsed.symbol_query}' 종목을 찾지 못했습니다. 종목명 또는 코드가 올바른지 확인해 주세요.",
+            "data": {
+                "source": "CHATBOT_ORDER_PARSER",
+                "reason": "symbol_not_found",
+                "symbol_query": parsed.symbol_query,
+                "error": str(error),
+            },
+        }
     symbol = str(symbol_data.get("symbol") or parsed.symbol_query).upper()
     display_name = str(symbol_data.get("display_name") or parsed.symbol_query or symbol).strip()
     asset_label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
@@ -1341,8 +1366,26 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
             action = "현재가와 예상 주문금액을 확인하지 못했습니다. 시세 연결 상태를 확인한 뒤 다시 시도해 주세요."
         else:
             action = "시세, 잔고, 거래 가능 시간, API 연결 상태를 확인한 뒤 다시 시도해 주세요."
+
+        try:
+            user_id_val, _ = get_user_id_from_header(auth_header)
+            _conversation_repository.set_pending_action(
+                auth_header,
+                user_id_val,
+                "trade_proposal_retry",
+                {
+                    "message": message,
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "broker_env": broker_env,
+                },
+                ttl_seconds=300
+            )
+        except Exception:
+            pass
+
         return {
-            "reply": f"매매 제안 사전검증을 완료하지 못했습니다. {action}",
+            "reply": f"매매 제안 사전검증을 완료하지 못했습니다. {action}\n(재시도를 원하시면 '재시도' 또는 '다시'라고 입력해 주세요.)",
             "data": {
                 "source": "CHATBOT_ORDER_PARSER",
                 "reason": "precheck_failed",
@@ -1353,8 +1396,25 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
 
     blockers = _collect_precheck_blockers(precheck, broker_env)
     if blockers:
+        try:
+            user_id_val, _ = get_user_id_from_header(auth_header)
+            _conversation_repository.set_pending_action(
+                auth_header,
+                user_id_val,
+                "trade_proposal_retry",
+                {
+                    "message": message,
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "broker_env": broker_env,
+                },
+                ttl_seconds=300
+            )
+        except Exception:
+            pass
+
         return {
-            "reply": f"매매 제안을 만들 수 없습니다. {' '.join(blockers)} 조건을 확인한 뒤 다시 시도해 주세요.",
+            "reply": f"매매 제안을 만들 수 없습니다. {' '.join(blockers)} 조건을 확인한 뒤 다시 시도해 주세요.\n(재시도를 원하시면 '재시도' 또는 '다시'라고 입력해 주세요.)",
             "data": {
                 "source": "CHATBOT_ORDER_PARSER",
                 "reason": "precheck_failed",
@@ -1746,44 +1806,94 @@ def search_trade_history(auth_header: str, message: str) -> dict:
         amount = _to_float(row.get("order_amount")) or price * volume
         if min_amount and amount < min_amount:
             continue
+        date, time = _format_trade_datetime_parts(row.get("created_at"))
         rows.append({
-            "date": str(row.get("created_at") or "")[:10],
+            "date": date,
+            "time": time,
             "exchange": row.get("exchange"),
             "symbol": row.get("symbol"),
             "asset_name": _format_trade_asset_name(row),
             "side": row.get("side"),
             "status": row.get("status"),
+            "price": price,
+            "quantity": volume,
             "amount": amount,
+            "currency": row.get("currency") or ("USD" if row.get("market_country") == "US" else "KRW"),
+            "source_type": "APP",
         })
 
     for row in broker_rows:
         row_symbol = row.get("symbol") or row.get("ticker")
         if symbol and str(row_symbol).upper() != str(symbol).upper():
             continue
-        amount = _to_float(row.get("order_amount") or row.get("executed_amount") or row.get("amount"))
+        price = _to_float(row.get("average_filled_price") or row.get("price"))
+        quantity = _to_float(row.get("filled_quantity") or row.get("quantity"))
+        amount = _to_float(row.get("filled_amount") or row.get("order_amount") or row.get("executed_amount") or row.get("amount"))
         if min_amount and amount < min_amount:
             continue
+        date, time = _format_trade_datetime_parts(row.get("ordered_at") or row.get("created_at"))
         rows.append({
-            "date": str(row.get("ordered_at") or row.get("created_at") or "")[:10],
+            "date": date,
+            "time": time,
             "exchange": row.get("exchange"),
             "symbol": row_symbol,
             "asset_name": _format_trade_asset_name({**row, "symbol": row_symbol}),
             "side": row.get("side"),
             "status": row.get("status"),
+            "price": price,
+            "quantity": quantity,
             "amount": amount,
+            "currency": row.get("currency") or ("USD" if row.get("market_country") == "US" else "KRW"),
+            "source_type": "BROKER",
         })
 
-    rows = sorted(rows, key=lambda item: item.get("date") or "", reverse=True)[:20]
+    rows = sorted(rows, key=lambda item: f"{item.get('date') or ''} {item.get('time') or ''}", reverse=True)[:20]
     if not rows:
-        return {"reply": "조건에 맞는 거래내역을 찾지 못했습니다.", "data": {"items": []}}
+        return {"reply": "조건에 맞는 거래내역을 찾지 못했습니다.", "data": {"source": "TRADE_HISTORY", "items": []}}
 
-    lines = [
-        f"- {row['date']} / {row.get('exchange') or '-'} / {row.get('asset_name') or row.get('symbol') or '-'} / {row.get('side') or '-'} / {row.get('status') or '-'} / {_format_money(row.get('amount'))}"
-        for row in rows
-    ]
+    side_ko = {"BUY": "매수", "SELL": "매도"}
+    status_ko = {
+        "PENDING": "미체결",
+        "APPROVED": "주문 완료",
+        "ORDERED": "주문 완료",
+        "OPEN": "미체결",
+        "REJECTED": "구매실패",
+        "CANCELED": "취소완료",
+        "CANCELLED": "취소완료",
+        "EXECUTED": "체결완료",
+        "SUBMITTED": "주문제출",
+        "FILLED": "체결완료",
+        "FAILED": "구매실패",
+        "PARTIALLY_FILLED": "미체결",
+    }
+
+    table_header = "| 일시 | 거래소 | 종목 | 구분 | 체결가 | 수량 | 정산금액 | 상태 |\n| :--- | :--- | :--- | :--- | :---: | :---: | :---: | :--- |"
+    table_rows = []
+    for row in rows:
+        side_raw = str(row.get("side") or "").upper()
+        side_text = side_ko.get(side_raw, side_raw or "-")
+        status_raw = str(row.get("status") or "").upper()
+        status_text = status_ko.get(status_raw, status_raw or "-")
+        if status_raw in {"FAILED", "REJECTED", "EXPIRED"} and side_raw == "SELL":
+            status_text = "판매실패"
+
+        datetime_str = f"{row.get('date') or '-'} {row.get('time') or '-'}".strip()
+        exchange_str = row.get('exchange') or '-'
+        symbol_str = row.get('symbol') or '-'
+        asset_str = row.get('asset_name') or symbol_str
+        asset_cell = f"{asset_str} ({symbol_str})" if symbol_str != "-" and asset_str != symbol_str else asset_str
+        currency = row.get("currency") or "KRW"
+        price_str = _format_money(row.get('price'), currency)
+        quantity_str = _format_quantity(row.get('quantity'))
+        amount_str = _format_money(row.get('amount'), currency)
+
+        table_rows.append(
+            f"| {datetime_str} | {exchange_str} | {asset_cell} | {side_text} | {price_str} | {quantity_str} | {amount_str} | {status_text} |"
+        )
+
     return {
-        "reply": f"조건에 맞는 거래내역 {len(rows)}건입니다.\n" + "\n".join(lines),
-        "data": {"items": rows},
+        "reply": f"조건에 맞는 거래내역 {len(rows)}건입니다.\n\n" + table_header + "\n" + "\n".join(table_rows),
+        "data": {"source": "TRADE_HISTORY", "items": rows},
     }
 
 
@@ -1849,21 +1959,37 @@ def list_open_orders(auth_header: str, message: str) -> dict:
         }
         items.append(item)
 
-    lines = []
+    status_ko = {
+        "PENDING": "승인대기",
+        "APPROVED": "승인됨",
+        "REJECTED": "거절됨",
+        "CANCELED": "취소됨",
+        "EXECUTED": "체결완료",
+        "SUBMITTED": "주문제출",
+        "FILLED": "체결완료",
+        "FAILED": "실패",
+        "PARTIALLY_FILLED": "부분체결",
+    }
+
+    table_header = "| 날짜 | 거래소 | 종목 | 구분 | 수량 | 가격 | 주문금액 | 상태 |\n| :--- | :--- | :--- | :--- | :---: | :---: | :---: | :--- |"
+    table_rows = []
     for item in items:
-        env_text = f" {item['broker_env']}" if item.get("broker_env") else ""
+        env_text = f" ({item['broker_env']})" if item.get("broker_env") else ""
+        exchange_str = f"{item.get('exchange') or '-'}{env_text}"
         side_text = "매도" if str(item.get("side") or "").upper() == "SELL" else "매수"
-        qty_text = _format_quantity(item.get("quantity"))
+        qty_text = f"{_format_quantity(item.get('quantity'))}주"
         price_text = _format_money(item.get("price"))
         amount_text = _format_money(item.get("amount"))
-        lines.append(
-            f"- {item['date']} / {item.get('exchange') or '-'}{env_text} / "
-            f"{item.get('asset_name') or item.get('symbol') or '-'} / {side_text} / "
-            f"{qty_text}개 / 지정가 {price_text} / 주문금액 {amount_text} / 상태 {item.get('status') or '-'}"
+
+        status_raw = str(item.get("status") or "").upper()
+        status_text = status_ko.get(status_raw, status_raw or "-")
+
+        table_rows.append(
+            f"| {item['date']} | {exchange_str} | {item.get('asset_name') or item.get('symbol') or '-'} | {side_text} | {qty_text} | {price_text} | {amount_text} | {status_text} |"
         )
 
     return {
-        "reply": f"미체결 주문 {len(items)}건입니다.\n" + "\n".join(lines),
+        "reply": f"미체결 주문 {len(items)}건입니다.\n\n" + table_header + "\n" + "\n".join(table_rows),
         "data": {
             "source": "OPEN_ORDERS",
             "items": items,

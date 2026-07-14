@@ -179,8 +179,16 @@ def _extract_symbol_query(text: str) -> str:
     cleaned = text
     cleaned = re.sub(r"\d+(?:\.\d+)?\s*(?:주|개|수량|원|만원|천원|만)", " ", cleaned)
     cleaned = re.sub(r"[일한이삼사오육칠팔구십백천만]+\s*(?:원|만원|천원|만)\s*(?:어치)?", " ", cleaned)
-    for word in COMMAND_WORDS:
-        cleaned = cleaned.replace(word, " ")
+
+    sorted_words = sorted(COMMAND_WORDS, key=len, reverse=True)
+    for word in sorted_words:
+        if word.isascii():
+            pattern = r"\b" + re.escape(word) + r"(?:으로|로|에게|에는|에서|까지|부터|을|를|이|가|은|는|하고|와|과)?\b"
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+        else:
+            hangul_pattern = re.escape(word) + r"(?:으로|로|에게|에는|에서|까지|부터|을|를|이|가|은|는|하고|와|과)?"
+            cleaned = re.sub(hangul_pattern, " ", cleaned)
+
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return ""

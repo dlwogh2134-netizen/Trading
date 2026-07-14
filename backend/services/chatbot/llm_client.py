@@ -1,14 +1,17 @@
 import os
 import json
+import logging
 from datetime import date
 from typing import Callable
 
 import requests
 
-from backend.services.supabase_client import query_supabase
+from backend.services.auth_service import get_user_id_from_header
+from backend.services.supabase_client import query_supabase, query_supabase_as_service_role
 
 
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+logger = logging.getLogger(__name__)
 
 
 class ChatbotLimitError(Exception):
@@ -25,7 +28,7 @@ class ChatbotLLMClient:
         self.max_output_tokens = self._read_int_env("CHATBOT_MAX_OUTPUT_TOKENS", 1024)
         self.max_history_messages = self._read_int_env("CHATBOT_MAX_HISTORY_MESSAGES", 16)
         self.max_tool_calls = self._read_int_env("CHATBOT_MAX_TOOL_CALLS", 3)
-        self.minute_request_limit = self._read_int_env("CHATBOT_MINUTE_REQUEST_LIMIT", 10)
+        self.daily_request_limit = self._read_int_env("CHATBOT_DAILY_REQUEST_LIMIT", 500)
         self.daily_token_limit = self._read_int_env("CHATBOT_DAILY_TOKEN_LIMIT", 50000)
         self.timeout_seconds = self._read_int_env("CHATBOT_OPENAI_TIMEOUT_SECONDS", 30)
 
@@ -55,7 +58,7 @@ class ChatbotLLMClient:
                     "p_usage_date": date.today().isoformat(),
                     "p_request_increment": 1,
                     "p_token_increment": estimated_tokens,
-                    "p_request_limit": self.minute_request_limit,
+                    "p_request_limit": self.daily_request_limit,
                     "p_token_limit": self.daily_token_limit,
                 },
             )
@@ -65,6 +68,74 @@ class ChatbotLLMClient:
         row = result[0] if isinstance(result, list) and result else result
         if not isinstance(row, dict) or not row.get("allowed"):
             raise ChatbotLimitError("챗봇 사용량 제한에 도달했습니다. 잠시 후 다시 시도해 주세요.")
+
+    @staticmethod
+    def _usage_int(value) -> int:
+        try:
+            parsed = int(value or 0)
+            return parsed if parsed >= 0 else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def _normalize_usage(self, usage: dict | None) -> dict | None:
+        if not isinstance(usage, dict):
+            return None
+
+        normalized = {
+            "prompt_tokens": self._usage_int(usage.get("prompt_tokens")),
+            "completion_tokens": self._usage_int(usage.get("completion_tokens")),
+            "total_tokens": self._usage_int(usage.get("total_tokens")),
+        }
+        if normalized["total_tokens"] <= 0:
+            return None
+        return normalized
+
+    def _record_actual_usage(
+        self,
+        *,
+        auth_header: str | None,
+        user_id: str | None,
+        usage: dict | None,
+        request_type: str,
+        request_id: str | None = None,
+    ) -> None:
+        normalized = self._normalize_usage(usage)
+        authenticated_user_id = str(user_id or "").strip()
+        if not auth_header or not authenticated_user_id or not normalized:
+            return
+        try:
+            token_user_id, _ = get_user_id_from_header(auth_header)
+        except Exception:
+            return
+        if str(token_user_id).strip() != authenticated_user_id:
+            return
+
+        normalized_request_type = str(request_type or "chat_reply").strip() or "chat_reply"
+        normalized_request_id = str(request_id or "").strip() or None
+        payload = {
+            "user_id": authenticated_user_id,
+            "request_type": normalized_request_type,
+            "model": self.model,
+            **normalized,
+        }
+        if normalized_request_id:
+            payload["request_id"] = normalized_request_id
+        try:
+            query_supabase_as_service_role(
+                "chatbot_token_usage_logs",
+                "POST",
+                json_data=payload,
+            )
+        except Exception:
+            safe_user_id = authenticated_user_id.replace("\r", "").replace("\n", "")[:128]
+            safe_request_id = (normalized_request_id or "-").replace("\r", "").replace("\n", "")[:128]
+            logger.warning(
+                "챗봇 실제 토큰 사용량 저장 실패: request_type=%s user_id=%s request_id=%s",
+                normalized_request_type,
+                safe_user_id,
+                safe_request_id,
+            )
+            return
 
     def _to_openai_tools(self, function_schemas: list[dict] | None) -> list[dict]:
         tools = []
@@ -135,6 +206,7 @@ class ChatbotLLMClient:
         auth_header: str | None = None,
         function_schemas: list[dict] | None = None,
         history: list[dict] | None = None,
+        request_id: str | None = None,
     ) -> dict:
         payload = self._build_request_payload(
             system_prompt=system_prompt,
@@ -167,6 +239,14 @@ class ChatbotLLMClient:
         if not content:
             content = "응답을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
 
+        self._record_actual_usage(
+            auth_header=auth_header,
+            user_id=user_id,
+            usage=usage,
+            request_type="chat_reply",
+            request_id=request_id,
+        )
+
         return {
             "reply": content,
             "usage": usage,
@@ -197,6 +277,9 @@ class ChatbotLLMClient:
         tool_name: str | None,
         tool_reply: str,
         tool_data: dict | None,
+        user_id: str | None = None,
+        auth_header: str | None = None,
+        request_id: str | None = None,
     ) -> dict:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY가 설정되어 있지 않습니다.")
@@ -257,6 +340,14 @@ class ChatbotLLMClient:
         if not content:
             raise RuntimeError("OpenAI 챗봇 재합성 응답이 비어 있습니다.")
 
+        self._record_actual_usage(
+            auth_header=auth_header,
+            user_id=user_id,
+            usage=usage,
+            request_type="tool_synthesis",
+            request_id=request_id,
+        )
+
         return {
             "reply": content,
             "usage": usage,
@@ -273,6 +364,7 @@ class ChatbotLLMClient:
         function_schemas: list[dict] | None,
         history: list[dict] | None,
         on_delta: Callable[[str], None],
+        request_id: str | None = None,
     ) -> dict:
         payload = {
             **self._build_request_payload(
@@ -386,6 +478,13 @@ class ChatbotLLMClient:
             reply_text = "응답을 만들지 못했습니다. 잠시 후 다시 시도해 주세요."
 
         tool_calls = [tool_call_deltas[index] for index in sorted(tool_call_deltas)]
+        self._record_actual_usage(
+            auth_header=auth_header,
+            user_id=user_id,
+            usage=usage,
+            request_type="chat_stream",
+            request_id=request_id,
+        )
         return {
             "reply": reply_text,
             "usage": usage,

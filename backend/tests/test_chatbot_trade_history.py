@@ -22,6 +22,7 @@ def test_search_trade_history_displays_crypto_name_instead_of_symbol(monkeypatch
 
     result = tool_registry.search_trade_history("Bearer test", "거래내역 보여줘")
 
+    assert result["data"]["source"] == "TRADE_HISTORY"
     assert "도지코인" in result["reply"]
     assert "/ DOGE /" not in result["reply"]
 

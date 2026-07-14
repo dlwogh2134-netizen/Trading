@@ -53,7 +53,7 @@ def test_chatbot_stream_route_emits_trace_delta_and_done_events(monkeypatch):
     )
     monkeypatch.setattr(
         "backend.routes.chatbot.chatbot_service.reply",
-        lambda message, user_id=None, auth_header=None, user_timezone=None, trace_callback=None, delta_callback=None: {
+        lambda message, user_id=None, auth_header=None, user_timezone=None, trace_callback=None, delta_callback=None, request_id=None: {
             "reply": "추천 후보입니다.",
             "actions": [],
             "meta": {
@@ -98,6 +98,7 @@ def test_chatbot_stream_forwards_live_deltas_without_rechunking(monkeypatch):
         user_timezone=None,
         trace_callback=None,
         delta_callback=None,
+        request_id=None,
     ):
         delta_callback("첫 ")
         delta_callback("답변")
@@ -131,6 +132,7 @@ def test_chatbot_stream_route_emits_live_trace_callback_events(monkeypatch):
         user_timezone=None,
         trace_callback=None,
         delta_callback=None,
+        request_id=None,
     ):
         trace_callback({"kind": "tool_routing", "label": "도구 확인"})
         trace_callback({"kind": "ml", "label": "ML 신호 조회 중"})
@@ -173,8 +175,10 @@ def test_chatbot_stream_worker_has_app_context_and_logs_request_id(monkeypatch):
         user_timezone=None,
         trace_callback=None,
         delta_callback=None,
+        request_id=None,
     ):
         assert current_app.name == app.name
+        assert request_id
         raise RuntimeError("stream failed")
 
     monkeypatch.setattr("backend.routes.chatbot.chatbot_service.reply", fake_reply)
@@ -212,6 +216,7 @@ def test_chatbot_stream_partial_delta_ends_with_error_not_done(monkeypatch):
         user_timezone=None,
         trace_callback=None,
         delta_callback=None,
+        request_id=None,
     ):
         delta_callback("부분 답변")
         raise RuntimeError("stream failed")

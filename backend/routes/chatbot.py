@@ -59,6 +59,7 @@ def send_chatbot_message():
             user_id=user_id,
             auth_header=auth_header,
             user_timezone=data.get("timezone"),
+            structured_order=data.get("structured_order"),
         )
         return jsonify({"success": True, "data": result})
     except Exception as error:
@@ -89,14 +90,17 @@ def stream_chatbot_message():
         def run_reply() -> None:
             with app.app_context():
                 try:
-                    result = chatbot_service.reply(
-                        data.get("message"),
-                        user_id=user_id,
-                        auth_header=auth_header,
-                        user_timezone=data.get("timezone"),
-                        trace_callback=publish_trace,
-                        delta_callback=publish_delta,
-                    )
+                    reply_arguments = {
+                        "user_id": user_id,
+                        "auth_header": auth_header,
+                        "user_timezone": data.get("timezone"),
+                        "trace_callback": publish_trace,
+                        "delta_callback": publish_delta,
+                        "request_id": request_id,
+                    }
+                    if data.get("structured_order"):
+                        reply_arguments["structured_order"] = data.get("structured_order")
+                    result = chatbot_service.reply(data.get("message"), **reply_arguments)
                     event_queue.put(("result", result))
                 except Exception as error:
                     app.logger.exception(

@@ -55,6 +55,7 @@ export async function streamChatbotMessage(message, handlers = {}, options = {})
     body: JSON.stringify({
       message,
       timezone: options.timezone,
+      structured_order: options.structured_order,
     }),
   })
 

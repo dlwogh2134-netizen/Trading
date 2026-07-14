@@ -38,7 +38,33 @@ def test_llm_client_consumes_shared_supabase_usage(monkeypatch):
     assert calls[0]["p_user_id"] == "user-1"
     assert calls[0]["p_request_increment"] == 1
     assert calls[0]["p_token_increment"] > 0
+    assert calls[0]["p_request_limit"] == 500
     assert not hasattr(client, "_daily_usage")
+
+
+def test_llm_client_uses_explicit_daily_request_limit(monkeypatch):
+    calls = []
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("CHATBOT_DAILY_REQUEST_LIMIT", "25")
+    monkeypatch.setenv("CHATBOT_MINUTE_REQUEST_LIMIT", "3")
+    monkeypatch.setattr(
+        "backend.services.chatbot.llm_client.query_supabase",
+        lambda auth_header, endpoint, method, json_data: calls.append(json_data) or [{"allowed": True}],
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.llm_client.requests.post",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    client = ChatbotLLMClient()
+    client.generate_reply(
+        system_prompt="시스템",
+        user_message="질문",
+        user_id="user-1",
+        auth_header="Bearer test",
+    )
+
+    assert calls[0]["p_request_limit"] == 25
 
 
 def test_llm_client_blocks_when_shared_usage_store_denies(monkeypatch):
