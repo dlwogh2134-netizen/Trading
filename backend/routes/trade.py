@@ -2785,9 +2785,9 @@ def reject_trade_proposal():
 
 
 @trade_bp.route("/api/trade/orders/sync-status", methods=["POST"])
-def sync_kis_order_statuses():
+def sync_order_statuses():
     """
-    로그인 사용자의 KIS 미체결 거래내역을 실제 미체결/잔고 상태와 맞춰 보정합니다.
+    로그인 사용자의 앱 주문 거래내역을 실제 거래소 주문 상태와 맞춰 보정합니다.
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header:
@@ -2817,6 +2817,84 @@ def sync_kis_order_statuses():
     synced_count = 0
     checked_count = 0
     errors = []
+
+    try:
+        toss_proposals = query_supabase(
+            auth_header,
+            "trade_proposals",
+            "GET",
+            params={
+                "user_id": f"eq.{user_id}",
+                "exchange": "eq.TOSS",
+                "limit": "100",
+                "order": "created_at.desc",
+            },
+        ) or []
+    except Exception as e:
+        toss_proposals = []
+        errors.append(f"Toss order sync query failed: {str(e)[:160]}")
+
+    toss_clients = {}
+    for proposal in toss_proposals:
+        proposal_id = proposal.get("id")
+        symbol = proposal.get("symbol") or proposal.get("ticker")
+        order_id = proposal.get("external_order_id")
+        status = str(proposal.get("status") or "").upper()
+        if status in {"EXECUTED", "CANCELED", "CANCELLED", "REJECTED", "FAILED", "EXPIRED"}:
+            continue
+        if not proposal_id or not symbol or not order_id:
+            continue
+
+        broker_env = _resolve_proposal_broker_env(proposal)
+        try:
+            if broker_env not in toss_clients:
+                record, access_key, secret_key = _load_user_exchange_record(
+                    auth_header,
+                    user_id,
+                    "TOSS",
+                    broker_env,
+                )
+                toss_clients[broker_env] = _build_exchange_client("TOSS", broker_env, record, access_key, secret_key)
+            client = toss_clients[broker_env]
+            checked_count += 1
+
+            current_order = client.get_order_status(order_id)
+            raw_status = str(current_order.get("status") or "").upper()
+            executed_qty = float(current_order.get("executed_qty") or 0)
+            requested_qty = float(proposal.get("volume") or 0)
+            if raw_status in {"FILLED", "EXECUTED", "DONE", "COMPLETED"} or (requested_qty > 0 and executed_qty >= requested_qty):
+                next_status = "EXECUTED"
+            elif raw_status in {"CANCELED", "CANCELLED"}:
+                next_status = "CANCELED"
+            elif raw_status in {"REJECTED", "FAILED", "EXPIRED", "EXPIRED_IN_MATCH"}:
+                next_status = "FAILED"
+            elif executed_qty > 0:
+                next_status = "PARTIALLY_FILLED"
+            else:
+                next_status = "ORDERED"
+
+            sync_detail = {
+                "account": {
+                    "exchange": "TOSS",
+                    "broker_env": broker_env,
+                },
+                "order_status": current_order,
+                "normalized_status": next_status,
+            }
+            patch_payload = {
+                "status": next_status,
+                "broker_env": broker_env,
+                "failure_reason": None,
+                "raw_order_payload": {"sync_status_check": sync_detail},
+            }
+            if next_status == "CANCELED":
+                patch_payload["canceled_at"] = datetime.utcnow().isoformat() + "Z"
+            if next_status == "FAILED":
+                patch_payload["failure_reason"] = f"TOSS order status: {raw_status or 'FAILED'}"
+            _patch_trade_proposal(auth_header, proposal_id, patch_payload)
+            synced_count += 1
+        except Exception as exc:
+            errors.append(f"TOSS {symbol}: {str(exc)[:180]}")
 
     for proposal in proposals:
         proposal_id = proposal.get("id")

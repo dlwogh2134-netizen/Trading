@@ -31,16 +31,6 @@ const INITIAL_MESSAGES = [
   },
 ]
 
-const QUICK_MESSAGES = [
-  '자산 요약',
-  '시세 확인',
-  '매매 제안',
-  '뉴스 분석',
-  '공시 조회',
-  '투자 리스크',
-  '이용 가이드',
-]
-
 function getUserTimeZone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
 }
@@ -549,12 +539,6 @@ function ChatOrderForm({ onClose, onSubmit }) {
   const [buyTriggerPrice, setBuyTriggerPrice] = useState('')
   const [conditionalMode, setConditionalMode] = useState('PROPOSAL')
 
-  useEffect(() => {
-    if (exchange === 'TOSS' || exchange === 'COINONE') {
-      setBrokerEnv('REAL')
-    }
-  }, [exchange])
-
   const handleSubmitForm = (e) => {
     e.preventDefault()
     if (!symbolQuery.trim()) {
@@ -634,10 +618,13 @@ function ChatOrderForm({ onClose, onSubmit }) {
           <select
             value={exchange}
             onChange={(e) => {
-              const val = e.target.value;
-              setExchange(val);
+              const val = e.target.value
+              setExchange(val)
+              if (val === 'TOSS' || val === 'COINONE') {
+                setBrokerEnv('REAL')
+              }
               if (val === 'COINONE') {
-                setOrderType('LIMIT');
+                setOrderType('LIMIT')
               }
             }}
             className="w-full rounded border border-slate-700 bg-slate-950 p-1 text-slate-200 outline-none focus:border-ai-cyan"
@@ -853,7 +840,6 @@ export default function ChatbotWidget({
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [showOrderForm, setShowOrderForm] = useState(false)
-  const [isQuickMenuOpen, setIsQuickMenuOpen] = useState(false)
   const [pendingProposals, setPendingProposals] = useState([])
   const [proposalActionId, setProposalActionId] = useState('')
   const widgetInstanceId = useId()
@@ -982,7 +968,6 @@ export default function ChatbotWidget({
   const resetConversation = () => {
     setInput('')
     setIsSending(false)
-    setIsQuickMenuOpen(false)
     setMessages(INITIAL_MESSAGES.map((message) => ({
       ...message,
       createdAt: new Date().toISOString(),
@@ -1186,7 +1171,6 @@ export default function ChatbotWidget({
     if (!trimmed || isSending) return
 
     setInput('')
-    setIsQuickMenuOpen(false)
     addMessage('user', trimmed)
     setIsSending(true)
     const assistantMessageId = addStreamingAssistantMessage()
@@ -1313,7 +1297,18 @@ export default function ChatbotWidget({
                   </button>
                 </div>
                 <h1 className="text-center text-2xl font-black tracking-tight text-white">챗봇 상담</h1>
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-2">
+                  {isLoggedIn ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowOrderForm((prev) => !prev)}
+                      disabled={isSending}
+                      className="h-10 shrink-0 rounded-full border border-ai-cyan/60 bg-ai-cyan/10 px-3 text-xs font-bold text-ai-cyan transition active:bg-ai-cyan active:text-[#07111f] disabled:opacity-50"
+                      aria-label="매매 요청 폼 열기"
+                    >
+                      매매 요청
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={closeChat}
@@ -1326,24 +1321,37 @@ export default function ChatbotWidget({
               </>
             ) : (
               <>
-            <div className="flex min-w-0 items-center gap-3">
-              <img
-                src="/chatbot-bot.png"
-                alt="AE 챗봇"
-                className="h-10 w-10 shrink-0 rounded-full border border-ai-cyan/50 object-cover object-top"
-              />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-bold text-white">AE Trading Bot</p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={closeChat}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded border border-slate-700 text-sm font-bold text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan"
-              aria-label="챗봇 닫기"
-            >
-              x
-            </button>
+                <div className="flex min-w-0 items-center gap-3">
+                  <img
+                    src="/chatbot-bot.png"
+                    alt="AE 챗봇"
+                    className="h-10 w-10 shrink-0 rounded-full border border-ai-cyan/50 object-cover object-top"
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-white">AE Trading Bot</p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isLoggedIn ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowOrderForm((prev) => !prev)}
+                      disabled={isSending}
+                      className="h-8 rounded border border-ai-cyan/60 bg-ai-cyan/10 px-3 text-xs font-bold text-ai-cyan transition hover:bg-ai-cyan hover:text-[#07111f] disabled:opacity-50"
+                      aria-label="매매 요청 폼 열기"
+                    >
+                      매매 요청
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={closeChat}
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded border border-slate-700 text-sm font-bold text-slate-300 transition hover:border-ai-cyan hover:text-ai-cyan"
+                    aria-label="챗봇 닫기"
+                  >
+                    x
+                  </button>
+                </div>
               </>
             )}
           </header>
@@ -1382,41 +1390,6 @@ export default function ChatbotWidget({
             ? 'border-t border-ai-cyan/10 bg-[#061321]/95 px-4 pb-[calc(env(safe-area-inset-bottom)+14px)] pt-4 shadow-[0_-14px_34px_rgba(0,0,0,0.42)] backdrop-blur-xl'
             : 'border-t border-slate-800 bg-[#0b1120] p-3'}
           >
-            {isLoggedIn && (!isMobilePage || isQuickMenuOpen) ? (
-              <div className={isMobilePage
-                ? 'mb-4 rounded-lg border border-slate-800 bg-[#0f172a]/80 p-3'
-                : 'mb-3 flex flex-wrap gap-2'}
-              >
-                {isMobilePage ? (
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Category</p>
-                ) : null}
-                <div className={isMobilePage ? 'flex flex-wrap gap-2' : 'contents'}>
-                {QUICK_MESSAGES.map((message) => (
-                  <button
-                    key={message}
-                    type="button"
-                    onClick={() => {
-                      if (message.includes('매매 제안')) {
-                        setShowOrderForm((prev) => !prev)
-                      } else {
-                        submitMessage(message)
-                      }
-                    }}
-                    disabled={isSending}
-                    className={isMobilePage
-                      ? 'rounded-full border border-slate-700 bg-[#0f172a] px-4 py-2 text-sm font-bold text-slate-300 transition active:border-ai-cyan active:bg-ai-cyan/10 active:text-ai-cyan disabled:opacity-50'
-                      : `rounded border px-2.5 py-1.5 text-[11px] font-bold transition disabled:opacity-50 ${
-                          message.includes('매매 제안')
-                            ? 'border-ai-cyan/60 bg-ai-cyan/10 text-ai-cyan hover:bg-ai-cyan hover:text-[#07111f]'
-                            : 'border-slate-700 text-slate-300 hover:border-ai-cyan hover:text-ai-cyan'
-                        }`}
-                  >
-                    {message}
-                  </button>
-                ))}
-                </div>
-              </div>
-            ) : null}
             {showOrderForm && (
               <div className="mb-3 max-h-[320px] overflow-y-auto rounded-lg border border-slate-800 bg-[#070b14]/90 p-0.5">
                 <ChatOrderForm
@@ -1426,20 +1399,6 @@ export default function ChatbotWidget({
               </div>
             )}
             <form onSubmit={handleSubmit} className={isMobilePage ? 'flex items-center gap-3' : 'flex items-end gap-2'}>
-              {isMobilePage ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setIsQuickMenuOpen((open) => !open)}
-                    className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-400 transition active:bg-ai-cyan/10 active:text-ai-cyan"
-                    aria-label={isQuickMenuOpen ? 'Close chatbot categories' : 'Open chatbot categories'}
-                    aria-expanded={isQuickMenuOpen}
-                  >
-                    <span className="material-symbols-outlined text-[34px] leading-none">menu</span>
-                  </button>
-                  <div className="h-12 w-px shrink-0 bg-slate-700" aria-hidden="true" />
-                </>
-              ) : null}
               <textarea
                 ref={inputRef}
                 value={input}
