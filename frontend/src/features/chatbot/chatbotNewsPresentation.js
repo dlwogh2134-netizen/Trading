@@ -41,8 +41,23 @@ function summaryLines(value) {
   return text
     .split(/\n+/)
     .map(normalizeNewsText)
-    .filter(Boolean)
+    .filter((line) => line && !/^\d+\.\s*[-–—]?$/.test(line))
     .slice(0, 3)
+}
+
+function hasIncompleteSummaryLine(lines) {
+  return lines.some((line) => {
+    const text = normalizeNewsText(line).replace(/^\d+\.\s*/, '')
+    return !text || text.length < 12 || /[,，]$/.test(text)
+  })
+}
+
+function resolveSummaryLines(aiSummary, fallbackSummary) {
+  const aiLines = summaryLines(aiSummary)
+  if (aiLines.length > 0 && !hasIncompleteSummaryLine(aiLines)) {
+    return aiLines
+  }
+  return summaryLines(fallbackSummary)
 }
 
 export function buildNewsPresentation(toolResult) {
@@ -52,8 +67,6 @@ export function buildNewsPresentation(toolResult) {
 
   return {
     items: toolResult.items.map((item) => {
-      const summary = item?.ai_summary || item?.summary || ''
-
       return {
         title: normalizeNewsText(item?.title) || '뉴스 제목 없음',
         url: String(item?.url || ''),
@@ -63,7 +76,7 @@ export function buildNewsPresentation(toolResult) {
         symbol: normalizeNewsText(item?.symbol),
         companyName: normalizeNewsText(item?.company_name),
         publishedAt: formatNewsDate(item?.published_at || item?.fetched_at),
-        summaryLines: summaryLines(summary),
+        summaryLines: resolveSummaryLines(item?.ai_summary, item?.summary),
       }
     }),
   }

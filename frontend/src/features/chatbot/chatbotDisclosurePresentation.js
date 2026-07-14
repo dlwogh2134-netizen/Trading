@@ -1,8 +1,22 @@
-const EMPTY_ANSWERS = new Set(['확인 필요', '원문 확인 필요', '후속 확인 필요', '원공시 비교 필요', '제목 기반'])
+const EMPTY_ANSWERS = new Set(['확인 필요', '원문 확인 필요', '후속 확인 필요', '원공시 비교 필요', '제목 기반', '및'])
+const LOW_SIGNAL_LABELS = new Set(['주요내용', '주요 내용', '핵심내용', '핵심 내용', '실현가능성', '실현 가능성'])
+const PLACEHOLDER_DATE_LABELS = new Set(['추진일정', '추진 일정', '실현가능성', '실현 가능성'])
 const DUPLICATE_CHECK_METRICS = {
   '조정 기준가': ['기준가'],
   '실시일': ['권리락 실시일'],
   '권리락 사유': ['사유'],
+}
+const DISCLOSURE_LABEL_ALIASES = {
+  처분규모: '처분예정금액',
+  처분예정금액: '처분예정금액',
+  처분목적: '처분목적',
+  처분목적및방법: '처분목적',
+  처분예정기간: '처분예정기간',
+  취득규모: '취득예정금액',
+  취득예정금액: '취득예정금액',
+  취득목적: '취득목적',
+  취득예상기간: '취득예정기간',
+  취득예정기간: '취득예정기간',
 }
 
 export function normalizeDisclosureText(value) {
@@ -37,8 +51,28 @@ function sourceLabel(source) {
 }
 
 function duplicatesMetric(check, metricLabels) {
+  const checkKey = disclosureLabelKey(check.question)
   const duplicateLabels = DUPLICATE_CHECK_METRICS[check.question] || []
-  return metricLabels.has(check.question) || duplicateLabels.some((label) => metricLabels.has(label))
+  return metricLabels.has(checkKey) || duplicateLabels.some((label) => metricLabels.has(disclosureLabelKey(label)))
+}
+
+function disclosureLabelKey(label) {
+  const compactLabel = normalizeDisclosureText(label).replace(/\s+/g, '')
+  return DISCLOSURE_LABEL_ALIASES[compactLabel] || compactLabel
+}
+
+function isPlaceholderDate(label, value) {
+  return PLACEHOLDER_DATE_LABELS.has(label) && /^\d{4}-01-01$/.test(value)
+}
+
+function isUsefulDisclosurePair(label, value) {
+  return Boolean(
+    label
+    && value
+    && !LOW_SIGNAL_LABELS.has(label)
+    && !EMPTY_ANSWERS.has(value)
+    && !isPlaceholderDate(label, value),
+  )
 }
 
 export function buildDisclosurePresentation(toolResult) {
@@ -50,15 +84,13 @@ export function buildDisclosurePresentation(toolResult) {
     const analysis = item?.analysis || {}
     const metrics = (Array.isArray(analysis.metrics) ? analysis.metrics : [])
       .map(normalizeMetric)
-      .filter((metric) => metric.label && metric.value)
+      .filter((metric) => isUsefulDisclosurePair(metric.label, metric.value))
       .slice(0, 6)
-    const metricLabels = new Set(metrics.map((metric) => metric.label))
+    const metricLabels = new Set(metrics.map((metric) => disclosureLabelKey(metric.label)))
     const checks = (Array.isArray(analysis.check_items) ? analysis.check_items : [])
       .map(normalizeCheck)
       .filter((check) => (
-        check.question
-        && check.answer
-        && !EMPTY_ANSWERS.has(check.answer)
+        isUsefulDisclosurePair(check.question, check.answer)
         && !duplicatesMetric(check, metricLabels)
       ))
       .slice(0, 3)

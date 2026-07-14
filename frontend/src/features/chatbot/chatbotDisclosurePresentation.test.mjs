@@ -47,3 +47,62 @@ test('keeps complete summary and metric values for wrapping instead of truncatin
   assert.equal(result.items[0].metrics[0].value, longMetric)
   assert.equal(result.items[0].checks.length, 0)
 })
+
+test('filters placeholder disclosure table fields from chatbot cards', () => {
+  const result = buildDisclosurePresentation({
+    source: 'DISCLOSURE_DB',
+    items: [
+      {
+        corp_name: '삼성전자',
+        report_nm: '장래사업ㆍ경영계획(공정공시)',
+        analysis: {
+          plain_summary: '삼성전자는 반도체 및 신사업 분야 투자를 추진할 계획입니다.',
+          metrics: [
+            { label: '주요내용', value: '및' },
+            { label: '투자 규모', value: '약 2,450조 원' },
+            { label: '추진일정', value: '2026-01-01' },
+          ],
+          check_items: [
+            { question: '핵심 내용', answer: '및' },
+            { question: '실현 가능성', answer: '2026-01-01' },
+            { question: '확인 포인트', answer: '세부 투자 일정과 금액 확정 여부' },
+          ],
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(result.items[0].metrics, [{ label: '투자 규모', value: '약 2,450조 원' }])
+  assert.deepEqual(result.items[0].checks, [{ question: '확인 포인트', answer: '세부 투자 일정과 금액 확정 여부' }])
+})
+
+test('deduplicates disclosure metrics and checks with equivalent labels', () => {
+  const result = buildDisclosurePresentation({
+    source: 'DISCLOSURE_DB',
+    items: [
+      {
+        corp_name: '삼성전자',
+        report_nm: '주요사항보고서(자기주식처분결정)',
+        analysis: {
+          plain_summary: '자기주식 처분 공시입니다.',
+          metrics: [
+            { label: '처분예정금액', value: '322,755,945,000원' },
+            { label: '처분목적', value: '임원 등 성과급의 자기주식 지급' },
+            { label: '처분예정기간', value: '2026년 07월 13일' },
+          ],
+          check_items: [
+            { question: '처분 목적', answer: '임원 등 성과급의 자기주식 지급' },
+            { question: '처분 규모', answer: '322,755,945,000원' },
+          ],
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(result.items[0].metrics, [
+    { label: '처분예정금액', value: '322,755,945,000원' },
+    { label: '처분목적', value: '임원 등 성과급의 자기주식 지급' },
+    { label: '처분예정기간', value: '2026년 07월 13일' },
+  ])
+  assert.deepEqual(result.items[0].checks, [])
+})

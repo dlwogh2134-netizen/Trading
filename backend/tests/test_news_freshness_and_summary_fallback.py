@@ -29,6 +29,150 @@ def test_fresh_news_query_prefers_external_api_before_vector_db(monkeypatch):
     assert calls == ["api"]
 
 
+def test_fresh_stock_news_query_prefers_tavily_before_internal_db(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+    calls: list[str] = []
+
+    def fake_tavily(query, limit):
+        calls.append("tavily")
+        return {"reply": "tavily", "data": {"source": "TAVILY_FALLBACK"}}
+
+    def fake_db(query, limit):
+        calls.append("db")
+        return {"reply": "db", "data": {"source": "NEWS_DB"}}
+
+    monkeypatch.setattr(service, "_search_existing_open_apis", lambda query, limit: calls.append("api") or None)
+    monkeypatch.setattr(service, "_search_tavily", fake_tavily)
+    monkeypatch.setattr(service, "_search_internal_db", fake_db)
+    monkeypatch.setattr(service, "_search_rag", lambda auth_header, user_id, query, limit: calls.append("rag") or None)
+
+    result = service.search("Bearer token", "user-1", "삼성전자 최신 뉴스", limit=3)
+
+    assert result["data"]["source"] == "TAVILY_FALLBACK"
+    assert calls == ["api", "tavily"]
+
+
+def test_market_news_query_uses_news_pipeline_not_vector_db(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+    calls: list[str] = []
+
+    def fake_api(query, limit):
+        calls.append("api")
+        return {"reply": "market-news", "data": {"source": "NAVER_API"}}
+
+    def fake_rag(auth_header, user_id, query, limit):
+        raise AssertionError("최신 시장 뉴스는 Vector DB보다 뉴스 API를 먼저 사용해야 합니다.")
+
+    monkeypatch.setattr(service, "_search_existing_open_apis", fake_api)
+    monkeypatch.setattr(service, "_search_tavily", lambda query, limit: None)
+    monkeypatch.setattr(service, "_search_internal_db", lambda query, limit: None)
+    monkeypatch.setattr(service, "_search_rag", fake_rag)
+
+    result = service.search("Bearer token", "user-1", "오늘 시장 주요 뉴스 알려줘", limit=5)
+
+    assert result["data"]["source"] == "NAVER_API"
+    assert calls == ["api"]
+
+
+def test_stock_news_query_does_not_fallback_to_dart_disclosures(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    calls: list[str] = []
+
+    monkeypatch.setattr(service, "_search_naver_news", lambda query, limit: None)
+    monkeypatch.setattr(service, "_search_finnhub_news", lambda query, limit: None)
+
+    def fail_dart(query, limit):
+        calls.append("dart")
+        return {"reply": "dart", "data": {"source": "DISCLOSURE_DB"}}
+
+    monkeypatch.setattr(service, "_sync_and_search_dart", fail_dart)
+
+    result = service._search_existing_open_apis("삼성전자 최신 뉴스", 1)
+
+    assert result is None
+    assert calls == []
+
+
+def test_crypto_news_tavily_filters_wiki_like_sources():
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.tavily_enabled = True
+
+    class FakeTavilyClient:
+        def search(self, query, max_results):
+            return {
+                "results": [
+                    {
+                        "title": "비트코인 - 위키백과",
+                        "content": "백과사전 설명",
+                        "url": "https://ko.wikipedia.org/wiki/Bitcoin",
+                    },
+                    {
+                        "title": "비트코인 시장 급등",
+                        "content": "비트코인 가격과 ETF 수급을 다룬 최신 기사입니다.",
+                        "url": "https://example-news.kr/bitcoin-market",
+                    },
+                    {
+                        "title": "비트코인 - 나무위키",
+                        "content": "나무위키 문서",
+                        "url": "https://namu.wiki/w/Bitcoin",
+                    },
+                ]
+            }
+
+    class FakeSummaryService:
+        def summarize(self, article):
+            return {"ai_summary": "1. 비트코인 시장 최신 흐름을 요약했습니다."}
+
+    service.tavily_client = FakeTavilyClient()
+    service.news_summary_service = FakeSummaryService()
+
+    result = service._search_tavily("비트코인 관련 뉴스 요약해줘", 3)
+
+    assert result is not None
+    urls = [item["url"] for item in result["data"]["items"]]
+    assert urls == ["https://example-news.kr/bitcoin-market"]
+    assert "wikipedia" not in result["reply"]
+    assert "namu.wiki" not in result["reply"]
+
+
+def test_generic_disclosure_query_asks_for_symbol_without_db_or_rag(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+
+    def fail_lookup(*args):
+        raise AssertionError("종목 없는 공시 요청은 임의 DB/RAG 조회를 실행하지 않아야 합니다.")
+
+    monkeypatch.setattr(service, "_sync_and_search_dart", fail_lookup)
+    monkeypatch.setattr(service, "_search_internal_db", fail_lookup)
+    monkeypatch.setattr(service, "_search_rag", fail_lookup)
+    monkeypatch.setattr(service, "_search_tavily", fail_lookup)
+
+    result = service.search("Bearer token", "user-1", "최근 공시 목록 보여줘", limit=3)
+
+    assert result["data"]["source"] == "DISCLOSURE_SYMBOL_REQUIRED"
+    assert "어떤 종목" in result["reply"]
+
+
+def test_us_company_disclosure_query_returns_unsupported_market_without_db(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+
+    def fail_lookup(*args):
+        raise AssertionError("해외 기업 DART 공시는 국내 DB/RAG로 임의 대체하지 않아야 합니다.")
+
+    monkeypatch.setattr(service, "_sync_and_search_dart", fail_lookup)
+    monkeypatch.setattr(service, "_search_internal_db", fail_lookup)
+    monkeypatch.setattr(service, "_search_rag", fail_lookup)
+    monkeypatch.setattr(service, "_search_tavily", fail_lookup)
+
+    result = service.search("Bearer token", "user-1", "아마존 최근 공시 보여줘", limit=3)
+
+    assert result["data"]["source"] == "DISCLOSURE_UNSUPPORTED_MARKET"
+    assert "DART 공시 대상" in result["reply"]
+
+
 def test_fresh_disclosure_query_does_not_fallback_to_general_news(monkeypatch):
     service = object.__new__(ChatbotWebFallbackSearchService)
     service.max_results = 5
@@ -332,6 +476,149 @@ def test_disclosure_query_does_not_use_tavily_when_dart_and_db_are_empty(monkeyp
 
     assert result["data"]["source"] == "NO_RESULT"
     assert calls == []
+
+
+def test_disclosure_rag_fallback_reuses_db_analysis_for_table_cards():
+    service = object.__new__(ChatbotWebFallbackSearchService)
+
+    class FakeRagService:
+        def build_context(self, auth_header, user_id, query):
+            return (
+                "RAG 참고자료",
+                [
+                    {
+                        "source_type": "DISCLOSURE",
+                        "source_id": "20260629801143",
+                        "chunk_text": "삼성전자 장래사업 경영계획 공시입니다. 2040년까지 반도체 및 신사업에 대규모 투자를 추진할 계획입니다.",
+                        "similarity": 0.91,
+                    }
+                ],
+            )
+
+    class FakeRepository:
+        def get_disclosure_by_rcept_no(self, rcept_no):
+            assert rcept_no == "20260629801143"
+            return {
+                "rcept_no": "20260629801143",
+                "corp_name": "삼성전자",
+                "report_nm": "장래사업ㆍ경영계획(공정공시)",
+                "summary": "기존 DB 요약",
+                "url": "https://dart.fss.or.kr/example",
+            }
+
+        def get_disclosure_analysis(self, rcept_no):
+            assert rcept_no == "20260629801143"
+            return {
+                "plain_summary": "2040년까지 반도체 및 신사업에 대규모 투자를 추진합니다.",
+                "headline": "장기 투자 계획 공시",
+                "metrics": [{"label": "투자 규모", "value": "약 2,450조 원"}],
+                "check_items": [{"question": "투자 기간", "answer": "2026~2040년"}],
+                "risk_points": ["장기 계획이라 실행 변동 가능성이 있습니다."],
+                "analysis_source": "OPENDART_DOCUMENT",
+                "confidence": "high",
+                "sentiment_label": "정보",
+            }
+
+    service.rag_service = FakeRagService()
+    service.dart_repository = FakeRepository()
+
+    result = service._search_rag("Bearer token", "user-1", "삼성전자 최근 공시 보여줘", 1)
+
+    assert result is not None
+    assert result["data"]["source"] == "DISCLOSURE_DB"
+    assert "DART 공시" in result["reply"]
+    assert "지표: 투자 규모 · 약 2,450조 원" in result["reply"]
+    assert result["data"]["items"][0]["analysis"]["metrics"][0]["label"] == "투자 규모"
+    assert result["data"]["items"][0]["analysis"]["check_items"][0]["answer"] == "2026~2040년"
+    assert "source_type=" not in result["reply"]
+    assert "source_id=" not in result["reply"]
+
+
+def test_disclosure_db_fallback_indexes_analysis_for_vector_search():
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    synced_payloads = []
+
+    class FakeRepository:
+        def list_disclosures(self, query, limit):
+            return [
+                {
+                    "rcept_no": "20260714000111",
+                    "corp_name": "삼성전자",
+                    "stock_code": "005930",
+                    "report_nm": "장래사업ㆍ경영계획(공정공시)",
+                    "summary": "DB 저장 요약",
+                    "url": "https://dart.fss.or.kr/example",
+                }
+            ]
+
+        def get_disclosure_analysis(self, rcept_no):
+            return {
+                "rcept_no": rcept_no,
+                "plain_summary": "반도체 및 신사업 투자 계획을 공시했습니다.",
+                "headline": "장기 투자 계획",
+                "metrics": [{"label": "투자 규모", "value": "약 2,450조 원"}],
+                "check_items": [{"question": "투자 기간", "answer": "2026~2040년"}],
+                "risk_points": ["장기 계획이라 변동 가능성이 있습니다."],
+                "analysis_source": "OPENDART_DOCUMENT",
+                "confidence": "high",
+                "sentiment_label": "정보",
+            }
+
+    class FakeKnowledgeSyncService:
+        def sync_analysis(self, analysis, disclosure=None):
+            synced_payloads.append((analysis, disclosure))
+            return {"status": "EMBEDDED", "chunk_count": 1}
+
+    service.dart_repository = FakeRepository()
+    service.disclosure_knowledge_sync_service = FakeKnowledgeSyncService()
+
+    result = service._search_disclosure_db("삼성전자 최근 공시 보여줘", 1)
+
+    assert result is not None
+    assert synced_payloads[0][0]["plain_summary"] == "반도체 및 신사업 투자 계획을 공시했습니다."
+    assert synced_payloads[0][1]["rcept_no"] == "20260714000111"
+    assert result["data"]["items"][0]["knowledge_index"]["status"] == "EMBEDDED"
+
+
+def test_disclosure_db_fallback_indexes_saved_summary_without_cached_analysis():
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    synced_payloads = []
+
+    class FakeRepository:
+        def list_disclosures(self, query, limit):
+            return [
+                {
+                    "rcept_no": "20260714000222",
+                    "corp_name": "삼성전자",
+                    "stock_code": "005930",
+                    "report_nm": "기업설명회(IR)개최(안내공시)",
+                    "summary": "삼성전자가 2분기 경영실적 설명회를 개최한다는 공시입니다.",
+                    "url": "https://dart.fss.or.kr/example",
+                }
+            ]
+
+        def get_disclosure_analysis(self, rcept_no):
+            return None
+
+    class FakeAnalysisService:
+        def ensure_analysis(self, rcept_no, force_refresh=False):
+            return {"analysis": None}
+
+    class FakeKnowledgeSyncService:
+        def sync_analysis(self, analysis, disclosure=None):
+            synced_payloads.append((analysis, disclosure))
+            return {"status": "EMBEDDED", "chunk_count": 1}
+
+    service.dart_repository = FakeRepository()
+    service.dart_analysis_service = FakeAnalysisService()
+    service.disclosure_knowledge_sync_service = FakeKnowledgeSyncService()
+
+    result = service._search_disclosure_db("삼성전자 최근 공시 보여줘", 1)
+
+    assert result is not None
+    assert synced_payloads[0][0]["analysis_source"] == "DISCLOSURE_DB"
+    assert "2분기 경영실적 설명회" in synced_payloads[0][0]["plain_summary"]
+    assert result["data"]["items"][0]["knowledge_index"]["status"] == "EMBEDDED"
 
 
 def test_disclosure_db_reply_separates_items_with_blank_lines():
@@ -909,7 +1196,7 @@ def test_openai_summary_failure_uses_gemini_primary(monkeypatch):
                 return None
 
             def json(self):
-                return {"output_text": "1. 첫 줄\n2. 둘째 줄\n3. 셋째 줄"}
+                return {"output_text": "1. 삼성전자 실적 관련 기사입니다.\n2. 반도체 업황 확인이 필요합니다.\n3. 세부 내용은 원문 기준으로 확인하세요."}
 
         return Response()
 
@@ -924,7 +1211,7 @@ def test_openai_summary_failure_uses_gemini_primary(monkeypatch):
 
     assert calls == ["openai", "gemini-primary"]
     assert result["ai_summary_model"] == "gemini-primary"
-    assert result["ai_summary"].startswith("1. 첫 줄")
+    assert result["ai_summary"].startswith("1. 삼성전자 실적")
 
 
 def test_summary_failure_uses_deterministic_fallback_after_all_ai_failures(monkeypatch):
@@ -951,3 +1238,39 @@ def test_summary_failure_uses_deterministic_fallback_after_all_ai_failures(monke
     assert calls == ["openai", "gemini-primary", "gemini-fallback"]
     assert result["ai_summary_model"] == "fallback"
     assert "비트코인 변동성" in result["ai_summary"]
+
+
+def test_incomplete_ai_news_summary_uses_deterministic_fallback(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    def fake_post(url, **kwargs):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "1. 단계를 구축하고 있으며,"
+                            }
+                        }
+                    ]
+                }
+
+        return Response()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    result = NewsSummaryService().summarize({
+        "title": "행정 돌 깨고 기업 사간표 맞춘다...정부 반도체 메가산단 구축 최대...",
+        "summary": "정부가 반도체 메가산단 구축을 추진한다는 기사입니다.",
+        "company_name": "삼성전자",
+        "source": "NAVER",
+    })
+
+    assert result["ai_summary_model"] == "fallback"
+    assert "단계를 구축하고 있으며" not in result["ai_summary"]
+    assert "정부가 반도체 메가산단 구축" in result["ai_summary"]

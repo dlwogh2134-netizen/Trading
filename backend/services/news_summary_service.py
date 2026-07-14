@@ -218,7 +218,7 @@ class NewsSummaryService:
     def _normalize_summary(self, text: str) -> str:
         if not text:
             return ""
-        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        lines = [re.sub(r"\s+", " ", line).strip() for line in self._split_summary_lines(text)]
         lines = [line for line in lines if line]
         if not lines:
             return ""
@@ -229,10 +229,27 @@ class NewsSummaryService:
             if len(normalized) == 3:
                 break
 
-        while len(normalized) < 3:
-            normalized.append(f"{len(normalized) + 1}. -")
-
+        if len(normalized) < 3:
+            return ""
+        if any(self._is_incomplete_summary_line(line) for line in normalized[:3]):
+            return ""
         return "\n".join(normalized[:3])
+
+    @staticmethod
+    def _split_summary_lines(text: str) -> list[str]:
+        raw_lines = [line for line in str(text or "").splitlines() if line.strip()]
+        if len(raw_lines) > 1:
+            return raw_lines
+        return [line for line in re.split(r"(?=\d+\.\s*)", str(text or "")) if line.strip()]
+
+    @staticmethod
+    def _is_incomplete_summary_line(line: str) -> bool:
+        text = re.sub(r"^\d+\.\s*", "", str(line or "")).strip()
+        if not text or text in {"-", "–", "—"}:
+            return True
+        if len(text) < 12:
+            return True
+        return text.endswith((",", "，", "및", "또는", "하며", "하고", "있는"))
 
     def _fallback_summary(self, article: dict[str, Any]) -> str:
         title = self._clean(article.get("title", ""))

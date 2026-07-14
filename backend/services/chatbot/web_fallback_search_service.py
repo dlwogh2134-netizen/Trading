@@ -12,6 +12,9 @@ from backend.services.chatbot.rag_service import ChatbotRAGService
 from backend.services.dart_analysis_service import DartDisclosureAnalysisService
 from backend.services.dart_ingest import DartIngestService
 from backend.services.dart_repository import DartRepository
+from backend.services.disclosure_knowledge_sync_service import DisclosureKnowledgeSyncService
+from backend.services.embedding_service import EmbeddingService
+from backend.services.knowledge_chunk_service import KnowledgeChunkService
 from backend.services.news_repository import NewsRepository
 from backend.services.news_summary_service import NewsSummaryService
 from backend.services.tavily_client import TavilyClient, TavilySearchError
@@ -23,6 +26,10 @@ class ChatbotWebFallbackSearchService:
         self.news_repository = NewsRepository()
         self.dart_repository = DartRepository()
         self.dart_analysis_service = DartDisclosureAnalysisService()
+        self.disclosure_knowledge_sync_service = DisclosureKnowledgeSyncService(
+            KnowledgeChunkService(),
+            EmbeddingService(),
+        )
         self.news_summary_service = NewsSummaryService()
         self.tavily_client = TavilyClient()
         self.naver_client_id = os.getenv("NAVER_CLIENT_ID", "")
@@ -51,6 +58,11 @@ class ChatbotWebFallbackSearchService:
             if requested_count and requested_count > 3:
                 return self._disclosure_limit_exceeded_reply(text, requested_count)
             max_results = requested_count or 1
+            unsupported_company = self._unsupported_dart_company_name(text)
+            if unsupported_company:
+                return self._unsupported_disclosure_market_reply(text, unsupported_company)
+            if self._is_missing_disclosure_target(text):
+                return self._disclosure_target_required_reply(text)
         elif is_news_query:
             requested_count = self._requested_news_count(text)
             if requested_count and requested_count > 3:
@@ -66,6 +78,11 @@ class ChatbotWebFallbackSearchService:
             api_result = self._search_existing_open_apis(text, max_results)
             if api_result:
                 return api_result
+
+            if is_news_query:
+                tavily_result = self._search_tavily(text, max_results)
+                if tavily_result:
+                    return tavily_result
 
             db_result = self._search_internal_db(text, max_results)
             if db_result:
@@ -115,6 +132,82 @@ class ChatbotWebFallbackSearchService:
         context, rows = self.rag_service.build_context(auth_header, user_id, query)
         if not context or not rows:
             return None
+
+        disclosure_rows = [
+            row
+            for row in rows[:limit]
+            if str(row.get("source_type") or "").upper() == "DISCLOSURE"
+        ]
+        if disclosure_rows and self._is_disclosure_query(query):
+            result_items: list[dict[str, Any]] = []
+            for row in disclosure_rows:
+                rcept_no = str(row.get("source_id") or "").strip()
+                if not rcept_no:
+                    continue
+                try:
+                    disclosure = self.dart_repository.get_disclosure_by_rcept_no(rcept_no)
+                except (requests.HTTPError, requests.ConnectionError, requests.Timeout, TypeError, ValueError):
+                    disclosure = None
+                if not disclosure:
+                    continue
+
+                title = self._normalize_disclosure_text(disclosure.get("report_nm")) or "공시 제목 없음"
+                corp_name = self._normalize_disclosure_text(disclosure.get("corp_name")) or "-"
+                analysis = self._load_disclosure_analysis(disclosure)
+                normalized_analysis = self._normalize_disclosure_analysis(analysis)
+                result_item = {
+                    **disclosure,
+                    "corp_name": corp_name,
+                    "report_nm": title,
+                    "analysis": normalized_analysis,
+                }
+                knowledge_index = self._sync_disclosure_knowledge_index(disclosure, normalized_analysis)
+                if knowledge_index:
+                    result_item["knowledge_index"] = knowledge_index
+                result_items.append(result_item)
+
+            if result_items:
+                lines = [f"DART 공시 {len(result_items)}건을 요약했습니다."]
+                for index, item in enumerate(result_items, start=1):
+                    if index > 1:
+                        lines.append("")
+                    lines.append(f"{index}. {item['corp_name']} / {item['report_nm']}")
+                    for summary_line in self._disclosure_summary_lines(item, analysis=item.get("analysis")):
+                        lines.append(f"   {summary_line}")
+                    url = item.get("url") or ""
+                    if url:
+                        lines.append(f"   {url}")
+                lines.append("")
+                lines.append("출처: 저장된 DART 공시 DB")
+                source_url = self._dart_source_url(self._normalize_disclosure_query(query))
+                return {
+                    "reply": "\n".join(lines),
+                    "data": {
+                        "source": "DISCLOSURE_DB",
+                        "items": result_items,
+                        "source_url": source_url,
+                        "fallback_source": "VECTOR_DB",
+                    },
+                }
+
+            lines = [f"저장된 DART 공시 요약 {len(disclosure_rows)}건입니다."]
+            for index, row in enumerate(disclosure_rows, start=1):
+                chunk_text = self._compact(row.get("chunk_text"), 320)
+                if not chunk_text:
+                    continue
+                source_id = str(row.get("source_id") or "").strip()
+                lines.append(f"{index}. {chunk_text}")
+                if source_id:
+                    lines.append(f"   접수번호: {source_id}")
+
+            if len(lines) == 1:
+                return None
+            lines.append("")
+            lines.append("출처: Vector DB 공시 요약")
+            return {
+                "reply": "\n".join(lines),
+                "data": {"source": "VECTOR_DB", "items": disclosure_rows},
+            }
 
         lines = ["저장된 벡터 DB 요약본에서 먼저 찾은 내용입니다."]
         for index, row in enumerate(rows[:limit], start=1):
@@ -215,12 +308,17 @@ class ChatbotWebFallbackSearchService:
                 lines.append(f"   {summary_line}")
             if url:
                 lines.append(f"   {url}")
-            result_items.append({
+            normalized_analysis = self._normalize_disclosure_analysis(analysis)
+            result_item = {
                 **row,
                 "corp_name": corp_name,
                 "report_nm": title,
-                "analysis": self._normalize_disclosure_analysis(analysis),
-            })
+                "analysis": normalized_analysis,
+            }
+            knowledge_index = self._sync_disclosure_knowledge_index(row, normalized_analysis)
+            if knowledge_index:
+                result_item["knowledge_index"] = knowledge_index
+            result_items.append(result_item)
         lines.append("")
         lines.append("출처: DART 전자공시시스템")
         source_url = self._dart_source_url(search_query)
@@ -249,8 +347,6 @@ class ChatbotWebFallbackSearchService:
         if finnhub_result:
             return finnhub_result
 
-        if not self._is_disclosure_query(query):
-            return self._sync_and_search_dart(query, limit)
         return None
 
     def _sync_and_search_dart(self, query: str, limit: int) -> dict[str, Any] | None:
@@ -372,7 +468,7 @@ class ChatbotWebFallbackSearchService:
                 "data": {"source": "TAVILY", "enabled": False},
             }
 
-        results = payload.get("results") or []
+        results = self._filter_tavily_results(query, payload.get("results") or [])
         if not results:
             return None
 
@@ -463,6 +559,48 @@ class ChatbotWebFallbackSearchService:
             return None
         analysis = result.get("analysis") if isinstance(result, dict) else None
         return analysis if isinstance(analysis, dict) else None
+
+    def _sync_disclosure_knowledge_index(
+        self,
+        row: dict[str, Any],
+        analysis: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        index_analysis = analysis or self._fallback_disclosure_index_analysis(row)
+        rcept_no = str(row.get("rcept_no") or index_analysis.get("rcept_no") or "").strip()
+        if not rcept_no:
+            return None
+
+        sync_service = getattr(self, "disclosure_knowledge_sync_service", None)
+        if not sync_service:
+            return None
+
+        index_analysis = {**index_analysis, "rcept_no": str(index_analysis.get("rcept_no") or rcept_no)}
+        try:
+            result = sync_service.sync_analysis(analysis=index_analysis, disclosure=row)
+        except (requests.HTTPError, requests.ConnectionError, requests.Timeout, RuntimeError, OSError, TypeError, ValueError):
+            return {"status": "FAILED", "chunk_count": 0}
+        return result if isinstance(result, dict) else None
+
+    def _fallback_disclosure_index_analysis(self, row: dict[str, Any]) -> dict[str, Any]:
+        title = self._normalize_disclosure_text(row.get("report_nm"))
+        corp_name = self._normalize_disclosure_text(row.get("corp_name"))
+        summary = self._compact(row.get("summary"), 360)
+        if not summary or self._is_listing_summary(summary, title, corp_name):
+            summary = self._fallback_disclosure_summary(title)
+        return {
+            "rcept_no": str(row.get("rcept_no") or "").strip(),
+            "category": "공시",
+            "sentiment_label": "정보",
+            "sentiment_message": "저장된 공시 DB 요약을 기반으로 색인했습니다.",
+            "headline": title,
+            "plain_summary": summary,
+            "key_points": [],
+            "risk_points": [],
+            "check_items": [{"question": "원문 확인", "answer": "세부 조건은 DART 원문에서 확인"}],
+            "metrics": [],
+            "analysis_source": "DISCLOSURE_DB",
+            "confidence": "low",
+        }
 
     def _is_complete_disclosure_analysis(self, analysis: dict[str, Any]) -> bool:
         plain_summary = self._normalize_disclosure_text(analysis.get("plain_summary"))
@@ -616,6 +754,115 @@ class ChatbotWebFallbackSearchService:
             return None
         return max(1, min(int(match.group(1)), 10))
 
+    @classmethod
+    def _is_missing_disclosure_target(cls, query: str) -> bool:
+        subject = cls._extract_disclosure_subject(query)
+        if not subject:
+            return True
+        generic_terms = {
+            "목록",
+            "리스트",
+            "전체",
+            "시장",
+            "주식",
+            "종목",
+            "기업",
+            "회사",
+            "상장사",
+            "국내",
+            "한국",
+        }
+        tokens = {token for token in re.split(r"\s+", subject) if token}
+        return bool(tokens) and tokens.issubset(generic_terms)
+
+    @staticmethod
+    def _extract_disclosure_subject(query: str) -> str:
+        text = re.sub(r"\s+", " ", str(query or "")).strip()
+        keywords = [
+            "공시",
+            "사업보고서",
+            "반기보고서",
+            "분기보고서",
+            "전자공시",
+            "보여줘",
+            "찾아줘",
+            "알려줘",
+            "요약",
+            "분석",
+            "최신",
+            "최근",
+            "오늘",
+            "이번 주",
+            "목록",
+            "리스트",
+            "DART",
+        ]
+        for keyword in keywords:
+            text = text.replace(keyword, " ")
+        text = re.sub(r"\d+\s*(?:개|건)", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _unsupported_dart_company_name(query: str) -> str:
+        normalized = str(query or "").upper()
+        unsupported_aliases = {
+            "아마존": "아마존",
+            "AMAZON": "아마존",
+            "AMZN": "아마존",
+            "애플": "애플",
+            "APPLE": "애플",
+            "AAPL": "애플",
+            "테슬라": "테슬라",
+            "TESLA": "테슬라",
+            "TSLA": "테슬라",
+            "마이크로소프트": "마이크로소프트",
+            "MICROSOFT": "마이크로소프트",
+            "MSFT": "마이크로소프트",
+            "구글": "구글",
+            "알파벳": "알파벳",
+            "GOOGLE": "구글",
+            "ALPHABET": "알파벳",
+            "GOOGL": "알파벳",
+            "GOOG": "알파벳",
+            "엔비디아": "엔비디아",
+            "NVIDIA": "엔비디아",
+            "NVDA": "엔비디아",
+            "메타": "메타",
+            "META": "메타",
+        }
+        for alias, company_name in unsupported_aliases.items():
+            if alias in normalized:
+                return company_name
+        return ""
+
+    @staticmethod
+    def _disclosure_target_required_reply(query: str) -> dict[str, Any]:
+        return {
+            "reply": (
+                "어떤 종목의 공시를 볼까요? "
+                "예: '삼성전자 최근 공시 보여줘' 또는 '하이닉스 최근 공시 3개 보여줘'처럼 종목명을 함께 알려주세요."
+            ),
+            "data": {
+                "source": "DISCLOSURE_SYMBOL_REQUIRED",
+                "query": query,
+                "max_results": 3,
+            },
+        }
+
+    @staticmethod
+    def _unsupported_disclosure_market_reply(query: str, company_name: str) -> dict[str, Any]:
+        return {
+            "reply": (
+                f"{company_name}은 DART 공시 대상이 아닙니다. "
+                "DART는 국내 상장사 전자공시 조회에 사용되며, 해외 기업은 뉴스나 SEC 공시 기준으로 확인해야 합니다."
+            ),
+            "data": {
+                "source": "DISCLOSURE_UNSUPPORTED_MARKET",
+                "query": query,
+                "company_name": company_name,
+            },
+        }
+
     @staticmethod
     def _disclosure_limit_exceeded_reply(query: str, requested_count: int) -> dict[str, Any]:
         return {
@@ -660,6 +907,8 @@ class ChatbotWebFallbackSearchService:
             text = text.replace(keyword, " ")
         text = re.sub(r"\d+\s*(?:개|건)", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
+        if text in {"시장", "주요", "시장 주요", "국내 시장", "증시 주요"}:
+            return "국내 증시 시장 주요 뉴스"
         return text or str(query or "").strip()
 
     @staticmethod
@@ -711,6 +960,30 @@ class ChatbotWebFallbackSearchService:
             "USDT",
         ]
         return any(keyword in normalized for keyword in keywords)
+
+    @classmethod
+    def _filter_tavily_results(cls, query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not results:
+            return []
+        if not cls._is_news_query(query):
+            return results
+        return [item for item in results if not cls._is_low_quality_news_source(item)]
+
+    @staticmethod
+    def _is_low_quality_news_source(item: dict[str, Any]) -> bool:
+        url = str(item.get("url") or "").lower()
+        title = str(item.get("title") or "").lower()
+        blocked_markers = (
+            "wikipedia.org",
+            "namu.wiki",
+            "namu.moe",
+            "wikidocs.net",
+            "wiki/",
+            "위키백과",
+            "나무위키",
+        )
+        combined = f"{url} {title}"
+        return any(marker in combined for marker in blocked_markers)
 
     @staticmethod
     def _clean_html(value: Any) -> str:

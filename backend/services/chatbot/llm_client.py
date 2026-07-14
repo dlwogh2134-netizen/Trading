@@ -25,8 +25,8 @@ class ChatbotLLMClient:
         self.max_output_tokens = self._read_int_env("CHATBOT_MAX_OUTPUT_TOKENS", 1024)
         self.max_history_messages = self._read_int_env("CHATBOT_MAX_HISTORY_MESSAGES", 16)
         self.max_tool_calls = self._read_int_env("CHATBOT_MAX_TOOL_CALLS", 3)
-        self.minute_request_limit = self._read_int_env("CHATBOT_MINUTE_REQUEST_LIMIT", 10)
-        self.daily_token_limit = self._read_int_env("CHATBOT_DAILY_TOKEN_LIMIT", 50000)
+        self.minute_request_limit = self._read_int_env("CHATBOT_MINUTE_REQUEST_LIMIT", 50)
+        self.daily_token_limit = self._read_int_env("CHATBOT_DAILY_TOKEN_LIMIT", 100000)
         self.timeout_seconds = self._read_int_env("CHATBOT_OPENAI_TIMEOUT_SECONDS", 30)
 
     @staticmethod
