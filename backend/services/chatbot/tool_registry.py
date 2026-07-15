@@ -1012,6 +1012,113 @@ def get_exchange_rate(auth_header: str, message: str) -> dict:
     }
 
 
+STOCK_WARNING_LABELS = {
+    "TRADING_SUSPENDED": "거래정지",
+    "LIQUIDATION_TRADING": "정리매매",
+    "INVESTMENT_RISK": "투자위험",
+    "INVESTMENT_WARNING": "투자경고",
+    "INVESTMENT_ALERT": "투자주의",
+    "OVERHEATED": "단기과열",
+    "VI_STATIC_AND_DYNAMIC": "정적/동적 VI",
+    "VI_STATIC": "정적 VI",
+    "VI_DYNAMIC": "동적 VI",
+}
+
+
+def _is_stock_asset_for_status(asset_type: str, exchange: str) -> bool:
+    normalized_asset_type = str(asset_type or "").upper()
+    normalized_exchange = str(exchange or "").upper()
+    return normalized_asset_type.startswith("STOCK") or normalized_exchange in {"TOSS", "KIS"}
+
+
+def _format_stock_trade_status(warnings: list[dict] | None) -> str:
+    if not warnings:
+        return "거래상태: 특이사항 없음"
+
+    labels = []
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        warning_type = str(warning.get("warning_type") or "").upper()
+        label = STOCK_WARNING_LABELS.get(warning_type) or str(warning.get("label") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+
+    if not labels:
+        return "거래상태: 특이사항 있음"
+    return f"거래상태: {', '.join(labels[:3])}"
+
+
+def _extract_stock_warning_labels(warnings: list[dict] | None) -> list[str]:
+    labels = []
+    for warning in warnings or []:
+        if not isinstance(warning, dict):
+            continue
+        warning_type = str(warning.get("warning_type") or "").upper()
+        label = STOCK_WARNING_LABELS.get(warning_type) or str(warning.get("label") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _format_stock_trade_status_sentence(asset_label: str, trade_status: dict | None) -> str:
+    if not trade_status:
+        return ""
+    if trade_status.get("status_lookup_failed"):
+        return f"현재 {asset_label}은/는 거래상태를 확인하지 못했습니다."
+
+    labels = trade_status.get("labels")
+    if not isinstance(labels, list):
+        labels = _extract_stock_warning_labels(trade_status.get("warnings") or [])
+
+    if not labels:
+        return f"현재 {asset_label}은/는 거래 관련 특이사항이 확인되지 않았습니다."
+
+    if "거래정지" in labels:
+        return f"현재 {asset_label}은/는 거래정지 상태입니다."
+    if "정리매매" in labels:
+        return f"현재 {asset_label}은/는 정리매매 상태입니다."
+    return f"현재 {asset_label}은/는 {', '.join(labels[:3])} 상태입니다."
+
+
+def _get_stock_trade_status(auth_header: str, symbol: str, broker_env: str) -> dict:
+    try:
+        payload = _get_internal(
+            "/api/stocks/warnings",
+            auth_header,
+            params={
+                "symbol": symbol,
+                "exchange": "TOSS",
+                "broker_env": broker_env,
+            },
+        )
+        data = payload.get("data") or {}
+        warnings = data.get("warnings") if isinstance(data, dict) else []
+        warnings = warnings if isinstance(warnings, list) else []
+        return {
+            "status_text": _format_stock_trade_status(warnings),
+            "status_sentence": "",
+            "labels": _extract_stock_warning_labels(warnings),
+            "warnings": warnings,
+            "status_lookup_failed": False,
+        }
+    except Exception:
+        return {
+            "status_text": "거래상태: 확인 실패",
+            "status_sentence": "",
+            "labels": [],
+            "warnings": [],
+            "status_lookup_failed": True,
+        }
+
+
+def _append_trade_status_to_reply(reply: str, trade_status: dict | None, asset_label: str = "") -> str:
+    status_text = _format_stock_trade_status_sentence(asset_label, trade_status) if asset_label else str((trade_status or {}).get("status_text") or "").strip()
+    if not status_text:
+        return reply
+    return f"{str(reply or '').rstrip()}\n{status_text}"
+
+
 def get_asset_price(auth_header: str, message: str) -> dict:
     symbol_query = _extract_symbol_query(message)
     if not symbol_query:
@@ -1100,6 +1207,45 @@ def get_asset_price(auth_header: str, message: str) -> dict:
             "currency": currency,
         },
     }
+
+
+_get_asset_price_base = get_asset_price
+
+
+def get_asset_price(auth_header: str, message: str) -> dict:
+    result = _get_asset_price_base(auth_header, message)
+    data = result.get("data") if isinstance(result, dict) else {}
+    if not isinstance(data, dict) or data.get("source") != "ASSET_PRICE":
+        return result
+
+    symbol = str(data.get("symbol") or "").upper()
+    exchange = str(data.get("exchange") or "").upper()
+    asset_type = str(data.get("asset_type") or "").upper()
+    broker_env = str(data.get("broker_env") or _detect_env(message) or "REAL").upper()
+    if not symbol or not _is_stock_asset_for_status(asset_type, exchange):
+        return result
+
+    display_name = str(data.get("display_name") or symbol).strip()
+    label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
+    trade_status = _get_stock_trade_status(auth_header, symbol, broker_env)
+    data["trade_status"] = trade_status
+
+    current_price = _to_float(data.get("current_price"))
+    change_rate = _to_float(data.get("change_rate"))
+    currency = str(data.get("currency") or "KRW").upper()
+    if current_price > 0:
+        result["reply"] = _append_trade_status_to_reply(
+            f"{label} 현재가는 {_format_money(current_price, currency)}입니다.\n등락률은 {change_rate:+.2f}%입니다.",
+            trade_status,
+            label,
+        )
+    else:
+        result["reply"] = _append_trade_status_to_reply(
+            f"{label}의 현재가 정보를 거래소에서 실시간으로 가져오지 못했습니다.\n거래정지, 미지원 종목, 일시 지연 상태일 수 있습니다.",
+            trade_status,
+            label,
+        )
+    return result
 
 
 def get_asset_orderbook(auth_header: str, message: str) -> dict:
@@ -2656,6 +2802,30 @@ def _price_outlook_sentence(change_rate: float) -> str:
     if change_rate < 0:
         return "위 하락률은 단기적으로 부담 신호일 수 있으나, 투자 결정 시 추가적인 재무 정보와 시장 상황을 함께 고려하시기 바랍니다."
     return "현재 등락률만으로 방향성을 단정하기는 어려우며, 투자 결정 시 추가적인 재무 정보와 시장 상황을 함께 고려하시기 바랍니다."
+
+
+_get_asset_outlook_base = get_asset_outlook
+
+
+def get_asset_outlook(auth_header: str, message: str) -> dict:
+    result = _get_asset_outlook_base(auth_header, message)
+    data = result.get("data") if isinstance(result, dict) else {}
+    if not isinstance(data, dict):
+        return result
+
+    symbol = str(data.get("symbol") or "").upper()
+    asset_type = str(data.get("asset_type") or "").upper()
+    market = str(data.get("market") or "").upper()
+    if not symbol or not _is_stock_asset_for_status(asset_type, _default_exchange_for_asset(asset_type, market)):
+        return result
+
+    display_name = str(data.get("display_name") or symbol).strip()
+    label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
+    trade_status = _get_stock_trade_status(auth_header, symbol, _detect_env(message) or "REAL")
+    data["trade_status"] = trade_status
+    if result.get("reply"):
+        result["reply"] = _append_trade_status_to_reply(result["reply"], trade_status, label)
+    return result
 
 
 def get_recommendation_candidates(auth_header: str, message: str) -> dict:

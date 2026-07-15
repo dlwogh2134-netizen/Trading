@@ -43,6 +43,18 @@ def test_safety_guard_blocks_order_tool_before_execution():
         enforce_tool_safety("place_order", {})
 
 
+def test_stock_trade_status_sentence_marks_trading_suspended():
+    sentence = tool_registry._format_stock_trade_status_sentence(
+        "동양(001520)",
+        {
+            "warnings": [{"warning_type": "TRADING_SUSPENDED"}],
+            "status_lookup_failed": False,
+        },
+    )
+
+    assert sentence == "현재 동양(001520)은/는 거래정지 상태입니다."
+
+
 def test_holdings_summary_routes_to_amount_summary_before_detail(monkeypatch):
     monkeypatch.setattr(
         tool_registry,
