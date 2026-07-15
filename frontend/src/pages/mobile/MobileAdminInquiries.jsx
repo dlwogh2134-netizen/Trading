@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Header from '../../components/Header.jsx'
 import { supabase } from '../../supabaseClient.js'
 
@@ -113,11 +113,7 @@ function EmptyInquiryState() {
 }
 
 function ReplyModal({ inquiry, isSubmitting, error, onClose, onSubmit }) {
-  const [answer, setAnswer] = useState('')
-
-  useEffect(() => {
-    setAnswer(inquiry?.answer || '')
-  }, [inquiry])
+  const [answer, setAnswer] = useState(inquiry?.answer || '')
 
   if (!inquiry) return null
 
@@ -179,7 +175,7 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
   const [submitError, setSubmitError] = useState('')
   const [canReply, setCanReply] = useState(false)
 
-  const fetchAdminInquiries = async () => {
+  const fetchAdminInquiries = useCallback(async () => {
     setIsLoading(true)
     setLoadError('')
     try {
@@ -211,11 +207,12 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
-    fetchAdminInquiries()
-  }, [])
+    const timeoutId = window.setTimeout(fetchAdminInquiries, 0)
+    return () => window.clearTimeout(timeoutId)
+  }, [fetchAdminInquiries])
 
   const sortedInquiries = useMemo(() => {
     return [...inquiries].sort((left, right) => {
@@ -373,6 +370,7 @@ export default function AdminInquiries({ isLoggedIn, userEmail, handleLogout, hi
       </div>
 
       <ReplyModal
+        key={replyInquiry?.id || 'reply-empty'}
         inquiry={replyInquiry}
         isSubmitting={isSubmitting}
         error={submitError}
