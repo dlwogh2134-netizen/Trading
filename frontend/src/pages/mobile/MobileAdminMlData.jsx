@@ -3,7 +3,7 @@ import Header from '../../components/Header.jsx'
 import { supabase } from '../../supabaseClient'
 import MobileAdminInquiries from './MobileAdminInquiries.jsx'
 import AdminSymbolReconciliation from '../AdminSymbolReconciliation.jsx'
-import { ActiveSignalPanel, AuditBadge, GuardSummary, JobLogModal, ModelSwitchPanel, ServingAuditPanel, StatusPanel, VersionDeltaPanel } from '../adminMlDataPanels.jsx'
+import { ActiveSignalPanel, AuditBadge, GuardSummary, JobLogModal, ModelSwitchPanel, RegistryPanel, ServingAuditPanel, StatusPanel, VersionDeltaPanel } from '../adminMlDataPanels.jsx'
 import {
   buildQualityDetail,
   findGuardCheck,
@@ -325,104 +325,6 @@ function JobHistoryPanel({ jobs = [], loading, error, onShowLog }) {
           </button>
         </article>
       ))}
-    </div>
-  )
-}
-
-function RegistryPanel({ title, rows = [], loading, error, onActivate, activatingKey, promotionChecks = {}, promotionChecksLoading = false }) {
-  return (
-    <div className="rounded-lg border border-slate-700/80 bg-slate-surface p-5">
-      <div className="mb-4">
-        <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Model Registry</p>
-        <h3 className="mt-1 text-lg font-bold text-white">{title}</h3>
-      </div>
-
-      {loading ? (
-        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
-          레지스트리 상태를 불러오는 중입니다.
-        </div>
-      ) : error ? (
-        <div className="rounded-lg border border-red-800 bg-red-950/30 p-4 text-sm leading-6 text-red-300">
-          {error}
-        </div>
-      ) : !rows.length ? (
-        <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4 text-sm text-slate-400">
-          아직 레지스트리 정보가 없습니다.
-        </div>
-      ) : (
-        <div className="grid gap-2.5">
-          {rows.map((row) => {
-            const guardReport = promotionChecks[`${row.asset_type}:${row.model_version}`]
-
-            return (
-              <article key={`${row.asset_type}-${row.model_version}`} className="rounded-lg border border-slate-800 bg-[#0f172a] p-3 text-xs text-slate-300">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-mono text-sm font-bold text-white">{row.model_version}</p>
-                    <p className="mt-1 truncate text-[10px] text-slate-500">{row.version || '-'}</p>
-                  </div>
-                  <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                    {row.is_latest ? (
-                      <span className="rounded border border-slate-600 px-2 py-1 text-[10px] font-bold text-slate-300">최신</span>
-                    ) : null}
-                    {row.is_recommended ? (
-                      <span className="rounded border border-emerald-500/40 px-2 py-1 text-[10px] font-bold text-emerald-300">추천</span>
-                    ) : null}
-                    {row.is_serving ? (
-                      <span className="rounded border border-ai-cyan/40 px-2 py-1 text-[10px] font-bold text-ai-cyan">서비스</span>
-                    ) : null}
-                    {!row.is_latest && !row.is_recommended && !row.is_serving ? (
-                      <span className="rounded border border-slate-700 px-2 py-1 text-[10px] font-bold text-slate-500">분석 중</span>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <div className="rounded bg-slate-950/50 px-2.5 py-2">
-                    <p className="text-[10px] font-bold text-slate-500">CV 구분력</p>
-                    <p className="mt-1 font-mono text-[11px] text-white">{formatMetric(row.cv_roc_auc || row.roc_auc)}</p>
-                  </div>
-                  <div className="rounded bg-slate-950/50 px-2.5 py-2">
-                    <p className="text-[10px] font-bold text-slate-500">상위 10%</p>
-                    <p className="mt-1 font-mono text-[11px] text-white">{formatMetric(row.cv_top10_precision)}</p>
-                  </div>
-                </div>
-
-                <div className="mt-3 rounded bg-slate-950/50 px-2.5 py-2">
-                  {guardReport ? (
-                    <GuardSummary guardReport={guardReport} compact />
-                  ) : promotionChecksLoading ? (
-                    <p className="text-[10px] text-slate-500">검증 중...</p>
-                  ) : (
-                    <p className="text-[10px] text-slate-500">검증 정보 없음</p>
-                  )}
-                </div>
-
-                <p className="mt-2 truncate font-mono text-[10px] text-slate-500" title={row.summary_path || row.metrics_path}>
-                  {formatPath(row.summary_path || row.metrics_path)}
-                </p>
-
-                <button
-                  type="button"
-                  onClick={() => onActivate?.(row)}
-                  disabled={Boolean(activatingKey) || row.is_serving}
-                  className={`mt-3 w-full rounded border px-3 py-2 text-[11px] font-bold transition ${
-                    row.is_serving
-                      ? 'border-slate-700 text-slate-500'
-                      : 'border-ai-cyan/40 text-ai-cyan hover:bg-ai-cyan/10'
-                  } disabled:cursor-not-allowed disabled:opacity-50`}
-                >
-                  {activatingKey === `${row.asset_type}:${row.model_version}`
-                    ? '반영 중...'
-                    : row.is_serving
-                      ? '반영됨'
-                      : '서비스 반영'}
-                </button>
-              </article>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }
@@ -2100,6 +2002,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             activatingKey={activatingRegistryKey}
             promotionChecks={promotionChecks}
             promotionChecksLoading={promotionChecksLoading}
+            variant="mobile"
           />
           <RegistryPanel
             title="코인 레지스트리 상태"
@@ -2110,6 +2013,7 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
             activatingKey={activatingRegistryKey}
             promotionChecks={promotionChecks}
             promotionChecksLoading={promotionChecksLoading}
+            variant="mobile"
           />
         </section>
 
