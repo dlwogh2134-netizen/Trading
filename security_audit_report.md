@@ -100,11 +100,11 @@
   * [keys.py:L310, L337](file:///Users/kangheesung/10-19_개발/13_프로젝트/13.05_트레이딩/teamproject/backend/routes/keys.py#L310) (디버깅 print 잔재)
   * [ml.py:L586-587](file:///Users/kangheesung/10-19_개발/13_프로젝트/13.05_트레이딩/teamproject/backend/routes/ml.py#L586-L587) (`traceback.print_exc()` 강제 출력 잔재)
   * `backend/services/` 스케줄러 계열 파일([auto_trading_rule_engine.py](file:///Users/kangheesung/10-19_개발/13_프로젝트/13.05_트레이딩/teamproject/backend/services/auto_trading_rule_engine.py), [open_order_status_sync_service.py](file:///Users/kangheesung/10-19_개발/13_프로젝트/13.05_트레이딩/teamproject/backend/services/open_order_status_sync_service.py) 등)의 로깅 목적 직접 `print` 호출 15여 군데.
-  * [InvestmentSurveyModal.jsx:L171](file:///Users/kangheesung/10-19_개발/13_프로젝트/13.05_트레이딩/teamproject/frontend/src/components/InvestmentSurveyModal.jsx#L171) (`console.log("1. onSuccess 호출 전");`)
 * **현상 및 설명**:
-  * 개발 중 실시간 동작 확인을 위해 print문이나 console.log를 삽입하였으나 프로덕션 빌드 후에도 콘솔을 어지럽히고 중앙식 로그 수집기 통제에 방해가 됩니다.
+  * 개발 중 실시간 동작 확인을 위해 print문을 삽입하였으나 프로덕션 빌드 후에도 콘솔을 어지럽히고 중앙식 로그 수집기 통제에 방해가 됩니다.
+  * `frontend/src/components/InvestmentSurveyModal.jsx`의 `console.log("1. onSuccess 호출 전");` 잔재는 2026-07-15에 제거 완료했습니다.
 * **조치 제안**:
-  * 백엔드는 `current_app.logger` 혹은 `logging` 표준 로거로 모두 이관하고, 프론트엔드의 `console.log` 디버깅 코드는 일괄 소거해야 합니다.
+  * 백엔드는 `current_app.logger` 혹은 `logging` 표준 로거로 모두 이관해야 합니다.
 
 ### 3.2 미사용 및 레거시 파일 (Dead Files)
 * **발견 위치**:

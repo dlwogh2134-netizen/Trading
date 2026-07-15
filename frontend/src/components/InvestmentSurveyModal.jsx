@@ -168,8 +168,6 @@ function InvestmentSurveyModal({ onClose, onSuccess, onLogout, isMandatory = fal
 
       alert(`설문 분석 완료! 귀하의 투자 성향은 [${investmentType}] 입니다.`)
 
-      console.log("1. onSuccess 호출 전");
-      
       if (onSuccess) {
         onSuccess(investmentType, totalScore, answers)
       }
