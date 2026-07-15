@@ -181,6 +181,7 @@ npm run build
 - 2026-07-15 AssetDetail 3차 리팩토링: 데스크톱/모바일 종목 상세의 조건감시 등록·수정·상태 패널을 `assetDetailAutoRulesPanel.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AssetDetail.jsx`는 4,214줄, `MobileAssetDetail.jsx`는 4,205줄입니다.
 - 2026-07-15 AssetDetail 4차 리팩토링: 데스크톱/모바일 종목 상세의 뉴스·공시 탭 콘텐츠를 `assetDetailNewsDisclosurePanel.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AssetDetail.jsx`는 3,928줄, `MobileAssetDetail.jsx`는 3,920줄입니다.
 - 2026-07-15 AssetDetail 5차 리팩토링: 데스크톱/모바일 종목 상세의 커뮤니티 글·답글 패널을 `assetDetailCommunityPanel.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AssetDetail.jsx`는 3,741줄, `MobileAssetDetail.jsx`는 3,733줄입니다.
+- 2026-07-15 AssetDetail 6차 리팩토링: 데스크톱/모바일 종목 상세의 ML 참고 신호 카드와 해석 로직을 `assetDetailMlSignalPanel.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AssetDetail.jsx`는 3,505줄, `MobileAssetDetail.jsx`는 3,497줄입니다.
 
 ## 주요 API
 

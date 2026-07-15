@@ -233,6 +233,7 @@ frontend/
         ├── assetDetailChartPanel.jsx
         ├── assetDetailCommunityPanel.jsx
         ├── assetDetailHeader.jsx
+        ├── assetDetailMlSignalPanel.jsx
         ├── assetDetailModel.js
         ├── assetDetailModel.test.mjs
         ├── assetDetailNewsDisclosurePanel.jsx
@@ -292,6 +293,8 @@ frontend/
   - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 종목 커뮤니티 글 작성, 답글, 삭제·숨김 액션 패널
 - `assetDetailNewsDisclosurePanel.jsx`
   - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 뉴스 목록, 뉴스 요약, DART 공시 목록, 공시 AI 분석 콘텐츠 패널
+- `assetDetailMlSignalPanel.jsx`
+  - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 ML 참고 신호 카드, 모델 품질, 정책 라벨, 신호 해석 표시 패널
 - `assetDetailHeader.jsx`
   - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 종목 메타, 즐겨찾기, 종목 유의사항, 현재가 헤더 컴포넌트
 - `assetDetailChartPanel.jsx`
