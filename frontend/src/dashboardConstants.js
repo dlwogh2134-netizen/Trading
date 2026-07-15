@@ -23,5 +23,5 @@ export const DASHBOARD_TABS = [
     authOnly: true,
   },
   { key: 'settings', label: '설정', enabled: true },
-  { key: 'admin', label: '관리자', enabled: true },
+  { key: 'admin', label: '관리자', enabled: true, adminOnly: true },
 ]

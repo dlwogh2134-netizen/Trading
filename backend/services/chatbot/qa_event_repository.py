@@ -138,11 +138,18 @@ class ChatbotQAEventRepository:
             assistant_message=assistant_message,
             meta=meta,
         )
-        result = supabase_client.safe_query_supabase_as_service_role(
-            "chatbot_qa_events",
-            "POST",
-            json_data=payload,
-        )
-        if result is None:
+        try:
+            supabase_client.query_supabase_as_service_role(
+                "chatbot_qa_events",
+                "POST",
+                json_data=payload,
+            )
+        except Exception as error:
             safe_user_id = str(user_id or "").replace("\r", "").replace("\n", "")[:128]
-            logger.warning("챗봇 QA 이벤트 저장 실패: user_id=%s event_type=%s", safe_user_id, event_type)
+            safe_error = str(error).replace("\r", " ").replace("\n", " ")[:500]
+            logger.warning(
+                "챗봇 QA 이벤트 저장 실패: user_id=%s event_type=%s error=%s",
+                safe_user_id,
+                event_type,
+                safe_error,
+            )

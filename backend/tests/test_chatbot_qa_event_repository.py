@@ -40,7 +40,7 @@ def test_build_qa_event_payload_redacts_tool_result_details():
 def test_record_event_uses_service_role_best_effort(monkeypatch):
     captured = {}
 
-    def fake_safe_query(endpoint, method="GET", json_data=None, params=None):
+    def fake_query(endpoint, method="GET", json_data=None, params=None):
         captured["endpoint"] = endpoint
         captured["method"] = method
         captured["json_data"] = json_data
@@ -49,8 +49,8 @@ def test_record_event_uses_service_role_best_effort(monkeypatch):
 
     monkeypatch.setattr(
         supabase_client,
-        "safe_query_supabase_as_service_role",
-        fake_safe_query,
+        "query_supabase_as_service_role",
+        fake_query,
     )
 
     repository = ChatbotQAEventRepository()
@@ -68,6 +68,70 @@ def test_record_event_uses_service_role_best_effort(monkeypatch):
     assert captured["params"] is None
     assert captured["json_data"]["event_type"] == "CHATBOT_REPLY"
     assert captured["json_data"]["event_payload"]["reply_length"] == 2
+
+
+def test_record_event_does_not_warn_when_insert_returns_empty_body(monkeypatch):
+    warnings = []
+
+    def fake_insert(endpoint, method="GET", json_data=None, params=None):
+        assert endpoint == "chatbot_qa_events"
+        assert method == "POST"
+        return None
+
+    monkeypatch.setattr(
+        supabase_client,
+        "query_supabase_as_service_role",
+        fake_insert,
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.qa_event_repository.logger.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    repository = ChatbotQAEventRepository()
+    repository.record_event(
+        event_type="TOOL_RESULT",
+        user_id="user-1",
+        request_id="req-1",
+        user_message="질문",
+        assistant_message="답변",
+        meta={"source": "PROJECT_TOOL"},
+    )
+
+    assert warnings == []
+
+
+def test_record_event_logs_warning_only_on_service_role_error(monkeypatch):
+    warnings = []
+
+    def fake_insert(endpoint, method="GET", json_data=None, params=None):
+        raise RuntimeError("Supabase REST API service_role 에러 (400): bad payload")
+
+    monkeypatch.setattr(
+        supabase_client,
+        "query_supabase_as_service_role",
+        fake_insert,
+    )
+    monkeypatch.setattr(
+        "backend.services.chatbot.qa_event_repository.logger.warning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+
+    repository = ChatbotQAEventRepository()
+    repository.record_event(
+        event_type="TOOL_RESULT",
+        user_id="user-1",
+        request_id="req-1",
+        user_message="질문",
+        assistant_message="답변",
+        meta={"source": "PROJECT_TOOL"},
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0][0] == "챗봇 QA 이벤트 저장 실패: user_id=%s event_type=%s error=%s"
+    assert warnings[0][1] == "user-1"
+    assert warnings[0][2] == "TOOL_RESULT"
+    assert "bad payload" in warnings[0][3]
 
 
 def test_build_qa_event_payload_keeps_latency_and_error_signal():

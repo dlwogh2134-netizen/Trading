@@ -65,7 +65,7 @@ def test_chatbot_message_route_records_qa_event(monkeypatch):
     )
     inserted = []
     monkeypatch.setattr(
-        "backend.services.supabase_client.safe_query_supabase_as_service_role",
+        "backend.services.supabase_client.query_supabase_as_service_role",
         lambda endpoint, method="GET", json_data=None, params=None: inserted.append({
             "endpoint": endpoint,
             "method": method,

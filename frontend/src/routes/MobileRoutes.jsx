@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import MobileHome from '../pages/mobile/MobileHome.jsx'
 import MobileDashboard from '../pages/mobile/MobileDashboard.jsx'
@@ -14,6 +15,30 @@ import MobileChatbot from '../pages/mobile/MobileChatbot.jsx'
 import { INQUIRY_ROUTES } from '../dashboardConstants.js'
 import MobileBottomNavigation from '../components/mobile/MobileBottomNavigation.jsx'
 import MobileHeader from '../components/mobile/MobileHeader.jsx'
+
+function AdminProtectedRoute({ isLoggedIn, userProfile, children }) {
+  const hasAccess = isLoggedIn && userProfile?.role === 'ADMIN'
+
+  useEffect(() => {
+    if (!isLoggedIn || (userProfile && userProfile.role !== 'ADMIN')) {
+      alert('관리자 권한이 없습니다.')
+    }
+  }, [isLoggedIn, userProfile])
+
+  if (isLoggedIn && !userProfile) {
+    return (
+      <div className="min-h-screen bg-[#07080c] flex items-center justify-center text-slate-400 text-xs">
+        권한 확인 중...
+      </div>
+    )
+  }
+
+  if (!hasAccess) {
+    return <Navigate to="/dashboard" replace />
+  }
+
+  return children
+}
 
 export default function MobileRoutes({
   isLoggedIn,
@@ -117,15 +142,17 @@ export default function MobileRoutes({
           <Route
             path="/admin/ml-data"
             element={(
-              <div className="min-h-screen bg-obsidian-bg px-3 py-4 font-inter text-[#e2e2ec]">
-                <MobileHeader isLoggedIn={isLoggedIn} handleLogout={handleLogout} />
-                <MobileAdminMlData
-                  isLoggedIn={isLoggedIn}
-                  userEmail={userEmail}
-                  handleLogout={handleLogout}
-                  hideHeader
-                />
-              </div>
+              <AdminProtectedRoute isLoggedIn={isLoggedIn} userProfile={userProfile}>
+                <div className="min-h-screen bg-obsidian-bg px-3 py-4 font-inter text-[#e2e2ec]">
+                  <MobileHeader isLoggedIn={isLoggedIn} handleLogout={handleLogout} />
+                  <MobileAdminMlData
+                    isLoggedIn={isLoggedIn}
+                    userEmail={userEmail}
+                    handleLogout={handleLogout}
+                    hideHeader
+                  />
+                </div>
+              </AdminProtectedRoute>
             )}
           />
           <Route path="/login" element={<MobileLogin />} />

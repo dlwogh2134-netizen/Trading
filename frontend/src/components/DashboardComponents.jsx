@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { supabase } from '../supabaseClient'
 import { DASHBOARD_TABS } from '../dashboardConstants.js'
 
 function Rate({ value }) {
@@ -182,7 +183,34 @@ function SectionHeader({ eyebrow, title, action }) {
 function SidebarNav({ activeTab, isOpen, isLoggedIn, onClose, onOpen, onTabChange }) {
   const navigate = useNavigate()
   const { pathname } = useLocation()
-  const visibleTabs = DASHBOARD_TABS.filter((tab) => !tab.authOnly || isLoggedIn)
+  const [role, setRole] = useState('USER')
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setRole('USER')
+      return
+    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data?.role) {
+              setRole(data.role)
+            }
+          })
+      }
+    })
+  }, [isLoggedIn])
+
+  const visibleTabs = DASHBOARD_TABS.filter((tab) => {
+    if (tab.authOnly && !isLoggedIn) return false
+    if (tab.adminOnly && role !== 'ADMIN') return false
+    return true
+  })
   const isRouteActive = (route, exact = false) => route && (exact ? pathname === route : pathname === route || pathname.startsWith(`${route}/`))
 
   if (!isOpen) {

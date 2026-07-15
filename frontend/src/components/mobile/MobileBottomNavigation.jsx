@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { supabase } from '../../supabaseClient'
 import { DASHBOARD_ROUTE, DASHBOARD_TABS } from '../../dashboardConstants.js'
 import SymbolSearch from '../SymbolSearch.jsx'
 
@@ -97,7 +98,34 @@ function SearchSheet({ onClose }) {
 function DashboardSheet({ isLoggedIn, onClose }) {
   const navigate = useNavigate()
   const location = useLocation()
-  const visibleTabs = DASHBOARD_TABS.filter((tab) => !tab.authOnly || isLoggedIn)
+  const [role, setRole] = useState('USER')
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      setRole('USER')
+      return
+    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', session.user.id)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data?.role) {
+              setRole(data.role)
+            }
+          })
+      }
+    })
+  }, [isLoggedIn])
+
+  const visibleTabs = DASHBOARD_TABS.filter((tab) => {
+    if (tab.authOnly && !isLoggedIn) return false
+    if (tab.adminOnly && role !== 'ADMIN') return false
+    return true
+  })
 
   const goToTab = (tab) => {
     if (!tab.enabled) return

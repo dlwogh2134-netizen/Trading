@@ -66,6 +66,24 @@ function formatDateTime(value) {
   })
 }
 
+function formatStatus(status) {
+  if (!status) return '-'
+  const upper = String(status).toUpperCase()
+  const statusMap = {
+    PENDING: '대기 중',
+    APPROVED: '승인됨',
+    REJECTED: '거부됨',
+    FAILED: '실패',
+    COMPLETED: '완료됨',
+    FILLED: '체결 완료',
+    PARTIALLY_FILLED: '부분 체결',
+    CANCELLED: '취소됨',
+    CANCELED: '취소됨',
+    EXECUTED: '체결 완료',
+  }
+  return statusMap[upper] || status
+}
+
 function SummaryCard({ label, value, detail }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
@@ -636,10 +654,11 @@ export default function AdminUsers({ isLoggedIn, userEmail, handleLogout, hideHe
                     <div className="py-10 text-center text-sm font-bold text-rose-400">{tradeError}</div>
                   ) : (
                     <div className="overflow-hidden rounded-lg border border-slate-800">
-                      <div className="grid grid-cols-[130px_100px_minmax(120px,1fr)_80px_90px_90px_110px_110px] bg-[#0f172a] text-xs font-bold text-slate-400">
+                      <div className="grid grid-cols-[130px_100px_minmax(120px,1.2fr)_minmax(110px,1fr)_80px_90px_90px_110px_110px] bg-[#0f172a] text-xs font-bold text-slate-400">
                         <div className="px-3 py-3">일시</div>
                         <div className="px-3 py-3">거래소</div>
                         <div className="px-3 py-3">종목</div>
+                        <div className="px-3 py-3">주문번호</div>
                         <div className="px-3 py-3">구분</div>
                         <div className="px-3 py-3 text-right">수량</div>
                         <div className="px-3 py-3 text-right">단가</div>
@@ -649,18 +668,23 @@ export default function AdminUsers({ isLoggedIn, userEmail, handleLogout, hideHe
                       {tradeRows.length === 0 ? (
                         <div className="px-4 py-10 text-center text-sm font-bold text-slate-500">표시할 거래내역이 없습니다.</div>
                       ) : tradeRows.map((row) => (
-                        <div key={row.id} className="grid grid-cols-[130px_100px_minmax(120px,1fr)_80px_90px_90px_110px_110px] border-t border-slate-800 text-xs">
+                        <div key={row.id} className="grid grid-cols-[130px_100px_minmax(120px,1.2fr)_minmax(110px,1fr)_80px_90px_90px_110px_110px] border-t border-slate-800 text-xs">
                           <div className="px-3 py-3 text-slate-400">{formatDateTime(row.occurredAt)}</div>
                           <div className="px-3 py-3 font-bold text-ai-cyan">{row.exchange}</div>
                           <div className="min-w-0 px-3 py-3">
                             <span className="block truncate font-bold text-white">{row.symbol}</span>
                             <span className="block truncate text-[11px] text-slate-500">{row.sourceLabel}</span>
                           </div>
+                          <div className="min-w-0 px-3 py-3">
+                            <span className="block truncate font-mono text-slate-400" title={row.externalOrderId}>
+                              {row.externalOrderId || '-'}
+                            </span>
+                          </div>
                           <div className="px-3 py-3 font-bold text-slate-200">{row.side}</div>
                           <div className="px-3 py-3 text-right font-mono text-slate-300">{row.quantity ?? '-'}</div>
                           <div className="px-3 py-3 text-right font-mono text-slate-300">{formatCurrency(row.price, row.currency)}</div>
                           <div className="px-3 py-3 text-right font-mono text-white">{formatCurrency(row.orderAmount, row.currency)}</div>
-                          <div className="px-3 py-3 font-bold text-slate-300">{row.status}</div>
+                          <div className="px-3 py-3 font-bold text-slate-300">{formatStatus(row.status)}</div>
                         </div>
                       ))}
                     </div>

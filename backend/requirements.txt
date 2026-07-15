@@ -8,4 +8,6 @@ PyJWT>=2.8.0
 PyYAML>=6.0.1
 pandas>=2.0.0
 yfinance>=0.2.38
-
+scikit-learn==1.6.0
+lightgbm==4.5.0
+joblib==1.4.2
