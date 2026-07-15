@@ -19,7 +19,6 @@ teamproject/
 ├── backend/
 ├── frontend/
 ├── ml/
-├── scratch/
 └── supabase/
 ```
 
@@ -34,7 +33,11 @@ backend/
 │   ├── home.py
 │   ├── keys.py
 │   ├── ml.py
+│   ├── admin_inquiries.py
+│   ├── admin_symbols.py
 │   ├── admin_users.py
+│   ├── chatbot.py
+│   ├── knowledge.py
 │   ├── news.py
 │   ├── disclosures.py
 │   ├── trade.py
@@ -69,15 +72,22 @@ backend/
 │   │   ├── tool_registry.py
 │   │   └── web_fallback_search_service.py
 │   ├── coinone_client.py
+│   ├── crypto_cost_basis_service.py
 │   ├── dart_ingest.py
 │   ├── dart_repository.py
+│   ├── disclosure_knowledge_index_service.py
+│   ├── disclosure_knowledge_sync_service.py
+│   ├── embedding_service.py
 │   ├── error_message_service.py
 │   ├── exchange_client.py
 │   ├── home_service.py
 │   ├── keys_service.py
 │   ├── kis_client.py
 │   ├── kis_market_universe.py
+│   ├── knowledge_chunk_service.py
+│   ├── knowledge_repository.py
 │   ├── lock_service.py
+│   ├── market_calendar_scheduler.py
 │   ├── market_repository.py
 │   ├── market_snapshot_scheduler.py
 │   ├── ml_automation_service.py
@@ -91,7 +101,11 @@ backend/
 │   ├── news_repository.py
 │   ├── news_summary_service.py
 │   ├── order_entry_service.py
+│   ├── open_order_status_sync_service.py
+│   ├── obsidian_service.py
+│   ├── rag_retrieval_service.py
 │   ├── supabase_client.py
+│   ├── symbol_reconciliation_service.py
 │   ├── symbol_metadata.py
 │   ├── token_cache_service.py
 │   ├── toss_client.py
@@ -178,7 +192,10 @@ frontend/
     │   ├── DashboardComponents.jsx
     │   ├── Header.jsx
     │   ├── InvestmentSurveyModal.jsx
-    │   └── SymbolSearch.jsx
+    │   ├── MemberOnlyModal.jsx
+    │   ├── MemberOnlyNotice.jsx
+    │   ├── SymbolSearch.jsx
+    │   └── mobile/
     ├── lib/
     │   ├── apiError.js
     │   └── supabaseClient.js
@@ -187,12 +204,19 @@ frontend/
     │       ├── ChatbotWidget.jsx
     │       ├── OrderEntryFlow.jsx
     │       ├── chatbotApi.js
+    │       ├── chatbotStream.js
+    │       ├── chatbotTimeline.js
+    │       ├── chatbotTrace.js
     │       └── orderEntryModel.js
     └── pages/
+        ├── AdminInquiries.jsx
         ├── AdminInquiryPanel.jsx
         ├── AdminMlData.jsx
+        ├── AdminSymbolReconciliation.jsx
         ├── AdminUsers.jsx
         ├── AssetDetail.jsx
+        ├── assetDetailModel.js
+        ├── assetDetailModel.test.mjs
         ├── AssetsTab.jsx
         ├── Dashboard.jsx
         ├── Home.jsx
@@ -203,7 +227,8 @@ frontend/
         ├── Settings.jsx
         ├── Signup.jsx
         ├── TradeHistoryTab.jsx
-        └── WatchlistTab.jsx
+        ├── WatchlistTab.jsx
+        └── mobile/
 ```
 
 ### frontend 역할 구분
@@ -222,6 +247,10 @@ frontend/
   - 종목 상세
   - 차트, 호가, 체결, 주문 사전검증, ML 신호 카드
   - TOSS 주식 상세 헤더의 종목 유의사항 배지 연동
+- `assetDetailModel.js`
+  - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 주문 상태 라벨, 조건감시 라벨, 심볼 판별, 종목 유의사항 배지 tone 순수 유틸
+- `assetDetailModel.test.mjs`
+  - `assetDetailModel.js`의 순수 함수 Node test
 - `AdminInquiryPanel.jsx`
   - 3분리 모델 자동화 상태 모니터링 및 수동 검증 패널
 - `AdminMlData.jsx`
@@ -309,10 +338,6 @@ supabase/
 ```
 
 이 디렉토리는 존재합니다. 다만 현재 애플리케이션 동작의 일부는 파일 기반 이력과 Supabase best-effort 동기화가 섞여 있으므로, "모든 운영 상태가 Supabase 마이그레이션만으로 완전히 재현된다"고 적으면 사실과 다릅니다.
-
-## scratch
-
-`scratch/`는 운영 코드가 아니라 로컬 확인용 스크립트와 임시 테스트 파일 보관 영역입니다. 문서나 리뷰에서 제품 기능처럼 설명하지 않는 것이 맞습니다.
 
 ## 문서 업데이트 원칙
 

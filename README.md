@@ -15,6 +15,7 @@
   - `home`, `keys`, `ml`, `news`, `trade`, `transfer` Blueprint API
   - `chatbot` Blueprint API: Supabase Auth 검증, 로그인 사용자별 대화 이력 복원·저장, 도구 호출 및 LLM 응답
   - 챗봇 매매 제안은 `trade_proposals.status=PENDING`으로만 생성되며, 승인 카드에서만 주문 승인/거절 가능
+  - 일반 채팅의 자연어 주문 요청은 직접 제안을 만들지 않고 `매매 요청 열기` 액션으로 구조화 주문 폼을 열며, 사용자가 폼에서 계좌·종목·수량·가격을 재확인한 뒤에만 제안 생성 가능
   - 환경 미지정 챗봇 주문 제안은 MOCK이 기본이며 REAL은 사용자가 명시한 경우에만 허용됩니다.
   - 사전검증 실패, API 키 미등록, 지원하지 않는 주문유형, 실거래 10만 원 초과 요청은 PENDING 제안을 생성하지 않습니다.
   - 승인 요청은 Supabase RPC로 원자 선점되어 같은 `proposal_id`가 중복 주문으로 전송되지 않습니다.
@@ -129,6 +130,18 @@ python3 -m ml.src.export_serving_package \
 ```
 
 생성된 패키지는 `manifest.json`에 모델 파일, risk 모델, config, feature 순서, 정책, 성능 요약, 파일 해시를 포함합니다.
+
+### 4. 테스트와 검증
+
+```bash
+python3 -m pytest -q
+npm run lint
+npm run build
+```
+
+루트 `pytest`는 `pytest.ini` 기준으로 `backend/tests`, `tests/backend`를 수집합니다. `ml/test_yf.py`는 야후파이낸스 수동 확인 스크립트 성격이므로 기본 테스트 수집 대상에서 제외합니다.
+
+- 2026-07-15 AssetDetail 1차 리팩토링: 공통 순수 유틸을 `frontend/src/pages/assetDetailModel.js`로 분리하고 명확한 dead code warning을 제거했습니다. 전체 lint 상태는 `0 errors`, `109 warnings`입니다.
 
 ## 주요 API
 

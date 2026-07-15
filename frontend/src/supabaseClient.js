@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 
 const viteEnv = import.meta.env || {}
-const nodeEnv = typeof process !== 'undefined' ? process.env || {} : {}
+const nodeEnv = typeof globalThis.process !== 'undefined' ? globalThis.process.env || {} : {}
 const supabaseUrl = viteEnv.VITE_SUPABASE_URL || nodeEnv.VITE_SUPABASE_URL
 const supabaseAnonKey = viteEnv.VITE_SUPABASE_ANON_KEY || nodeEnv.VITE_SUPABASE_ANON_KEY
 
@@ -49,17 +49,9 @@ export function normalizeWatchlistItem(row = {}) {
     }
   }
 
-  // currency 결정
-  let currency = String(row.currency || '').toUpperCase()
-  if (assetType === 'CRYPTO') {
-    currency = exchange === 'BINANCE' || exchange === 'BINANCE_UM_FUTURES' ? 'USDT' : 'KRW'
-  } else {
-    if (marketCountry === 'US') {
-      currency = 'USD'
-    } else {
-      currency = 'KRW'
-    }
-  }
+  const currency = assetType === 'CRYPTO'
+    ? (exchange === 'BINANCE' || exchange === 'BINANCE_UM_FUTURES' ? 'USDT' : 'KRW')
+    : (marketCountry === 'US' ? 'USD' : 'KRW')
   const latestPrice = parseWatchNumber(row.latest_price ?? row.latestPrice ?? row.current_price ?? row.live_price ?? row.price)
   const changeRate = parseWatchNumber(row.change_rate ?? row.changeRate ?? row.live_change_rate ?? row.change)
   const averagePrice = parseWatchNumber(row.average_price ?? row.averagePrice ?? row.current_price ?? row.live_price ?? row.price)
