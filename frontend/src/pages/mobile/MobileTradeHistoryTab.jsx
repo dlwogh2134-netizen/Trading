@@ -2,136 +2,23 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../supabaseClient'
 import { buildApiErrorText } from '../../lib/apiError.js'
 import AssetLogo from '../../components/AssetLogo.jsx'
+import {
+  BROKER_HISTORY_SELECT_FIELDS,
+  TRADE_EXCHANGE_LABELS,
+  TRADE_EXCHANGE_OPTIONS,
+  TRADE_HISTORY_SELECT_FIELDS,
+  isCancelReplaceExchange,
+  isDeletableTradeHistoryItem,
+  isMissingBrokerHistoryTableError,
+  mapBrokerHistoryToTrade,
+  mapProposalToTrade,
+  mapTransferToTrades,
+  sortTradeHistoryRows,
+} from '../tradeHistoryModel.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
-const formatNumber = (value, options = {}) => {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return '-'
-  return numericValue.toLocaleString('ko-KR', options)
-}
-
-const formatCurrency = (value, currency = 'KRW') => {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return '-'
-  const prefix = currency === 'USD' ? '$' : '₩'
-  return `${prefix}${formatNumber(numericValue, {
-    minimumFractionDigits: currency === 'USD' ? 2 : 0,
-    maximumFractionDigits: currency === 'USD' ? 2 : 0,
-  })}`
-}
-
-const formatUnitCurrency = (value, currency = 'KRW') => {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return '-'
-  const prefix = currency === 'USD' ? '$' : '₩'
-  return `${prefix}${formatNumber(numericValue, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 1,
-  })}`
-}
-
-const isActionableOrderStatus = (status) => (
-  ['APPROVED', 'ORDERED', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED'].includes(String(status || '').toUpperCase())
-)
-
-const mapTradeStatus = (status) => {
-  const normalizedStatus = String(status || '').toUpperCase()
-  if (normalizedStatus === 'PENDING') return '승인대기'
-  if (['APPROVED', 'ORDERED'].includes(normalizedStatus)) return '주문접수'
-  if (normalizedStatus === 'OPEN') return '미체결'
-  if (normalizedStatus === 'PARTIALLY_FILLED') return '부분체결'
-  if (normalizedStatus === 'MODIFIED') return '정정접수'
-  if (normalizedStatus === 'EXECUTED') return '체결완료'
-  if (['FAILED', 'REJECTED', 'EXPIRED'].includes(normalizedStatus)) return '주문실패'
-  if (['CANCELED', 'CANCELLED'].includes(normalizedStatus)) return '취소완료'
-  return normalizedStatus || '-'
-}
-
-const mapTradeSide = (side) => (String(side || '').toUpperCase() === 'SELL' ? '매도' : '매수')
-
-const isMissingBrokerHistoryTableError = (error) => {
-  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase()
-  return message.includes('broker_order_history') && (
-    message.includes('not found')
-    || message.includes('does not exist')
-    || message.includes('could not find')
-    || message.includes('pgrst')
-  )
-}
-
-const TRADE_HISTORY_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,order_amount,ord_type,market_country,currency,broker_env,client_order_id,external_order_id,external_order_org_no,status,failure_reason,created_at'
-const BROKER_HISTORY_SELECT_FIELDS = 'id,exchange,broker_env,symbol,market_country,side,price,quantity,order_amount,status,raw_status,currency,client_order_id,external_order_id,filled_quantity,average_filled_price,filled_amount,commission,tax,ordered_at,filled_at,settlement_date'
-const isCancelReplaceExchange = (exchange) => ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(String(exchange || '').toUpperCase())
-const TRADE_EXCHANGE_OPTIONS = ['ALL', 'TOSS', 'KIS', 'COINONE', 'BINANCE', 'BINANCE_UM_FUTURES']
-const TRADE_EXCHANGE_LABELS = {
-  ALL: '전체',
-  TOSS: '토스증권',
-  KIS: '한국투자증권',
-  COINONE: '코인원',
-  BINANCE: '바이낸스 현물',
-  BINANCE_UM_FUTURES: '바이낸스 선물',
-}
-const DELETABLE_TRADE_STATUSES = new Set(['주문실패', '취소완료', '출금실패'])
-const DELETABLE_SOURCE_TYPES = new Set(['APP', 'TRANSFER'])
 const symbolDisplayNameCache = new Map()
-
-const isDeletableTradeHistoryItem = (trade) => (
-  DELETABLE_SOURCE_TYPES.has(trade?.sourceType)
-  && DELETABLE_TRADE_STATUSES.has(trade?.status)
-)
-
-const formatCryptoAmount = (value, symbol = '') => {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return '-'
-  const suffix = symbol ? ` ${String(symbol).toUpperCase()}` : ''
-  return `${formatNumber(numericValue, { maximumFractionDigits: 8 })}${suffix}`
-}
-
-const formatSignedCryptoAmount = (value, symbol = '') => {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue)) return '-'
-  const sign = numericValue > 0 ? '+' : ''
-  return `${sign}${formatCryptoAmount(numericValue, symbol)}`
-}
-
-const getTransferDateParts = (value) => {
-  const parsed = value ? new Date(value) : null
-  const isValidDate = parsed && !Number.isNaN(parsed.getTime())
-  return {
-    date: isValidDate ? parsed.toISOString().slice(0, 10) : '-',
-    time: isValidDate
-      ? parsed.toLocaleTimeString('ko-KR', {
-        hour12: false,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      })
-      : '-',
-  }
-}
-
-const getTransferFee = (row = {}) => (
-  Number(row.withdraw_fee ?? row.precheck_payload?.withdrawal_fee ?? 0)
-)
-
-const getTransferReceivedAmount = (row = {}) => {
-  const receivedAmount = Number(row.received_amount)
-  if (Number.isFinite(receivedAmount) && receivedAmount > 0) return receivedAmount
-  const depositAmount = Number(row.binance_deposit_payload?.amount)
-  if (Number.isFinite(depositAmount) && depositAmount > 0) return depositAmount
-  const expectedAmount = Number(row.expected_receive_amount ?? row.precheck_payload?.estimated_receive_amount)
-  if (Number.isFinite(expectedAmount) && expectedAmount > 0) return expectedAmount
-  return 0
-}
-
-const mapTransferStatus = (status, type) => {
-  const normalizedStatus = String(status || '').toUpperCase()
-  if (normalizedStatus === 'COMPLETED') return type === 'DEPOSIT' ? '입금완료' : '출금완료'
-  if (['FAILED', 'NEEDS_REVIEW', 'REJECTED'].includes(normalizedStatus)) return '출금실패'
-  if (['APPROVED', 'SUBMITTED', 'WITHDRAWAL_REGISTER', 'WITHDRAWAL_WAIT', 'PENDING'].includes(normalizedStatus)) return '전송중'
-  return normalizedStatus || '-'
-}
 
 const fetchSymbolDisplayNames = async (proposals = []) => {
   const symbols = Array.from(new Set(
@@ -177,188 +64,6 @@ const hydrateTradeProposals = async (proposals = []) => {
   })
 }
 
-const mapProposalToTrade = (proposal) => {
-  const createdAt = proposal.created_at ? new Date(proposal.created_at) : null
-  const isValidDate = createdAt && !Number.isNaN(createdAt.getTime())
-  const date = isValidDate ? createdAt.toISOString().slice(0, 10) : '-'
-  const time = isValidDate
-    ? createdAt.toLocaleTimeString('ko-KR', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
-    : '-'
-  const currency = proposal.currency || (proposal.exchange === 'BINANCE' ? 'USD' : 'KRW')
-  const price = proposal.price ?? null
-  const quantity = proposal.volume ?? null
-  const computedAmount = proposal.order_amount ?? (
-    price !== null && quantity !== null ? Number(price) * Number(quantity) : null
-  )
-  const ticker = proposal.symbol || proposal.ticker || '-'
-  const displayName = proposal.display_name || ticker
-
-  return {
-    id: proposal.id,
-    deleteTargetId: proposal.id,
-    sourceType: 'APP',
-    sourceLabel: 'AE 거래',
-    sourceDescription: 'AE에서 생성·승인한 앱 주문',
-    rawStatus: proposal.status,
-    isActionable: isActionableOrderStatus(proposal.status) && Boolean(proposal.external_order_id),
-    brokerEnv: proposal.broker_env || 'REAL',
-    orderOrgNo: proposal.external_order_org_no || '',
-    marketCountry: proposal.market_country || '',
-    rawPrice: price,
-    rawQuantity: quantity,
-    date,
-    time,
-    exchange: proposal.exchange || '-',
-    symbolName: displayName,
-    ticker,
-    assetType: proposal.asset_type || (['COINONE', 'BINANCE'].includes(proposal.exchange) ? 'CRYPTO' : 'STOCK'),
-    side: mapTradeSide(proposal.side),
-    currency,
-    price: price === null ? '-' : formatUnitCurrency(price, currency),
-    quantity: quantity === null ? '-' : formatNumber(quantity, { maximumFractionDigits: 8 }),
-    amount: computedAmount === null ? '-' : formatCurrency(computedAmount, currency),
-    status: mapTradeStatus(proposal.status, proposal.side),
-    exchangeRate: '-',
-    fees: '-',
-    orderNumber: proposal.external_order_id || proposal.client_order_id || proposal.id,
-  }
-}
-
-const mapBrokerHistoryToTrade = (order, symbolNameMap = {}) => {
-  const orderedAt = order.ordered_at ? new Date(order.ordered_at) : null
-  const isValidDate = orderedAt && !Number.isNaN(orderedAt.getTime())
-  const date = isValidDate ? orderedAt.toISOString().slice(0, 10) : '-'
-  const time = isValidDate
-    ? orderedAt.toLocaleTimeString('ko-KR', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
-    : '-'
-  const symbol = String(order.symbol || '-').trim().toUpperCase()
-  const displayName = symbolNameMap[symbol] || symbol || '-'
-  const currency = order.currency || (order.market_country === 'US' ? 'USD' : 'KRW')
-  const rawPrice = order.average_filled_price ?? order.price ?? null
-  const rawQuantity = order.filled_quantity ?? order.quantity ?? null
-  const computedAmount = order.filled_amount ?? order.order_amount ?? (
-    rawPrice !== null && rawQuantity !== null ? Number(rawPrice) * Number(rawQuantity) : null
-  )
-  const normalizedStatus = String(order.status || order.raw_status || '').toUpperCase()
-
-  return {
-    id: `broker-${order.id}`,
-    sourceType: 'BROKER',
-    sourceLabel: '토스 앱/브로커',
-    sourceDescription: '거래소 앱 또는 브로커 원장에서 불러온 주문',
-    rawStatus: normalizedStatus,
-    isActionable: false,
-    brokerEnv: order.broker_env || 'REAL',
-    orderOrgNo: '',
-    marketCountry: order.market_country || '',
-    rawPrice,
-    rawQuantity,
-    date,
-    time,
-    exchange: order.exchange || '-',
-    symbolName: displayName,
-    ticker: symbol,
-    assetType: order.asset_type || (['COINONE', 'BINANCE'].includes(order.exchange) ? 'CRYPTO' : 'STOCK'),
-    side: mapTradeSide(order.side),
-    currency,
-    price: rawPrice === null ? '-' : formatUnitCurrency(rawPrice, currency),
-    quantity: rawQuantity === null ? '-' : formatNumber(rawQuantity, { maximumFractionDigits: 8 }),
-    amount: computedAmount === null ? '-' : formatCurrency(computedAmount, currency),
-    status: mapTradeStatus(normalizedStatus, order.side),
-    exchangeRate: '-',
-    fees: (order.commission || order.tax)
-      ? formatCurrency((Number(order.commission || 0) + Number(order.tax || 0)), currency)
-      : '-',
-    orderNumber: order.external_order_id || order.client_order_id || order.id,
-  }
-}
-
-const mapTransferToTrades = (transfer) => {
-  const currency = String(transfer.currency || '').toUpperCase()
-  const fee = getTransferFee(transfer)
-  const feeCurrency = transfer.fee_currency || currency
-  const withdrawParts = getTransferDateParts(transfer.submitted_at || transfer.created_at)
-  const depositParts = getTransferDateParts(transfer.completed_at || transfer.updated_at || transfer.created_at)
-  const fromExchange = transfer.from_exchange || 'COINONE'
-  const toExchange = transfer.to_exchange || 'BINANCE'
-  const amount = Number(transfer.amount)
-  const receivedAmount = getTransferReceivedAmount(transfer)
-  const feeText = fee > 0 ? `수수료 ${formatCryptoAmount(fee, feeCurrency)}` : '-'
-  const rows = [
-    {
-      id: `transfer-withdraw-${transfer.id}`,
-      deleteTargetId: transfer.id,
-      sourceType: 'TRANSFER',
-      sourceLabel: 'AE 자산이동',
-      sourceDescription: 'AE에서 요청한 자산 이동',
-      rawStatus: transfer.status,
-      isActionable: false,
-      brokerEnv: 'REAL',
-      orderOrgNo: '',
-      marketCountry: '',
-      rawPrice: null,
-      rawQuantity: Number.isFinite(amount) ? -amount : null,
-      date: withdrawParts.date,
-      time: withdrawParts.time,
-      exchange: fromExchange,
-      symbolName: `${currency} 출금`,
-      ticker: currency,
-      side: '출금',
-      currency,
-      price: '-',
-      quantity: Number.isFinite(amount) ? formatCryptoAmount(-amount, currency) : '-',
-      amount: feeText,
-      status: mapTransferStatus(transfer.status, 'WITHDRAW'),
-      exchangeRate: '-',
-      fees: fee > 0 ? formatCryptoAmount(fee, feeCurrency) : '-',
-      orderNumber: transfer.external_transaction_id || transfer.id,
-    },
-  ]
-
-  if (String(transfer.status || '').toUpperCase() === 'COMPLETED' && receivedAmount > 0) {
-    rows.push({
-      id: `transfer-deposit-${transfer.id}`,
-      deleteTargetId: transfer.id,
-      sourceType: 'TRANSFER',
-      sourceLabel: 'AE 자산이동',
-      sourceDescription: 'AE에서 요청한 자산 이동',
-      rawStatus: transfer.status,
-      isActionable: false,
-      brokerEnv: 'REAL',
-      orderOrgNo: '',
-      marketCountry: '',
-      rawPrice: null,
-      rawQuantity: receivedAmount,
-      date: depositParts.date,
-      time: depositParts.time,
-      exchange: toExchange,
-      symbolName: `${currency} 입금`,
-      ticker: currency,
-      side: '입금',
-      currency,
-      price: '-',
-      quantity: formatSignedCryptoAmount(receivedAmount, currency),
-      amount: '-',
-      status: mapTransferStatus(transfer.status, 'DEPOSIT'),
-      exchangeRate: '-',
-      fees: '-',
-      orderNumber: transfer.external_transaction_id || transfer.id,
-    })
-  }
-
-  return rows
-}
-
 export default function TradeHistoryTab({ mobileLayout = false }) {
   const [tradeHistory, setTradeHistory] = useState([])
   const [loading, setLoading] = useState(true)
@@ -388,15 +93,11 @@ export default function TradeHistoryTab({ mobileLayout = false }) {
   const mergeTrades = async (proposals = [], brokerOrders = [], transferRows = []) => {
     const hydratedRows = await hydrateTradeProposals(proposals)
     const brokerSymbolMap = await fetchSymbolDisplayNames(brokerOrders)
-    return [
+    return sortTradeHistoryRows([
       ...hydratedRows.map(mapProposalToTrade),
       ...brokerOrders.map((order) => mapBrokerHistoryToTrade(order, brokerSymbolMap)),
       ...transferRows.flatMap(mapTransferToTrades),
-    ].sort((a, b) => {
-      const left = new Date(`${a.date}T${a.time === '-' ? '00:00:00' : a.time}`).getTime()
-      const right = new Date(`${b.date}T${b.time === '-' ? '00:00:00' : b.time}`).getTime()
-      return right - left
-    })
+    ])
   }
 
   const fetchTransferHistory = async (authHeader) => {
