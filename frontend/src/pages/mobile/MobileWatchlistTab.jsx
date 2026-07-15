@@ -7,38 +7,18 @@ import AssetLogo from '../../components/AssetLogo.jsx'
 import { SectionHeader } from '../../components/DashboardComponents.jsx'
 import { formatNewsDate, mergeLatestNews } from '../../dashboardUtils.js'
 import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
+import {
+  CRYPTO_INTERVALS,
+  STOCK_INTERVALS,
+  WATCHLIST_MARKET_FILTERS,
+  formatWatchlistCandles,
+  getCryptoWatchlistChartConfig,
+  getNextWatchlistSelectedId,
+  getWatchlistChartConfig,
+  getWatchlistMarketFilterKey,
+} from '../watchlistModel.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
-
-const STOCK_INTERVALS = [
-  { label: '1분', value: '1m' },
-  { label: '5분', value: '5m' },
-  { label: '15분', value: '15m' },
-  { label: '30분', value: '30m' },
-  { label: '1시간', value: '1h' },
-  { label: '일봉', value: '1d' },
-  { label: '주봉', value: '1w' },
-  { label: '월봉', value: '1M' },
-]
-
-const CRYPTO_INTERVALS = [
-  { label: '1분', value: '1m' },
-  { label: '5분', value: '5m' },
-  { label: '15분', value: '15m' },
-  { label: '30분', value: '30m' },
-  { label: '1시간', value: '1h' },
-  { label: '4시간', value: '4h' },
-  { label: '일봉', value: '1d' },
-  { label: '주봉', value: '1w' },
-  { label: '월봉', value: '1M' },
-]
-
-const WATCHLIST_MARKET_FILTERS = [
-  { key: 'all', label: '전체' },
-  { key: 'domestic', label: '국내주식' },
-  { key: 'overseas', label: '해외주식' },
-  { key: 'crypto', label: '코인' },
-]
 
 const HeartIcon = ({ className = '', filled = false }) => (
   <svg
@@ -54,28 +34,6 @@ const HeartIcon = ({ className = '', filled = false }) => (
     <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78Z" />
   </svg>
 )
-
-function getWatchlistMarketFilterKey(item = {}) {
-  const assetType = String(item.assetType || item.asset_type || '').toUpperCase()
-  const marketCountry = String(item.marketCountry || item.market_country || '').toUpperCase()
-  const market = String(item.market || '')
-
-  if (assetType === 'CRYPTO' || market.includes('코인')) return 'crypto'
-  if (marketCountry === 'US' || market.includes('해외')) return 'overseas'
-  return 'domestic'
-}
-
-function normalizeCandleTime(rawTime) {
-  if (typeof rawTime === 'number' && !Number.isNaN(rawTime)) return rawTime
-  if (typeof rawTime !== 'string' || !rawTime.trim()) return null
-
-  const value = rawTime.trim()
-  if (/^\d+$/.test(value)) return Number.parseInt(value, 10)
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
-
-  const parsed = new Date(value.replace(' ', 'T'))
-  return Number.isNaN(parsed.getTime()) ? null : Math.floor(parsed.getTime() / 1000)
-}
 
 function formatChartDateTime(unixSeconds) {
   const date = new Date(unixSeconds * 1000)
@@ -103,19 +61,6 @@ async function getAuthHeader() {
   return session?.access_token ? `Bearer ${session.access_token}` : null
 }
 
-function getChartConfig(item, assetType) {
-  const sourcePayload = item?.sourcePayload || {}
-  const exchange = String(item?.exchange || item?.account || sourcePayload.exchange || (assetType === 'CRYPTO' ? 'COINONE' : 'TOSS')).toUpperCase()
-  const brokerEnv = String(sourcePayload.broker_env || sourcePayload.env || (exchange === 'KIS' ? 'REAL' : 'REAL')).toUpperCase()
-  return { exchange, brokerEnv }
-}
-
-function getCryptoChartConfig(chartMode = 'KRW') {
-  if (chartMode === 'USD') return { exchange: 'BINANCE', brokerEnv: 'REAL' }
-  if (chartMode === 'FUTURES') return { exchange: 'BINANCE_UM_FUTURES', brokerEnv: 'REAL' }
-  return { exchange: 'COINONE', brokerEnv: 'REAL' }
-}
-
 function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoChartModeChange, onLatestPriceChange, compact = false }) {
   const defaultInterval = assetType === 'CRYPTO' ? '1h' : '1d'
   const [chartInterval, setChartInterval] = useState(defaultInterval)
@@ -128,20 +73,32 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
   const hasAppliedInitialFitRef = useRef(false)
   const abortControllerRef = useRef(null)
   const chartHeight = compact ? 270 : 360
+  const itemId = item?.id || ''
+  const itemExchange = item?.exchange || ''
+  const itemAccount = item?.account || ''
+  const itemSourcePayload = item?.sourcePayload || {}
+  const itemSourceExchange = itemSourcePayload.exchange || ''
+  const itemSourceBrokerEnv = itemSourcePayload.broker_env || ''
+  const itemSourceEnv = itemSourcePayload.env || ''
 
   useEffect(() => {
-    setChartInterval(defaultInterval)
-    setCandleData([])
-    setChartError('')
-    onLatestPriceChange?.(null)
-    hasAppliedInitialFitRef.current = false
-  }, [item?.id, defaultInterval, onLatestPriceChange])
+    const timerId = window.setTimeout(() => {
+      setChartInterval(defaultInterval)
+      setCandleData([])
+      setChartError('')
+      onLatestPriceChange?.(null)
+      hasAppliedInitialFitRef.current = false
+    }, 0)
+
+    return () => window.clearTimeout(timerId)
+  }, [itemId, defaultInterval, onLatestPriceChange])
 
   useEffect(() => {
     if (!chartContainerRef.current || chartRef.current) return
 
-    const containerWidth = chartContainerRef.current.clientWidth || chartContainerRef.current.parentElement?.clientWidth || 800
-    const chart = createChart(chartContainerRef.current, {
+    const chartContainer = chartContainerRef.current
+    const containerWidth = chartContainer.clientWidth || chartContainer.parentElement?.clientWidth || 800
+    const chart = createChart(chartContainer, {
       layout: {
         background: { type: 'solid', color: '#0e1529' },
         textColor: '#94a3b8',
@@ -185,8 +142,8 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
     candleSeriesRef.current = candleSeries
 
     const handleResize = () => {
-      if (!chartRef.current || !chartContainerRef.current) return
-      const nextWidth = chartContainerRef.current.clientWidth || 800
+      if (!chartRef.current) return
+      const nextWidth = chartContainer.clientWidth || 800
       chartRef.current.applyOptions({ width: nextWidth, height: chartHeight })
     }
 
@@ -199,12 +156,12 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
       chartRef.current = null
       candleSeriesRef.current = null
       hasAppliedInitialFitRef.current = false
-      if (chartContainerRef.current) chartContainerRef.current.innerHTML = ''
+      chartContainer.innerHTML = ''
     }
   }, [chartHeight])
 
   useEffect(() => {
-    if (!item?.id) return
+    if (!itemId) return
 
     let isMounted = true
 
@@ -217,12 +174,20 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
 
       try {
         const { exchange, brokerEnv } = assetType === 'CRYPTO'
-          ? getCryptoChartConfig(cryptoChartMode)
-          : getChartConfig(item, assetType)
+          ? getCryptoWatchlistChartConfig(cryptoChartMode)
+          : getWatchlistChartConfig({
+              exchange: itemExchange,
+              account: itemAccount,
+              sourcePayload: {
+                exchange: itemSourceExchange,
+                broker_env: itemSourceBrokerEnv,
+                env: itemSourceEnv,
+              },
+            }, assetType)
         const authHeader = await getAuthHeader()
         const params = new URLSearchParams({
           exchange,
-          symbol: item.id,
+          symbol: itemId,
           interval: chartInterval,
           broker_env: brokerEnv,
           count: '300',
@@ -238,39 +203,7 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
           throw new Error(payload.message || '차트 데이터를 불러오지 못했습니다.')
         }
 
-        const formatted = payload.data
-          .map((candle) => ({
-            time: normalizeCandleTime(candle.time),
-            open: Number.parseFloat(candle.open),
-            high: Number.parseFloat(candle.high),
-            low: Number.parseFloat(candle.low),
-            close: Number.parseFloat(candle.close),
-            volume: Number.parseFloat(candle.volume || 0),
-          }))
-          .filter((candle) => {
-            const validTime = (typeof candle.time === 'number' && !Number.isNaN(candle.time))
-              || (typeof candle.time === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(candle.time))
-            return validTime
-              && !Number.isNaN(candle.open)
-              && !Number.isNaN(candle.high)
-              && !Number.isNaN(candle.low)
-              && !Number.isNaN(candle.close)
-          })
-          .sort((a, b) => {
-            if (typeof a.time === 'number' && typeof b.time === 'number') return a.time - b.time
-            return String(a.time).localeCompare(String(b.time))
-          })
-
-        const seenTimes = new Set()
-        const unique = []
-        for (let index = formatted.length - 1; index >= 0; index -= 1) {
-          const candle = formatted[index]
-          if (!seenTimes.has(candle.time)) {
-            seenTimes.add(candle.time)
-            unique.push(candle)
-          }
-        }
-        unique.reverse()
+        const unique = formatWatchlistCandles(payload.data)
 
         if (!unique.length) throw new Error('표시 가능한 차트 데이터가 없습니다.')
         if (isMounted) {
@@ -296,7 +229,7 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
       isMounted = false
       if (abortControllerRef.current) abortControllerRef.current.abort()
     }
-  }, [item?.id, item?.exchange, item?.account, assetType, chartInterval, cryptoChartMode, onLatestPriceChange])
+  }, [itemId, itemExchange, itemAccount, itemSourceExchange, itemSourceBrokerEnv, itemSourceEnv, assetType, chartInterval, cryptoChartMode, onLatestPriceChange])
 
   useEffect(() => {
     if (!chartRef.current || !candleSeriesRef.current) return
@@ -320,7 +253,7 @@ function WatchlistCandlestickChart({ item, assetType, cryptoChartMode, onCryptoC
         <div className="min-w-0">
           <p className="truncate text-xs font-bold text-white">{item?.name || item?.id}</p>
           <p className="mt-0.5 truncate font-mono text-[10px] text-slate-500">
-            {(assetType === 'CRYPTO' ? getCryptoChartConfig(cryptoChartMode) : getChartConfig(item, assetType)).exchange} · {item?.id}
+            {(assetType === 'CRYPTO' ? getCryptoWatchlistChartConfig(cryptoChartMode) : getWatchlistChartConfig(item, assetType)).exchange} · {item?.id}
           </p>
         </div>
         <div className="col-span-2 ml-auto flex min-w-0 flex-wrap justify-end gap-1 md:col-span-1">
@@ -637,21 +570,25 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
   }, [])
 
   useEffect(() => {
-    setSelectedId((current) => {
-      if (current && filteredWatchlistItems.some((item) => item.id === current)) return current
-      return filteredWatchlistItems[0]?.id || ''
-    })
-  }, [marketFilter, watchlistItems])
+    const timerId = window.setTimeout(() => {
+      setSelectedId((current) => getNextWatchlistSelectedId(current, filteredWatchlistItems))
+    }, 0)
+
+    return () => window.clearTimeout(timerId)
+  }, [filteredWatchlistItems])
 
   useEffect(() => {
     if (!selectedItem) return
 
     let isMounted = true
-    setNewsSyncMessage({ text: '', isError: false })
-    loadWatchlistNewsForItem(selectedItem, () => isMounted)
+    const timerId = window.setTimeout(() => {
+      setNewsSyncMessage({ text: '', isError: false })
+      loadWatchlistNewsForItem(selectedItem, () => isMounted)
+    }, 0)
 
     return () => {
       isMounted = false
+      window.clearTimeout(timerId)
     }
   }, [selectedItem])
 
