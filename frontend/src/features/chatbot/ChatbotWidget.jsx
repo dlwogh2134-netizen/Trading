@@ -956,6 +956,8 @@ export default function ChatbotWidget({
     submitMessage()
   }
 
+  const visiblePendingProposals = pendingProposals.filter(isChatbotApprovalProposal)
+
   return (
     <>
       {(isOpen || isMobilePage) && (
@@ -1070,7 +1072,7 @@ export default function ChatbotWidget({
                 <img src="/chatbot-bot.png" alt="" className="h-full w-full object-cover object-top" />
               </div>
             ) : null}
-            {buildChatbotTimeline(messages, pendingProposals).map((item) => (
+            {buildChatbotTimeline(messages, visiblePendingProposals).map((item) => (
               item.type === 'message'
                 ? <ChatMessage key={item.id} message={item.data} onAction={handleAction} />
                 : (
