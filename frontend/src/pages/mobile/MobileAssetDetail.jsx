@@ -13,86 +13,23 @@ import {
   MobileAssetOrderSection,
 } from './detail/MobileAssetDetailSections.jsx'
 import { preserveMobileDeviceParam } from './mobileRouteUtils.js'
+import {
+  ACTIONABLE_ORDER_STATUSES,
+  getAutoExecutionModeLabel,
+  getAutoRuleStatusLabel,
+  getAutoTriggerLabel,
+  getOrderSideLabel,
+  getOrderStatusLabel,
+  getStockWarningBadgeTone,
+  isActionableOrderStatus,
+  isCancelReplaceExchange,
+  isUsStockSymbol,
+  normalizeStockSymbol,
+} from '../assetDetailModel.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 const OPEN_ORDER_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,side,price,volume,ord_type,currency,broker_env,external_order_id,status,created_at'
 const AUTO_RULE_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,broker_env,entry_price,investment_amount,quantity,target_profit_rate,stop_loss_rate,execution_mode,trigger_side,trigger_price,triggered_at,last_checked_at,last_error,status,created_at,updated_at'
-const ACTIONABLE_ORDER_STATUSES = ['PENDING', 'APPROVED', 'ORDERED', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED']
-const STOCK_WARNING_BADGE_META = {
-  TRADING_SUSPENDED: {
-    tone: 'border-rose-500/50 bg-rose-500/15 text-rose-200',
-  },
-  LIQUIDATION_TRADING: {
-    tone: 'border-rose-500/40 bg-rose-500/12 text-rose-300',
-  },
-  INVESTMENT_RISK: {
-    tone: 'border-orange-500/40 bg-orange-500/12 text-orange-300',
-  },
-  INVESTMENT_WARNING: {
-    tone: 'border-amber-500/40 bg-amber-500/12 text-amber-300',
-  },
-  OVERHEATED: {
-    tone: 'border-yellow-500/40 bg-yellow-500/12 text-yellow-200',
-  },
-  VI_STATIC_AND_DYNAMIC: {
-    tone: 'border-sky-500/40 bg-sky-500/12 text-sky-300',
-  },
-  VI_STATIC: {
-    tone: 'border-sky-500/40 bg-sky-500/12 text-sky-300',
-  },
-  VI_DYNAMIC: {
-    tone: 'border-sky-500/40 bg-sky-500/12 text-sky-300',
-  },
-  STOCK_WARRANTS: {
-    tone: 'border-fuchsia-500/40 bg-fuchsia-500/12 text-fuchsia-300',
-  },
-}
-
-const isActionableOrderStatus = (status) => ACTIONABLE_ORDER_STATUSES.includes(String(status || '').toUpperCase())
-const isCancelReplaceExchange = (exchange) => ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(String(exchange || '').toUpperCase())
-const getStockWarningBadgeTone = (warningType) => STOCK_WARNING_BADGE_META[String(warningType || '').toUpperCase()]?.tone || 'border-slate-600 bg-slate-800/70 text-slate-200'
-
-const getOrderStatusLabel = (status) => {
-  const normalized = String(status || '').toUpperCase()
-  if (['PENDING', 'OPEN', 'PARTIALLY_FILLED', 'MODIFIED'].includes(normalized)) return '미체결'
-  if (['APPROVED', 'ORDERED'].includes(normalized)) return '접수 완료'
-  if (normalized === 'EXECUTED') return '체결완료'
-  if (['CANCELED', 'CANCELLED'].includes(normalized)) return '취소완료'
-  if (['FAILED', 'REJECTED', 'EXPIRED'].includes(normalized)) return '실패'
-  return normalized || '-'
-}
-
-const getOrderSideLabel = (side) => (String(side || '').toUpperCase() === 'SELL' ? '매도' : '매수')
-
-const getAutoRuleStatusLabel = (status) => {
-  const normalized = String(status || '').toUpperCase()
-  if (normalized === 'RUNNING') return '감시 중'
-  if (normalized === 'COMPLETED') return '완료'
-  if (normalized === 'STOPPED') return '정지'
-  return normalized || '-'
-}
-
-const getAutoExecutionModeLabel = (mode) => {
-  const normalized = String(mode || '').toUpperCase()
-  if (normalized === 'AUTO') return '조건 도달 시 자동 매도'
-  return '조건 도달 시 매도 제안'
-}
-
-const getAutoTriggerLabel = (triggerSide) => {
-  const normalized = String(triggerSide || '').toUpperCase()
-  if (normalized === 'TAKE_PROFIT') return '익절 도달'
-  if (normalized === 'STOP_LOSS') return '손절 도달'
-  return '아직 미도달'
-}
-
-const normalizeStockSymbol = (value) => String(value || '').trim().toUpperCase()
-const isDomesticStockSymbol = (value) => /^[0-9A-Z]{6,7}$/.test(normalizeStockSymbol(value))
-const isUsStockSymbol = (value, market = '') => {
-  const normalizedMarket = String(market || '').trim().toUpperCase()
-  if (['KR', 'KOSPI', 'KOSDAQ', 'KONEX', '국내'].includes(normalizedMarket)) return false
-  if (['US', 'USA', 'NASDAQ', 'NYSE', 'AMEX'].includes(normalizedMarket)) return true
-  return !isDomesticStockSymbol(value)
-}
 
 export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userProfile, hideHeader = false, mobileLayout = false }) {
   const { assetType, symbol } = useParams()
@@ -1967,7 +1904,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         if (candleSeriesRef.current) {
           try {
             candleSeriesRef.current.setData([])
-          } catch (err) {}
+          } catch {
+            return
+          }
         }
       }
     } catch (error) {
@@ -1979,7 +1918,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       if (candleSeriesRef.current) {
         try {
           candleSeriesRef.current.setData([])
-        } catch (err) {}
+        } catch {
+          return
+        }
       }
     } finally {
       candlesInFlightRef.current = false
@@ -2029,8 +1970,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           setPriceChangeRate(candleJson.meta.change_rate)
         }
       }
-    } catch (err) {
-      // quote fetch failure is non-critical
+    } catch {
+      return
     }
   }
 
@@ -2427,8 +2368,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     if (!chartContainerRef.current || chartRef.current) return
 
     let chart = null
-    let candleSeries = null
-
     try {
       const containerWidth = chartContainerRef.current.clientWidth || chartContainerRef.current.parentElement?.clientWidth || 800
 
@@ -2468,7 +2407,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         height: 300,
       })
 
-      candleSeries = chart.addSeries(CandlestickSeries, {
+      const candleSeries = chart.addSeries(CandlestickSeries, {
         upColor: '#ef4444', // 한국 상승 빨강
         downColor: '#3b82f6', // 한국 하락 파랑
         borderVisible: false,
