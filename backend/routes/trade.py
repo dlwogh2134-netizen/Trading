@@ -830,6 +830,18 @@ def _manual_order_matches_existing(existing: dict, order_data: dict) -> bool:
     )
 
 
+def _merge_manual_order_payload_marker(proposal: dict | None, payload: dict | None) -> dict:
+    """수동 주문 식별자는 주문 결과 저장 중에도 유지합니다."""
+    merged = dict(payload or {})
+    source_payload = (proposal or {}).get("raw_order_payload") or {}
+    if not isinstance(source_payload, dict):
+        return merged
+    for key in ("source", "idempotency_fingerprint"):
+        if source_payload.get(key) and not merged.get(key):
+            merged[key] = source_payload[key]
+    return merged
+
+
 def _create_or_load_manual_order_proposal(
     auth_header: str,
     user_id: str,
@@ -2519,7 +2531,10 @@ def place_manual_order():
         "external_order_org_no": order_res.get("order_org_no"),
         "external_order_id": order_res.get("order_id"),
         "status": initial_order_status,
-        "raw_order_payload": {"order": order_res.get("raw")},
+        "raw_order_payload": _merge_manual_order_payload_marker(
+            approval_proposal,
+            {"order": order_res.get("raw")},
+        ),
     }
     try:
         _patch_trade_proposal_returning(
@@ -2689,10 +2704,13 @@ def place_manual_order():
         "client_order_id": order_res.get("client_order_id"),
         "external_order_org_no": order_res.get("order_org_no"),
         "external_order_id": order_res.get("order_id"),
-        "raw_order_payload": {
-            "order": order_res.get("raw"),
-            "post_order_status_check": order_res.get("post_order_status_check"),
-        },
+        "raw_order_payload": _merge_manual_order_payload_marker(
+            approval_proposal,
+            {
+                "order": order_res.get("raw"),
+                "post_order_status_check": order_res.get("post_order_status_check"),
+            },
+        ),
         "status": order_status_for_db,
     }
     if order_status_for_db in {"FAILED", "CANCELED"}:
