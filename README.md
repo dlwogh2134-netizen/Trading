@@ -177,6 +177,7 @@ npm run build
 - 2026-07-15 AdminMlData 14차 리팩토링: 데스크톱/모바일 ML 관리자 운영 신뢰도 검증과 v8 Optuna 튜닝 패널을 `adminMlDataTrustPanels.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AdminMlData.jsx`는 1,382줄, `MobileAdminMlData.jsx`는 1,367줄입니다.
 - 2026-07-15 AdminMlData 15차 리팩토링: 데스크톱/모바일 ML 관리자 콘솔 헤더, 자동화 실행, 고급 데이터 도구, 모델 결과, 레지스트리 상태, 학습 도구, 작업 이력 영역을 `adminMlDataWorkflowPanels.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AdminMlData.jsx`는 993줄, `MobileAdminMlData.jsx`는 978줄입니다.
 - 2026-07-15 AssetDetail 1차 리팩토링: 데스크톱/모바일 종목 상세의 상단 메타 헤더와 차트 패널을 `assetDetailHeader.jsx`, `assetDetailChartPanel.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AssetDetail.jsx`는 4,683줄, `MobileAssetDetail.jsx`는 4,671줄입니다.
+- 2026-07-15 AssetDetail 2차 리팩토링: 데스크톱/모바일 종목 상세의 보유/주문 가능 요약 카드와 미체결 주문 관리 패널을 `assetDetailOrderPanels.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AssetDetail.jsx`는 4,530줄, `MobileAssetDetail.jsx`는 4,520줄입니다.
 
 ## 주요 API
 

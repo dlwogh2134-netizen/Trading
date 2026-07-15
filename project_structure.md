@@ -233,6 +233,7 @@ frontend/
         ├── assetDetailHeader.jsx
         ├── assetDetailModel.js
         ├── assetDetailModel.test.mjs
+        ├── assetDetailOrderPanels.jsx
         ├── AssetsTab.jsx
         ├── assetsTabModel.js
         ├── assetsTabModel.test.mjs
@@ -286,6 +287,8 @@ frontend/
   - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 종목 메타, 즐겨찾기, 종목 유의사항, 현재가 헤더 컴포넌트
 - `assetDetailChartPanel.jsx`
   - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 Lightweight Charts 컨테이너, 캔들 주기 선택, 크게보기 패널
+- `assetDetailOrderPanels.jsx`
+  - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 보유/주문 가능 요약 카드와 미체결 주문 관리 패널
 - `assetDetailModel.js`
   - `AssetDetail.jsx`와 `MobileAssetDetail.jsx`가 공유하는 주문 상태 라벨, 조건감시 라벨, 심볼 판별, 가격 자릿수/차트 price format, 뉴스·공시·ML 지표·캔들 포맷, 종목 유의사항 배지 tone 순수 유틸
 - `assetDetailModel.test.mjs`
