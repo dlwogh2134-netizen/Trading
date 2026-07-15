@@ -166,6 +166,7 @@ npm run build
 - 2026-07-15 AdminMlData 3차 리팩토링: ML 관리자 작업 로그 모달, 승격 검증 요약, 감사 배지를 `adminMlDataPanels.jsx`로 공통화하고 로그 복사 문자열 생성을 `adminMlDataModel.js`로 분리했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AdminMlData.jsx`는 2,803줄, `MobileAdminMlData.jsx`는 2,764줄입니다.
 - 2026-07-15 AdminMlData 4차 리팩토링: 데스크톱/모바일 ML 관리자 버전 차이 요약 패널을 `adminMlDataPanels.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AdminMlData.jsx`는 2,745줄, `MobileAdminMlData.jsx`는 2,706줄입니다.
 - 2026-07-15 AdminMlData 5차 리팩토링: 데스크톱/모바일 ML 관리자 활성 신호 패널을 `adminMlDataPanels.jsx`로 공통화했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AdminMlData.jsx`는 2,544줄, `MobileAdminMlData.jsx`는 2,505줄입니다.
+- 2026-07-15 AdminMlData 6차 리팩토링: 데스크톱/모바일 ML 관리자 운영 모델 감사 패널을 `adminMlDataPanels.jsx`로 공통화하고 모바일 검증 카드 배치를 prop으로 유지했습니다. 전체 lint 상태는 `0 errors`, `0 warnings`이며 `AdminMlData.jsx`는 2,463줄, `MobileAdminMlData.jsx`는 2,425줄입니다.
 
 ## 주요 API
 
