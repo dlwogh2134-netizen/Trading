@@ -71,18 +71,11 @@ export default function AssetsTab({
 
   const getBinanceAvailableCash = (direction) => {
     const targetExchange = direction === 'MAIN_UMFUTURE' ? 'BINANCE' : 'BINANCE_UM_FUTURES'
-    let account = accountBalances.find((acc) => {
+    const account = accountBalances.find((acc) => {
       const matchExchange = String(acc.raw_exchange || acc.exchange || '').toUpperCase() === targetExchange
       const isMock = String(acc.env || '').toUpperCase() === 'MOCK'
-      return matchExchange && (showMockAssets ? isMock : !isMock)
+      return matchExchange && !isMock
     })
-
-    if (!account) {
-      account = accountBalances.find((acc) => 
-        String(acc.raw_exchange || acc.exchange || '').toUpperCase() === targetExchange
-      )
-    }
-
     return account ? Number(account.available_cash || 0) : 0
   }
 
@@ -442,7 +435,7 @@ export default function AssetsTab({
                     <p className="text-[10px] font-bold text-slate-500">{account.balanceLabel}</p>
                     <p className={`mt-1 ${mobileLayout ? 'text-sm' : 'text-xl'} font-extrabold text-white font-mono`}>{account.balance}</p>
                   </div>
-                  {(account.id === 'binance-crypto' || account.sources?.has('BINANCE') || account.sources?.has('BINANCE_UM_FUTURES') || (account.sourceText && (account.sourceText.includes('BINANCE') || account.sourceText.includes('BINANCE_UM_FUTURES')))) && (
+                  {!showMockAssets && (account.id === 'binance-crypto' || account.sources?.has('BINANCE') || account.sources?.has('BINANCE_UM_FUTURES') || (account.sourceText && (account.sourceText.includes('BINANCE') || account.sourceText.includes('BINANCE_UM_FUTURES')))) && (
                     <button
                       type="button"
                       onClick={openInternalTransferModal}
@@ -890,7 +883,10 @@ export default function AssetsTab({
             <div className="flex flex-col gap-3 border-b border-slate-800 pb-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300">Binance Internal Transfer</p>
-                <h2 className="mt-1 text-lg font-bold text-white">바이낸스 내부 이체</h2>
+                <div className="mt-1 flex items-center gap-2">
+                  <h2 className="text-lg font-bold text-white">바이낸스 내부 이체</h2>
+                  <span className="bg-red-500/10 text-red-400 border border-red-500/20 px-2 py-0.5 rounded text-[10px] font-bold shrink-0">실거래 전용</span>
+                </div>
                 <p className="mt-1 text-xs leading-5 text-slate-400">
                   바이낸스 현물(Spot) 계좌와 USD-M 선물(Futures) 계좌 간에 자금을 즉시 이체합니다.
                 </p>
