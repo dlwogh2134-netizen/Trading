@@ -9,6 +9,12 @@ from backend.services.symbol_reconciliation_service import (
     restore_symbols,
     run_symbol_reconciliation,
 )
+from backend.services.crypto_asset_service import (
+    CryptoAssetPatch,
+    list_crypto_assets,
+    patch_crypto_asset,
+)
+from backend.services.crypto_asset_sync_service import sync_crypto_assets
 
 
 admin_symbols_bp = Blueprint("admin_symbols", __name__)
@@ -28,6 +34,14 @@ def _request_symbols():
     if isinstance(symbols, str):
         symbols = [symbols]
     return [str(symbol).strip().upper() for symbol in symbols if str(symbol or "").strip()]
+
+
+def _parse_aliases(value):
+    if isinstance(value, str):
+        return tuple(alias.strip() for alias in value.split(",") if alias.strip())
+    if isinstance(value, list):
+        return tuple(str(alias).strip() for alias in value if str(alias or "").strip())
+    return None
 
 
 @admin_symbols_bp.route("/api/admin/market-symbols/reconciliation/latest", methods=["GET"])
@@ -93,3 +107,53 @@ def restore_market_symbols():
         return jsonify({"success": True, "data": result})
     except Exception as error:
         return _json_error(error, "종목 복구 실패", 403 if isinstance(error, PermissionError) else 400)
+
+
+@admin_symbols_bp.route("/api/admin/crypto-symbols", methods=["GET"])
+def list_admin_crypto_symbols():
+    try:
+        _require_admin()
+        rows = list_crypto_assets(
+            query=request.args.get("query", ""),
+            exchange=request.args.get("exchange", "ALL"),
+            tradable=request.args.get("tradable", "ALL"),
+            blocked=request.args.get("blocked", "ALL"),
+            limit=int(request.args.get("limit") or 300),
+        )
+        return jsonify({"success": True, "data": {"items": rows}})
+    except Exception as error:
+        return _json_error(error, "코인 종목 마스터 조회 실패", 403 if isinstance(error, PermissionError) else 400)
+
+
+@admin_symbols_bp.route("/api/admin/crypto-symbols/sync", methods=["POST"])
+def sync_admin_crypto_symbols():
+    try:
+        _require_admin()
+        return jsonify({"success": True, "data": sync_crypto_assets()})
+    except Exception as error:
+        return _json_error(error, "코인 종목 마스터 동기화 실패", 403 if isinstance(error, PermissionError) else 400)
+
+
+@admin_symbols_bp.route("/api/admin/crypto-symbols/<base_symbol>", methods=["PATCH"])
+def update_admin_crypto_symbol(base_symbol):
+    try:
+        _require_admin()
+        body = request.get_json(silent=True) or {}
+        updated = patch_crypto_asset(
+            base_symbol,
+            CryptoAssetPatch(
+                display_name_ko=body.get("display_name_ko"),
+                display_name_en=body.get("display_name_en"),
+                aliases=_parse_aliases(body.get("aliases")),
+                default_exchange=body.get("default_exchange"),
+                is_visible=body.get("is_visible") if "is_visible" in body else None,
+                admin_trading_blocked=body.get("admin_trading_blocked") if "admin_trading_blocked" in body else None,
+                admin_block_reason=body.get("admin_block_reason"),
+                admin_note=body.get("admin_note"),
+                coinone_symbol=body.get("coinone_symbol"),
+                binance_symbol=body.get("binance_symbol"),
+            ),
+        )
+        return jsonify({"success": True, "data": updated})
+    except Exception as error:
+        return _json_error(error, "코인 종목 마스터 수정 실패", 403 if isinstance(error, PermissionError) else 400)

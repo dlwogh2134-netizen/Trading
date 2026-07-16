@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { formatRelativeTime as formatTime } from './assetDetailModel.js'
 
 export default function AssetDetailCommunityPanel({
@@ -24,6 +26,33 @@ export default function AssetDetailCommunityPanel({
   onSubmitCommunityReply,
   onUpdateCommunityStatus,
 }) {
+  const [expandedReplyPostIds, setExpandedReplyPostIds] = useState(() => new Set())
+
+  const toggleReplies = (postId) => {
+    setExpandedReplyPostIds((currentIds) => {
+      const nextIds = new Set(currentIds)
+      if (nextIds.has(postId)) {
+        nextIds.delete(postId)
+      } else {
+        nextIds.add(postId)
+      }
+      return nextIds
+    })
+  }
+
+  const toggleReplyComposer = (postId) => {
+    const shouldOpen = communityReplyParentId !== postId
+    setCommunityReplyParentId(shouldOpen ? postId : '')
+    setCommunityReplyDraft('')
+    if (shouldOpen) {
+      setExpandedReplyPostIds((currentIds) => {
+        const nextIds = new Set(currentIds)
+        nextIds.add(postId)
+        return nextIds
+      })
+    }
+  }
+
   return (
     <>
               {isActive && (
@@ -79,6 +108,8 @@ export default function AssetDetailCommunityPanel({
                           const canDelete = communityCurrentUserId && communityCurrentUserId === post.user_id
                           const canHide = userProfile?.role === 'ADMIN' && !canDelete
                           const replies = communityReplyMap[post.id] || []
+                          const repliesExpanded = expandedReplyPostIds.has(post.id)
+                          const replyListId = `community-replies-${post.id}`
                           return (
                             <article key={post.id} className="rounded border border-[#1f2945]/60 bg-[#1b253b]/35 p-3">
                               <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
@@ -86,21 +117,13 @@ export default function AssetDetailCommunityPanel({
                                   <span className="max-w-[160px] truncate font-bold text-cyan-300">
                                     {profile.nickname || '익명 사용자'}
                                   </span>
-                                  {profile.role === 'ADMIN' ? (
-                                    <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 font-bold text-amber-200">
-                                      ADMIN
-                                    </span>
-                                  ) : null}
                                   <span className="text-slate-500">{formatTime(post.created_at)}</span>
                                 </div>
                                 <div className="flex shrink-0 gap-1.5">
                                   {isLoggedIn ? (
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        setCommunityReplyParentId(communityReplyParentId === post.id ? '' : post.id)
-                                        setCommunityReplyDraft('')
-                                      }}
+                                      onClick={() => toggleReplyComposer(post.id)}
                                       className="rounded border border-cyan-500/25 px-2 py-1 text-[10px] font-bold text-cyan-300 transition hover:bg-cyan-950/30"
                                     >
                                       답글
@@ -135,6 +158,19 @@ export default function AssetDetailCommunityPanel({
                               <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-[#e2e2ec]">
                                 {post.content}
                               </p>
+                              {replies.length > 0 ? (
+                                <div className="mt-2">
+                                  <button
+                                    type="button"
+                                    aria-expanded={repliesExpanded}
+                                    aria-controls={replyListId}
+                                    onClick={() => toggleReplies(post.id)}
+                                    className="rounded border border-slate-700/70 bg-slate-950/30 px-2.5 py-1 text-[10px] font-bold text-slate-300 transition hover:border-cyan-500/40 hover:text-cyan-200"
+                                  >
+                                    {repliesExpanded ? `답글 ${replies.length}개 접기` : `답글 ${replies.length}개 보기`}
+                                  </button>
+                                </div>
+                              ) : null}
                               {communityReplyParentId === post.id ? (
                                 <form onSubmit={(event) => onSubmitCommunityReply(event, post)} className="mt-3 rounded border border-cyan-500/20 bg-cyan-950/10 p-2">
                                   <textarea
@@ -169,8 +205,8 @@ export default function AssetDetailCommunityPanel({
                                   </div>
                                 </form>
                               ) : null}
-                              {replies.length > 0 ? (
-                                <div className="mt-3 flex flex-col gap-2 border-l-2 border-cyan-500/20 pl-3">
+                              {repliesExpanded && replies.length > 0 ? (
+                                <div id={replyListId} className="mt-3 flex flex-col gap-2 border-l-2 border-cyan-500/20 pl-3">
                                   {replies.map((reply) => {
                                     const replyProfile = communityProfiles[reply.user_id] || {}
                                     const canDeleteReply = communityCurrentUserId && communityCurrentUserId === reply.user_id
@@ -183,11 +219,6 @@ export default function AssetDetailCommunityPanel({
                                             <span className="max-w-[140px] truncate font-bold text-cyan-300">
                                               {replyProfile.nickname || '익명 사용자'}
                                             </span>
-                                            {replyProfile.role === 'ADMIN' ? (
-                                              <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 font-bold text-amber-200">
-                                                ADMIN
-                                              </span>
-                                            ) : null}
                                             <span className="text-slate-500">{formatTime(reply.created_at)}</span>
                                           </div>
                                           {(canDeleteReply || canHideReply) ? (

@@ -13,6 +13,17 @@ export default function SymbolSearch({ className = '' }) {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const navigate = useNavigate()
 
+  const buildAssetPath = (item) => {
+    const assetType = String(item.asset_type || 'STOCK').toUpperCase()
+    const params = new URLSearchParams()
+    const defaultExchange = String(item.default_exchange || '').toUpperCase()
+    if (assetType === 'CRYPTO' && defaultExchange) {
+      params.set('exchange', defaultExchange)
+    }
+    const suffix = params.toString()
+    return `/asset/${assetType}/${item.symbol}${suffix ? `?${suffix}` : ''}`
+  }
+
   const navigateToSearchNotFound = (searchText) => {
     const params = new URLSearchParams({
       query: searchText,
@@ -33,8 +44,7 @@ export default function SymbolSearch({ className = '' }) {
       )
       const resData = await res.json()
       if (resData.success && resData.data) {
-        const { symbol, asset_type } = resData.data
-        navigate(`/asset/${String(asset_type || 'STOCK').toUpperCase()}/${symbol}`)
+        navigate(buildAssetPath(resData.data))
       } else {
         navigateToSearchNotFound(trimmed)
       }
@@ -72,7 +82,7 @@ export default function SymbolSearch({ className = '' }) {
 
   // 추천 종목 클릭 시 즉시 상세 페이지로 이동한다.
   const handleSuggestionClick = (item) => {
-    navigate(`/asset/${String(item.asset_type || 'STOCK').toUpperCase()}/${item.symbol}`)
+    navigate(buildAssetPath(item))
     setQuery('')
     setSuggestions([])
     setShowSuggestions(false)

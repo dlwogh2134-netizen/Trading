@@ -4,6 +4,7 @@ import { supabase } from '../../supabaseClient'
 import { buildApiErrorText } from '../../lib/apiError.js'
 import { streamChatbotMessage } from './chatbotApi'
 import { buildChatbotCitations } from './chatbotCitations'
+import { buildCombinedResultNotices } from './chatbotCombinedNotice'
 import { buildDisclosurePresentation } from './chatbotDisclosurePresentation'
 import { shouldSubmitChatbotInput } from './chatbotInput'
 import { buildMlRecommendationPresentation } from './chatbotMlRecommendationPresentation'
@@ -166,6 +167,7 @@ function ChatMessage({ message, onAction }) {
   const mlRecommendationPresentation = buildMlRecommendationPresentation(message.toolResult)
   const tradeHistoryPresentation = buildTradeHistoryPresentation(message.toolResult)
   const watchlistPresentation = buildWatchlistPresentation(message.toolResult)
+  const combinedResultNotices = !isUser ? buildCombinedResultNotices(message.toolResult) : []
   const hasDisclosureCards = !isUser && disclosurePresentation.items.length > 0
   const hasNewsCards = !isUser && newsPresentation.items.length > 0
   const hasMlRecommendationCards = !isUser && mlRecommendationPresentation.shouldRender
@@ -173,7 +175,8 @@ function ChatMessage({ message, onAction }) {
   const hasWatchlistTable = !isUser && watchlistPresentation.shouldRender
   const citations = !isUser ? buildChatbotCitations(message.toolResult) : []
   const traceBadges = !isUser ? buildChatbotTraceBadges({ traceSteps: message.traceSteps, toolResult: message.toolResult }) : []
-  const hasMessageBody = hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || hasTradeHistoryTable || hasWatchlistTable || Boolean(message.text) || !message.isStreaming
+  const hasCombinedResultNotice = combinedResultNotices.length > 0
+  const hasMessageBody = hasDisclosureCards || hasNewsCards || hasCombinedResultNotice || hasMlRecommendationCards || hasTradeHistoryTable || hasWatchlistTable || Boolean(message.text) || !message.isStreaming
 
   if (!hasMessageBody && traceBadges.length === 0) {
     return null
@@ -195,19 +198,18 @@ function ChatMessage({ message, onAction }) {
           >
             {hasMlRecommendationCards && !message.isStreaming ? (
               <MlRecommendationResults presentation={mlRecommendationPresentation} />
-            ) : hasNewsCards && hasDisclosureCards && !message.isStreaming ? (
+            ) : (hasNewsCards || hasDisclosureCards || hasCombinedResultNotice) && !message.isStreaming ? (
               <div className="space-y-3">
-                <NewsResults presentation={newsPresentation} />
-                <DisclosureResults presentation={disclosurePresentation} />
+                {hasNewsCards && <NewsResults presentation={newsPresentation} />}
+                {hasDisclosureCards && <DisclosureResults presentation={disclosurePresentation} />}
+                {hasCombinedResultNotice && (
+                  <CombinedResultNotices notices={combinedResultNotices} />
+                )}
               </div>
-            ) : hasNewsCards && !message.isStreaming ? (
-              <NewsResults presentation={newsPresentation} />
             ) : hasTradeHistoryTable && !message.isStreaming ? (
               <TradeHistoryResults presentation={tradeHistoryPresentation} />
             ) : hasWatchlistTable && !message.isStreaming ? (
               <WatchlistResults presentation={watchlistPresentation} />
-            ) : hasDisclosureCards && !message.isStreaming ? (
-              <DisclosureResults presentation={disclosurePresentation} />
             ) : message.text}
           </div>
         )}
@@ -238,6 +240,21 @@ function ChatMessage({ message, onAction }) {
           <CitationList citations={citations} />
         )}
       </div>
+    </div>
+  )
+}
+
+function CombinedResultNotices({ notices }) {
+  return (
+    <div className="space-y-2">
+      {notices.map((notice) => (
+        <p
+          key={notice}
+          className="rounded border border-ai-cyan/30 bg-ai-cyan/5 px-3 py-2 text-[11px] font-semibold leading-5 text-cyan-100"
+        >
+          {notice}
+        </p>
+      ))}
     </div>
   )
 }

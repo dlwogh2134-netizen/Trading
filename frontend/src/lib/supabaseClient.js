@@ -46,9 +46,19 @@ export async function fetchNewsArticles({ market = 'ALL', category = 'ALL', quer
     Prefer: 'count=exact',
   }
 
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/news_articles?${params.toString()}`, {
+  const requestUrl = `${SUPABASE_URL}/rest/v1/news_articles?${params.toString()}`
+  let response = await fetch(requestUrl, {
     headers,
   })
+
+  if (!response.ok && query.trim()) {
+    const errorText = await response.clone().text()
+    if (response.status === 500 && errorText.includes('statement timeout')) {
+      response = await fetch(requestUrl, {
+        headers: buildHeaders(),
+      })
+    }
+  }
 
   if (!response.ok) {
     throw new Error(`Supabase news query failed: ${response.status} ${response.statusText}`)
@@ -56,7 +66,9 @@ export async function fetchNewsArticles({ market = 'ALL', category = 'ALL', quer
 
   const data = await response.json()
   const contentRange = response.headers.get('content-range')
-  const count = contentRange ? Number(contentRange.split('/')[1]) || data.length : data.length
+  const exactCount = contentRange ? Number(contentRange.split('/')[1]) : NaN
+  const fallbackCount = offset + data.length + (data.length === limit ? 1 : 0)
+  const count = Number.isFinite(exactCount) ? exactCount : fallbackCount
 
   return {
     items: Array.isArray(data) ? data : [],

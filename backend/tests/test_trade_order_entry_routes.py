@@ -125,6 +125,41 @@ def test_order_entry_context_requires_selected_symbol(client):
     assert "종목" in response.get_json()["message"]
 
 
+def test_order_entry_symbols_filters_crypto_by_exchange_master(client, monkeypatch):
+    monkeypatch.setattr(
+        trade,
+        "_load_order_entry_client",
+        lambda *_args, **_kwargs: ({"id": "key-1"}, FakeClient()),
+    )
+    def fake_search_crypto_assets(query, limit=10):
+        if query != "ALICE":
+            return []
+        return [{
+            "symbol": "ALICE",
+            "display_name": "Alice",
+            "exchanges": ["BINANCE"],
+            "coinone_tradable": False,
+            "binance_tradable": True,
+            "admin_trading_blocked": False,
+        }]
+
+    monkeypatch.setattr("backend.services.crypto_asset_service.search_crypto_assets", fake_search_crypto_assets)
+
+    coinone_response = client.get(
+        "/api/trade/order-entry/symbols?exchange=COINONE&broker_env=REAL&query=ALICE",
+        headers=AUTH,
+    )
+    binance_response = client.get(
+        "/api/trade/order-entry/symbols?exchange=BINANCE&broker_env=REAL&query=ALICE",
+        headers=AUTH,
+    )
+
+    assert coinone_response.status_code == 200
+    assert coinone_response.get_json()["data"]["symbols"] == []
+    assert binance_response.status_code == 200
+    assert binance_response.get_json()["data"]["symbols"][0]["symbol"] == "ALICEUSDT"
+
+
 def test_order_entry_context_returns_live_price_and_service_leverage_limit(client, monkeypatch):
     monkeypatch.setattr(
         trade,

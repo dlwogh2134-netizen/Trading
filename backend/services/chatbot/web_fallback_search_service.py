@@ -17,8 +17,30 @@ from backend.services.embedding_service import EmbeddingService
 from backend.services.knowledge_chunk_service import KnowledgeChunkService
 from backend.services.news_repository import NewsRepository
 from backend.services.news_summary_service import NewsSummaryService
+from backend.services.crypto_asset_service import find_crypto_asset_for_query
+from backend.services.symbol_metadata import COIN_DISPLAY_NAMES, SYMBOL_METADATA
 from backend.services.tavily_client import TavilyClient, TavilySearchError
 
+
+MARKET_NEWS_TARGET_TERMS = {
+    "코스피",
+    "코스닥",
+    "증시",
+    "환율",
+    "금리",
+    "FOMC",
+    "연준",
+    "미국 국채",
+    "인플레이션",
+    "외국인 순매수",
+    "기관 순매수",
+    "공매도",
+    "신용융자",
+    "반도체",
+    "이차전지",
+    "배터리",
+    "바이오",
+}
 
 COMPANY_QUERY_ALIASES = {
     "삼전": "삼성전자",
@@ -26,6 +48,8 @@ COMPANY_QUERY_ALIASES = {
     "심상전자": "삼성전자",
     "심성전자": "삼성전자",
     "삼상전자": "삼성전자",
+    "엘지전자": "LG전자",
+    "LG전자": "LG전자",
     "하닉": "SK하이닉스",
     "하이닉스": "SK하이닉스",
     "이노스페이스": "이노스페이스 462350",
@@ -70,6 +94,8 @@ class ChatbotWebFallbackSearchService:
             if requested_count and requested_count > 3:
                 return self._news_limit_exceeded_reply(text, requested_count)
             max_results = requested_count or 1
+            if self._is_missing_combined_news_disclosure_target(text):
+                return self._combined_target_required_reply(text)
             return self._search_combined_news_disclosure(auth_header, user_id, text, max_results)
 
         is_disclosure_query = self._is_disclosure_query(text)
@@ -281,19 +307,31 @@ class ChatbotWebFallbackSearchService:
         news_query = self._combined_query_for(query, "뉴스")
         disclosure_query = self._combined_query_for(query, "공시")
 
-        news_result = self._search_existing_open_apis(news_query, limit)
-        if not news_result:
-            news_result = self._search_tavily(news_query, limit)
-        if not news_result:
-            news_result = self._search_internal_db(news_query, limit)
-        if not news_result:
-            news_result = self._search_rag(auth_header, user_id, news_query, limit)
+        news_target_recognized = self._is_recognized_combined_target(news_query, allow_market_news=True)
+        if news_target_recognized:
+            news_result = self._search_existing_open_apis(news_query, limit)
+            if not news_result:
+                news_result = self._search_tavily(news_query, limit)
+            if not news_result:
+                news_result = self._search_internal_db(news_query, limit)
+            if not news_result:
+                news_result = self._search_rag(auth_header, user_id, news_query, limit)
+        else:
+            news_result = self._combined_news_target_not_found(news_query)
 
-        disclosure_result = self._search_existing_open_apis(disclosure_query, limit)
+        disclosure_target_recognized = self._is_recognized_combined_target(disclosure_query, allow_market_news=False)
+        if disclosure_target_recognized:
+            disclosure_result = self._search_existing_open_apis(disclosure_query, limit)
+            if not disclosure_result:
+                disclosure_result = self._search_internal_db(disclosure_query, limit)
+        else:
+            disclosure_result = None
         if not disclosure_result:
-            disclosure_result = self._search_internal_db(disclosure_query, limit)
-        if not disclosure_result:
-            disclosure_result = self._search_rag(auth_header, user_id, disclosure_query, limit)
+            disclosure_result = (
+                self._combined_disclosure_result_not_found(disclosure_query)
+                if disclosure_target_recognized
+                else self._combined_disclosure_target_not_found(disclosure_query)
+            )
 
         lines = ["뉴스와 공시를 나눠서 확인했습니다."]
         if news_result:
@@ -319,17 +357,131 @@ class ChatbotWebFallbackSearchService:
         }
 
     @staticmethod
+    def _combined_news_target_not_found(query: str) -> dict[str, Any]:
+        message = f"'{query}'에 해당하는 뉴스 대상 종목을 인식하지 못했습니다. 종목명을 확인해서 다시 요청해 주세요."
+        return {
+            "reply": message,
+            "data": {
+                "source": "NO_RESULT",
+                "reason": "news_target_not_recognized",
+                "query": query,
+                "message": message,
+            },
+        }
+
+    @staticmethod
+    def _combined_disclosure_target_not_found(query: str) -> dict[str, Any]:
+        message = f"'{query}'에 해당하는 공시 대상 종목을 인식하지 못했습니다. 종목명을 확인해서 다시 요청해 주세요."
+        return {
+            "reply": message,
+            "data": {
+                "source": "NO_RESULT",
+                "reason": "disclosure_target_not_recognized",
+                "query": query,
+                "message": message,
+            },
+        }
+
+    @staticmethod
+    def _combined_disclosure_result_not_found(query: str) -> dict[str, Any]:
+        message = f"'{query}'에 맞는 DART 공시 결과를 찾지 못했습니다. 종목명은 인식했지만 저장된 공시가 없거나 최근 수집 범위에 없을 수 있습니다."
+        return {
+            "reply": message,
+            "data": {
+                "source": "NO_RESULT",
+                "reason": "disclosure_result_not_found",
+                "query": query,
+                "message": message,
+            },
+        }
+
+    @staticmethod
     def _combined_query_for(query: str, target: str) -> str:
-        text = re.sub(r"\s+", " ", str(query or "")).strip()
+        text = ChatbotWebFallbackSearchService._combined_clause_for(query, target)
         if target == "뉴스":
             text = re.sub(r"(?:공시와|공시랑|공시 및|공시와\s*뉴스|뉴스와\s*공시|공시)", " ", text)
         else:
             text = re.sub(r"(?:뉴스와|뉴스랑|뉴스 및|공시와\s*뉴스|뉴스와\s*공시|뉴스)", " ", text)
         text = re.sub(r"(?:보고|정리해줘|정리|요약해줘|요약|알려줘|보여줘)", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"\s+", " ", text).strip(" '\"“”‘’")
         text = ChatbotWebFallbackSearchService._normalize_company_query(text)
         if target not in text:
             text = f"{text} {target}".strip()
+        return text
+
+    @classmethod
+    def _is_recognized_combined_target(cls, query: str, allow_market_news: bool) -> bool:
+        subject = cls._extract_combined_news_disclosure_subject(query)
+        if cls._is_generic_target_subject(subject):
+            return False
+
+        normalized = cls._normalize_company_query(subject).strip(" '\"“”‘’")
+        compact = re.sub(r"\s+", "", normalized)
+        compact_upper = compact.upper()
+
+        if allow_market_news and cls._is_market_news_target(normalized):
+            return True
+        if re.fullmatch(r"\d{6}", compact):
+            return True
+        if re.fullmatch(r"[A-Z]{1,6}(?:USDT)?", compact):
+            return True
+        if cls._matches_known_alias_target(normalized):
+            return True
+        if cls._matches_symbol_metadata(normalized):
+            return True
+        return compact_upper in COIN_DISPLAY_NAMES
+
+    @staticmethod
+    def _is_market_news_target(subject: str) -> bool:
+        compact = re.sub(r"\s+", "", subject).upper()
+        return any(re.sub(r"\s+", "", term).upper() in compact for term in MARKET_NEWS_TARGET_TERMS)
+
+    @staticmethod
+    def _matches_known_alias_target(subject: str) -> bool:
+        compact = re.sub(r"\s+", "", subject).upper()
+        for alias, company_name in COMPANY_QUERY_ALIASES.items():
+            candidates = {alias, company_name, re.sub(r"\b\d{6}\b", "", company_name).strip()}
+            for candidate in candidates:
+                candidate_key = re.sub(r"\s+", "", candidate).upper()
+                if candidate_key and (compact == candidate_key or candidate_key in compact):
+                    return True
+        return False
+
+    @staticmethod
+    def _matches_symbol_metadata(subject: str) -> bool:
+        compact = re.sub(r"\s+", "", subject).upper()
+        crypto_asset = find_crypto_asset_for_query(subject)
+        if crypto_asset:
+            return True
+        if compact in SYMBOL_METADATA:
+            return True
+        for symbol, metadata in SYMBOL_METADATA.items():
+            display_name = str(metadata.get("display_name") or "").strip()
+            display_key = re.sub(r"\s+", "", display_name).upper()
+            if compact == str(symbol).upper() or (display_key and display_key in compact):
+                return True
+        return False
+
+    @staticmethod
+    def _combined_clause_for(query: str, target: str) -> str:
+        text = re.sub(r"\s+", " ", str(query or "")).strip()
+        if not text:
+            return ""
+
+        separated = re.sub(
+            r"(보여\s*주고|보여주고|알려\s*주고|알려주고|찾아\s*주고|찾아주고|조회\s*하고|확인\s*하고|요약\s*하고|정리\s*하고)",
+            r"\1 | ",
+            text,
+        )
+        separated = re.sub(r"(뉴스|기사|속보)\s*(?:와|과|랑|및)\s+", r"\1 | ", separated)
+        separated = re.sub(r"(공시|전자공시)\s*(?:와|과|랑|및)\s+", r"\1 | ", separated)
+        separated = re.sub(r"\s+(그리고|그다음|다음으로|또|또는)\s+", " | ", separated)
+        clauses = [clause.strip() for clause in separated.split("|") if clause.strip()]
+        for clause in clauses:
+            if target in clause:
+                subject = ChatbotWebFallbackSearchService._extract_combined_news_disclosure_subject(clause)
+                if not ChatbotWebFallbackSearchService._is_generic_target_subject(subject):
+                    return clause
         return text
 
     def _search_news_db(self, query: str, limit: int) -> dict[str, Any] | None:
@@ -958,8 +1110,17 @@ class ChatbotWebFallbackSearchService:
         return cls._is_news_query(query) and cls._is_disclosure_query(query)
 
     @classmethod
+    def _is_missing_combined_news_disclosure_target(cls, query: str) -> bool:
+        subject = cls._extract_combined_news_disclosure_subject(query)
+        return cls._is_generic_target_subject(subject)
+
+    @classmethod
     def _is_missing_disclosure_target(cls, query: str) -> bool:
         subject = cls._extract_disclosure_subject(query)
+        return cls._is_generic_target_subject(subject)
+
+    @staticmethod
+    def _is_generic_target_subject(subject: str) -> bool:
         if not subject:
             return True
         generic_terms = {
@@ -974,15 +1135,69 @@ class ChatbotWebFallbackSearchService:
             "상장사",
             "국내",
             "한국",
+            "뉴스",
+            "기사",
+            "속보",
+            "공시",
+            "전자공시",
+            "와",
+            "과",
+            "및",
+            "랑",
+            "보고",
         }
         tokens = {token for token in re.split(r"\s+", subject) if token}
         return bool(tokens) and tokens.issubset(generic_terms)
+
+    @staticmethod
+    def _extract_combined_news_disclosure_subject(query: str) -> str:
+        text = re.sub(r"\s+", " ", str(query or "")).strip()
+        keywords = [
+            "뉴스",
+            "기사",
+            "속보",
+            "공시",
+            "사업보고서",
+            "반기보고서",
+            "분기보고서",
+            "전자공시",
+            "보여줘",
+            "조회",
+            "검색",
+            "확인",
+            "찾아줘",
+            "알려줘",
+            "해줘",
+            "보고",
+            "요약",
+            "분석",
+            "정리",
+            "최신",
+            "최근",
+            "오늘",
+            "이번 주",
+            "관련된",
+            "관련해서",
+            "관련",
+            "목록",
+            "리스트",
+            "DART",
+        ]
+        for keyword in keywords:
+            text = text.replace(keyword, " ")
+        text = re.sub(r"\d+\s*(?:개|건)", " ", text)
+        text = re.sub(r"\b(?:and|or)\b", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip()
+        return ChatbotWebFallbackSearchService._normalize_company_query(text)
 
     @staticmethod
     def _extract_disclosure_subject(query: str) -> str:
         text = re.sub(r"\s+", " ", str(query or "")).strip()
         keywords = [
             "공시",
+            "뉴스",
+            "기사",
+            "속보",
             "사업보고서",
             "반기보고서",
             "분기보고서",
@@ -1050,6 +1265,20 @@ class ChatbotWebFallbackSearchService:
             ),
             "data": {
                 "source": "DISCLOSURE_SYMBOL_REQUIRED",
+                "query": query,
+                "max_results": 3,
+            },
+        }
+
+    @staticmethod
+    def _combined_target_required_reply(query: str) -> dict[str, Any]:
+        return {
+            "reply": (
+                "어떤 종목의 뉴스와 공시를 볼까요? "
+                "예: '삼성전자 최근 뉴스와 공시 보여줘' 또는 '하이닉스 뉴스 공시 3개 보여줘'처럼 종목명을 함께 알려주세요."
+            ),
+            "data": {
+                "source": "NEWS_DISCLOSURE_SYMBOL_REQUIRED",
                 "query": query,
                 "max_results": 3,
             },

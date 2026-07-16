@@ -73,3 +73,38 @@ def test_filter_symbol_results_marks_temporary_symbol_when_canonical_missing():
         "canonical_symbol": "SKHY",
         "symbol_badge": "임시코드",
     }]
+
+
+def test_lookup_symbol_uses_crypto_asset_master(monkeypatch):
+    app = Flask(__name__)
+
+    monkeypatch.setattr(
+        "backend.services.crypto_asset_service.find_crypto_asset_for_query",
+        lambda query: {
+            "symbol": "H",
+            "display_name": "휴머니티",
+            "asset_type": "CRYPTO",
+            "market": "KRW",
+            "markets": ["KRW"],
+            "exchanges": ["COINONE"],
+            "exchange_options": ["COINONE"],
+            "default_exchange": "COINONE",
+            "coinone_listed": True,
+            "coinone_tradable": True,
+            "binance_listed": False,
+            "binance_tradable": False,
+            "admin_trading_blocked": False,
+            "admin_block_reason": None,
+        },
+    )
+
+    with app.test_request_context("/api/symbol/lookup?query=휴머니티&asset_type=CRYPTO"):
+        response = trade.lookup_symbol()
+    if isinstance(response, tuple):
+        response, _ = response
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["data"]["symbol"] == "H"
+    assert payload["data"]["default_exchange"] == "COINONE"
+    assert payload["data"]["exchange_options"] == ["COINONE"]

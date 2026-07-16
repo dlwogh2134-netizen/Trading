@@ -316,6 +316,178 @@ def test_combined_query_normalizes_samsung_typo_before_search(monkeypatch):
     ]
 
 
+def test_combined_query_keeps_different_news_and_disclosure_targets(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+    calls: list[str] = []
+
+    def fake_api(query, limit):
+        calls.append(f"api:{query}:{limit}")
+        if "공시" in query and "뉴스" not in query:
+            return {"reply": "이노스페이스 공시", "data": {"source": "DISCLOSURE_DB", "items": [{"corp_name": "이노스페이스"}]}}
+        return {"reply": "LG전자 뉴스", "data": {"source": "NAVER_API", "items": [{"title": "LG전자 뉴스"}]}}
+
+    monkeypatch.setattr(service, "_search_existing_open_apis", fake_api)
+    monkeypatch.setattr(service, "_search_internal_db", lambda query, limit: None)
+    monkeypatch.setattr(service, "_search_rag", lambda auth_header, user_id, query, limit: None)
+    monkeypatch.setattr(service, "_search_tavily", lambda query, limit: None)
+
+    result = service.search("Bearer token", "user-1", "엘지전자 뉴스보여주고 이노스페이스 공시 보여줘", limit=5)
+
+    assert result["data"]["source"] == "NEWS_DISCLOSURE_COMBINED"
+    assert result["data"]["news_query"] == "LG전자 뉴스"
+    assert result["data"]["disclosure_query"] == "이노스페이스 462350 공시"
+    assert calls == [
+        "api:LG전자 뉴스:1",
+        "api:이노스페이스 462350 공시:1",
+    ]
+
+
+def test_combined_query_does_not_reuse_news_target_for_invalid_disclosure_target(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+    calls: list[str] = []
+
+    def fake_api(query, limit):
+        calls.append(f"api:{query}:{limit}")
+        if query == "초콜릿맛있다 공시":
+            return None
+        return {"reply": "삼성전자 뉴스", "data": {"source": "NAVER_API", "items": [{"title": "삼성전자 뉴스"}]}}
+
+    monkeypatch.setattr(service, "_search_existing_open_apis", fake_api)
+    monkeypatch.setattr(service, "_search_internal_db", lambda query, limit: None)
+    monkeypatch.setattr(
+        service,
+        "_search_rag",
+        lambda auth_header, user_id, query, limit: (_ for _ in ()).throw(AssertionError("없는 공시 대상은 RAG로 대체하면 안 됩니다.")),
+    )
+    monkeypatch.setattr(service, "_search_tavily", lambda query, limit: None)
+
+    result = service.search("Bearer token", "user-1", "삼성전자 뉴스와 초콜릿맛있다 공시 보여줘", limit=5)
+
+    assert result["data"]["source"] == "NEWS_DISCLOSURE_COMBINED"
+    assert result["data"]["news_query"] == "삼성전자 뉴스"
+    assert result["data"]["disclosure_query"] == "초콜릿맛있다 공시"
+    assert result["data"]["news"]["source"] == "NAVER_API"
+    assert result["data"]["disclosure"]["source"] == "NO_RESULT"
+    assert result["data"]["disclosure"]["reason"] == "disclosure_target_not_recognized"
+    assert "공시 대상 종목을 인식하지 못했습니다" in result["reply"]
+    assert calls == ["api:삼성전자 뉴스:1"]
+
+
+def test_combined_query_reports_unknown_disclosure_target_after_valid_news(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+    calls: list[str] = []
+
+    def fake_api(query, limit):
+        calls.append(f"api:{query}:{limit}")
+        if query == "스타후르츠 공시":
+            return None
+        return {"reply": "이노스페이스 뉴스", "data": {"source": "NAVER_API", "items": [{"title": "이노스페이스 뉴스"}]}}
+
+    monkeypatch.setattr(service, "_search_existing_open_apis", fake_api)
+    monkeypatch.setattr(service, "_search_internal_db", lambda query, limit: None)
+    monkeypatch.setattr(
+        service,
+        "_search_rag",
+        lambda auth_header, user_id, query, limit: (_ for _ in ()).throw(AssertionError("없는 공시 대상은 RAG로 대체하면 안 됩니다.")),
+    )
+    monkeypatch.setattr(service, "_search_tavily", lambda query, limit: None)
+
+    result = service.search("Bearer token", "user-1", "이노스페이스 뉴스와 스타후르츠 공시 보여줘", limit=5)
+
+    assert result["data"]["news_query"] == "이노스페이스 462350 뉴스"
+    assert result["data"]["disclosure_query"] == "스타후르츠 공시"
+    assert result["data"]["news"]["source"] == "NAVER_API"
+    assert result["data"]["disclosure"]["source"] == "NO_RESULT"
+    assert result["data"]["disclosure"]["reason"] == "disclosure_target_not_recognized"
+    assert "이노스페이스 뉴스" in result["reply"]
+    assert "공시 대상 종목을 인식하지 못했습니다" in result["reply"]
+    assert calls == ["api:이노스페이스 462350 뉴스:1"]
+
+
+def test_combined_query_does_not_search_unrecognized_news_phrase(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+    calls: list[str] = []
+
+    def fake_api(query, limit):
+        calls.append(f"api:{query}:{limit}")
+        if query == "바나나 먹고 싶다 뉴스":
+            raise AssertionError("종목으로 인식할 수 없는 뉴스 문장은 검색하면 안 됩니다.")
+        if query == "SK하이닉스 공시":
+            return {"reply": "하이닉스 공시", "data": {"source": "DISCLOSURE_DB", "items": [{"corp_name": "SK하이닉스"}]}}
+        return None
+
+    monkeypatch.setattr(service, "_search_existing_open_apis", fake_api)
+    monkeypatch.setattr(service, "_search_internal_db", lambda query, limit: None)
+    monkeypatch.setattr(service, "_search_rag", lambda auth_header, user_id, query, limit: None)
+    monkeypatch.setattr(service, "_search_tavily", lambda query, limit: None)
+
+    result = service.search("Bearer token", "user-1", "바나나 먹고 싶다 뉴스와 하이닉스 공시 보여줘", limit=5)
+
+    assert result["data"]["news_query"] == "바나나 먹고 싶다 뉴스"
+    assert result["data"]["disclosure_query"] == "SK하이닉스 공시"
+    assert result["data"]["news"]["source"] == "NO_RESULT"
+    assert result["data"]["news"]["reason"] == "news_target_not_recognized"
+    assert result["data"]["disclosure"]["source"] == "DISCLOSURE_DB"
+    assert "뉴스 대상 종목을 인식하지 못했습니다" in result["reply"]
+    assert "하이닉스 공시" in result["reply"]
+    assert calls == ["api:SK하이닉스 공시:1"]
+
+
+def test_combined_query_distinguishes_missing_disclosure_result_from_unknown_target(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+
+    monkeypatch.setattr(
+        service,
+        "_search_existing_open_apis",
+        lambda query, limit: {"reply": "삼성전자 뉴스", "data": {"source": "NAVER_API", "items": [{"title": "삼성전자 뉴스"}]}}
+        if query == "삼성전자 뉴스"
+        else None,
+    )
+    monkeypatch.setattr(service, "_search_internal_db", lambda query, limit: None)
+    monkeypatch.setattr(service, "_search_rag", lambda auth_header, user_id, query, limit: None)
+    monkeypatch.setattr(service, "_search_tavily", lambda query, limit: None)
+
+    result = service.search("Bearer token", "user-1", "삼성전자 뉴스와 하이닉스 공시 보여줘", limit=5)
+
+    assert result["data"]["disclosure_query"] == "SK하이닉스 공시"
+    assert result["data"]["disclosure"]["source"] == "NO_RESULT"
+    assert result["data"]["disclosure"]["reason"] == "disclosure_result_not_found"
+    assert "공시 결과를 찾지 못했습니다" in result["reply"]
+    assert "공시 대상 종목을 인식하지 못했습니다" not in result["reply"]
+
+
+def test_combined_news_disclosure_query_requires_company_target(monkeypatch):
+    service = object.__new__(ChatbotWebFallbackSearchService)
+    service.max_results = 5
+
+    monkeypatch.setattr(
+        service,
+        "_search_existing_open_apis",
+        lambda query, limit: (_ for _ in ()).throw(AssertionError("종목 없는 통합 요청은 검색하면 안 됩니다.")),
+    )
+    monkeypatch.setattr(
+        service,
+        "_search_internal_db",
+        lambda query, limit: (_ for _ in ()).throw(AssertionError("종목 없는 통합 요청은 DB 검색하면 안 됩니다.")),
+    )
+    monkeypatch.setattr(
+        service,
+        "_search_rag",
+        lambda auth_header, user_id, query, limit: (_ for _ in ()).throw(AssertionError("종목 없는 통합 요청은 RAG 검색하면 안 됩니다.")),
+    )
+
+    result = service.search("Bearer token", "user-1", "뉴스 공시 보여줘", limit=5)
+
+    assert result["data"]["source"] == "NEWS_DISCLOSURE_SYMBOL_REQUIRED"
+    assert "어떤 종목" in result["reply"]
+    assert "삼성전자" in result["reply"]
+
+
 def test_disclosure_db_filters_out_other_company_rows_for_target():
     service = object.__new__(ChatbotWebFallbackSearchService)
 

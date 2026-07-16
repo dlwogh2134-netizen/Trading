@@ -2411,6 +2411,7 @@ def search_order_entry_symbols():
         return jsonify({"success": True, "data": {"symbols": []}})
     try:
         from backend.services.symbol_metadata import COIN_DISPLAY_NAMES, SYMBOL_METADATA, search_crypto_symbols
+        from backend.services.crypto_asset_service import search_crypto_assets
 
         _, client = _load_order_entry_client(auth_header, user_id, exchange, broker_env)
         candidates = []
@@ -2424,11 +2425,18 @@ def search_order_entry_symbols():
                     continue
                 candidates.append({"symbol": symbol, "name": name, "market": market})
         else:
-            for item in search_crypto_symbols(query, limit=10):
+            crypto_items = search_crypto_assets(query, limit=10) or search_crypto_symbols(query, limit=10)
+            for item in crypto_items:
+                if item.get("admin_trading_blocked"):
+                    continue
                 exchanges = item.get("exchanges") or []
                 if exchange == "COINONE" and "COINONE" not in exchanges:
                     continue
                 if exchange in {"BINANCE", "BINANCE_UM_FUTURES"} and "BINANCE" not in exchanges:
+                    continue
+                if exchange == "COINONE" and not item.get("coinone_tradable", True):
+                    continue
+                if exchange in {"BINANCE", "BINANCE_UM_FUTURES"} and not item.get("binance_tradable", True):
                     continue
                 base_symbol = str(item.get("symbol") or "").upper()
                 market_symbol = base_symbol if exchange == "COINONE" else f"{base_symbol}USDT"
@@ -5325,6 +5333,7 @@ def lookup_symbol():
 
     import re
     from backend.services.symbol_metadata import SYMBOL_METADATA, search_crypto_symbols, COIN_DISPLAY_NAMES
+    from backend.services.crypto_asset_service import find_crypto_asset_for_query
     from backend.services.market_repository import MarketRepository
     from backend.services.symbol_reconciliation_service import (
         canonical_symbol_for,
@@ -5358,7 +5367,28 @@ def lookup_symbol():
                 }
             })
 
-    # 2. 가상자산 정밀 매칭 (한글명 맵 또는 코인 캐시 기반)
+    crypto_asset = find_crypto_asset_for_query(query)
+    if crypto_asset:
+        return jsonify({
+            "success": True,
+            "data": {
+                "symbol": crypto_asset["symbol"],
+                "display_name": crypto_asset["display_name"],
+                "asset_type": "CRYPTO",
+                "market": crypto_asset.get("market"),
+                "markets": crypto_asset.get("markets", []),
+                "exchanges": crypto_asset.get("exchanges", []),
+                "exchange_options": crypto_asset.get("exchange_options", []),
+                "default_exchange": crypto_asset.get("default_exchange"),
+                "coinone_listed": crypto_asset.get("coinone_listed"),
+                "coinone_tradable": crypto_asset.get("coinone_tradable"),
+                "binance_listed": crypto_asset.get("binance_listed"),
+                "binance_tradable": crypto_asset.get("binance_tradable"),
+                "admin_trading_blocked": crypto_asset.get("admin_trading_blocked"),
+                "admin_block_reason": crypto_asset.get("admin_block_reason"),
+            }
+        })
+
     for base_sym, name in COIN_DISPLAY_NAMES.items():
         if name.upper() == query or base_sym == query:
             return jsonify({
@@ -5369,6 +5399,9 @@ def lookup_symbol():
                     "asset_type": "CRYPTO",
                     "market": "KRW · USDT",
                     "markets": ["KRW", "USDT"],
+                    "exchanges": ["COINONE", "BINANCE"],
+                    "exchange_options": ["COINONE", "BINANCE"],
+                    "default_exchange": "COINONE",
                 }
             })
 
@@ -5386,6 +5419,13 @@ def lookup_symbol():
                     "market": c.get("market"),
                     "markets": c.get("markets", []),
                     "exchanges": c.get("exchanges", []),
+                    "exchange_options": c.get("exchange_options", c.get("exchanges", [])),
+                    "default_exchange": c.get("default_exchange") or ("COINONE" if "COINONE" in c.get("exchanges", []) else "BINANCE"),
+                    "coinone_listed": c.get("coinone_listed"),
+                    "coinone_tradable": c.get("coinone_tradable"),
+                    "binance_listed": c.get("binance_listed"),
+                    "binance_tradable": c.get("binance_tradable"),
+                    "admin_trading_blocked": c.get("admin_trading_blocked", False),
                 }
             })
 
@@ -5649,7 +5689,7 @@ def search_symbols():
     # 4.5. 검색 결과가 없고 검색어가 2글자 이상인 경우 difflib를 활용한 퍼지 유사도 검색 폴백
     if not results and len(query) >= 2:
         import difflib
-        cache = _load_symbol_names_cache(auth_header)
+        cache = _load_symbol_names_cache("")
         names = [item["name"] for item in cache]
         matches = difflib.get_close_matches(query, names, n=3, cutoff=0.35)
         if matches:

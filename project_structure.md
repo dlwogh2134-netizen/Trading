@@ -73,6 +73,8 @@ backend/
 │   │   ├── tool_registry.py
 │   │   └── web_fallback_search_service.py
 │   ├── coinone_client.py
+│   ├── crypto_asset_service.py
+│   ├── crypto_asset_sync_service.py
 │   ├── crypto_cost_basis_service.py
 │   ├── dart_ingest.py
 │   ├── dart_repository.py
@@ -147,6 +149,8 @@ backend/
   - `chatbot/order_form_policy.py`는 일반 채팅의 자연어 주문 의도를 주문 제안 생성 전에 차단하고 상단 `매매 요청` 버튼을 이용하라는 안내만 반환합니다. 종목·수량·가격·거래소를 추출하거나 저장하지 않습니다.
   - `chatbot/tool_symbol_model.py`는 챗봇 도구가 공유하는 종목 별칭, 심볼 검색어 추출, 종목 후보 정규화, 모호한 종목 선택 응답 생성을 담당합니다.
   - `chatbot/tool_registry.py`는 `get_crypto_market_context`를 통해 코인 현재가, 호가, 캔들, ML 활성 신호, 보유 스냅샷, 스프레드·슬리피지, Coinone/Binance 김치프리미엄과 주의사항을 통합한 읽기 전용 분석 도구를 제공합니다.
+  - `crypto_asset_service.py`는 Supabase `crypto_assets` 단일 테이블을 기준으로 코인원/바이낸스 상장 상태, 거래 가능 여부, 표시명, 기본 거래소, 관리자 차단 상태를 조회·검색·수정합니다.
+  - `crypto_asset_sync_service.py`는 코인원 Public currency 목록과 바이낸스 exchangeInfo를 병합해 `crypto_assets`에 상장/거래 가능 상태를 업서트합니다.
   - `obsidian_service.py`는 Markdown frontmatter/title/hash 정규화를 담당
   - `knowledge_chunk_service.py`는 저장된 노트 본문을 RAG/embedding 대상 chunk로 분할
   - `knowledge_repository.py`는 `user_knowledge_notes`, `user_memory_facts` Supabase 저장/조회 래퍼를 담당
@@ -226,7 +230,12 @@ frontend/
         ├── adminMlDataWorkflowPanels.jsx
         ├── adminMlDataModel.js
         ├── adminMlDataModel.test.mjs
+        ├── AdminCryptoAssetEditModal.jsx
+        ├── AdminCryptoAssetsPanel.jsx
+        ├── adminCryptoAssetModel.js
+        ├── AdminDeleteConfirmModal.jsx
         ├── AdminSymbolReconciliation.jsx
+        ├── AdminSummaryCard.jsx
         ├── AdminUsers.jsx
         ├── AssetDetail.jsx
         ├── assetDetailAutoRulesPanel.jsx
@@ -268,6 +277,14 @@ frontend/
 ```
 
 ### frontend 역할 구분
+
+- `AdminSymbolReconciliation.jsx`는 기존 주식 종목 정리 스캔, 비활성화, 캐시 삭제, 복구 화면의 컨테이너입니다.
+- `AdminCryptoAssetsPanel.jsx`는 코인 종목 마스터(`crypto_assets`) 조회, 코인원/바이낸스 공개 API 동기화, 표시명/별칭/기본 거래소/관리자 차단 상태 수정 진입을 제공합니다.
+- `AdminCryptoAssetEditModal.jsx`는 코인 종목 표시명, 별칭, 거래소별 심볼, 노출 여부, 관리자 거래 차단 상태를 수정하는 모달입니다.
+- `adminCryptoAssetModel.js`는 관리자 코인 종목 수정 모달의 초기 편집 상태 변환을 담당합니다.
+- `AdminDeleteConfirmModal.jsx`와 `AdminSummaryCard.jsx`는 관리자 종목 정리 화면의 확인 모달과 요약 카드입니다.
+- `SymbolSearch.jsx`는 코인 검색 결과의 `default_exchange`를 상세 페이지 URL query로 전달해 거래소 전용 종목이 잘못된 거래소로 열리지 않게 합니다.
+- `AssetDetail.jsx`와 `mobile/MobileAssetDetail.jsx`는 URL의 `exchange` 또는 `/api/symbol/lookup`의 `default_exchange`를 우선 적용해 코인 상세 거래소를 확정합니다.
 
 - `features/chatbot/OrderEntryFlow.jsx`
   - 챗봇 상단 버튼에서 빈 상태로 시작하는 데스크톱 3단계 매매 요청 UI

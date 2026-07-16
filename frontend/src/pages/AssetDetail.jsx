@@ -1,5 +1,5 @@
 import { useState, useEffect, useEffectEvent, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { createChart, CandlestickSeries } from 'lightweight-charts'
 import { supabase, deleteUserWatchlistItem, ensureNewsSummaries, fetchUserWatchlist, normalizeWatchlistItem, upsertUserWatchlistItem } from '../supabaseClient'
 import Header from '../components/Header.jsx'
@@ -35,6 +35,8 @@ const AUTO_RULE_SELECT_FIELDS = 'id,exchange,asset_type,ticker,symbol,broker_env
 export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userProfile }) {
   const { assetType, symbol } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const routeExchange = String(searchParams.get('exchange') || '').toUpperCase()
   const normalizedRouteAssetType = String(assetType || '').toUpperCase() === 'STOCK' ? 'STOCK' : 'CRYPTO'
   const [resolvedAssetType, setResolvedAssetType] = useState(normalizedRouteAssetType)
   const [resolvedSymbol, setResolvedSymbol] = useState(normalizeStockSymbol(symbol))
@@ -94,6 +96,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   // 1. 거래소 기본값 세팅 (주식은 TOSS 실거래를 기본값으로, 코인은 COINONE. 단, USDT 마켓 코인은 BINANCE)
   const defaultExchange = (() => {
     if (normalizedRouteAssetType === 'STOCK') return 'TOSS';
+    if (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(routeExchange)) return routeExchange
     const symUpper = String(symbol || '').toUpperCase();
     if (symUpper.endsWith('USDT') || symUpper.endsWith('BUSD')) {
       return 'BINANCE';
@@ -828,6 +831,15 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         setResolvedAssetType(mappedAssetType)
         setResolvedSymbol(normalizeStockSymbol(resData.data.symbol || symbol))
         setResolvedMarket(String(resData.data.market || '').trim().toUpperCase())
+        if (mappedAssetType === 'CRYPTO') {
+          const lookupExchange = String(resData.data.default_exchange || '').toUpperCase()
+          const nextExchange = ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(routeExchange)
+            ? routeExchange
+            : lookupExchange
+          if (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(nextExchange) && exchange !== nextExchange) {
+            setExchange(nextExchange)
+          }
+        }
         setSymbolLookupReady(true)
       } else {
         const params = new URLSearchParams({

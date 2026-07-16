@@ -616,6 +616,50 @@ erDiagram
 * The vector index is created only for `embedding_status = 'EMBEDDED'` rows to keep retrieval focused on ready chunks.
 ## 관리자 종목 마스터 정리 테이블
 
+### crypto_assets
+
+코인원과 바이낸스의 가상자산 상장/거래 가능 상태를 기본 심볼 단위로 병합해 저장하는 코인 종목 마스터입니다. 랭킹은 기존 코인원 ticker 데이터를 계속 사용하되, 검색/상세/챗봇/주문 진입 화면의 종목 정체성, 표시명, 기본 거래소, 거래 차단 여부는 이 테이블을 우선 참조합니다.
+
+- `id` (UUID, PK)
+- `base_symbol` (TEXT, UNIQUE): 거래소 suffix를 제거한 기본 심볼. 예: `H`, `BTC`, `ALICE`
+- `display_name_ko` (TEXT): 관리자 보정 한글명
+- `display_name_en` (TEXT): 거래소 또는 관리자 보정 영문명
+- `aliases` (TEXT[]): 검색 별칭. 예: `Humanity`, `휴머니티`
+- `default_exchange` (TEXT): `COINONE`, `BINANCE`, `BINANCE_UM_FUTURES`
+- `is_visible` (BOOLEAN): 공용 검색 노출 여부
+- `admin_trading_blocked` (BOOLEAN): 거래소 API 상태와 별개로 주문 제안/주문 진입을 막는 관리자 차단 플래그
+- `admin_block_reason` (TEXT)
+- `admin_note` (TEXT)
+- `coinone_listed` (BOOLEAN)
+- `coinone_symbol` (TEXT)
+- `coinone_tradable` (BOOLEAN)
+- `coinone_exchange_status` (TEXT)
+- `coinone_deposit_status` (TEXT)
+- `coinone_withdraw_status` (TEXT)
+- `coinone_raw_status` (JSONB)
+- `coinone_last_synced_at` (TIMESTAMPTZ)
+- `binance_listed` (BOOLEAN)
+- `binance_symbol` (TEXT)
+- `binance_tradable` (BOOLEAN)
+- `binance_status` (TEXT)
+- `binance_raw_status` (JSONB)
+- `binance_last_synced_at` (TIMESTAMPTZ)
+- `source` (TEXT)
+- `last_synced_at` (TIMESTAMPTZ)
+- `created_at` (TIMESTAMPTZ)
+- `updated_at` (TIMESTAMPTZ)
+
+**RLS/권한**
+
+- RLS를 활성화하고 `service_role`만 전체 관리할 수 있습니다.
+- 프론트엔드는 직접 Supabase에서 이 테이블을 읽지 않고 Flask 관리자/검색 API를 통해 접근합니다.
+
+**운영 규칙**
+
+- `H`처럼 코인원에만 있는 종목은 `coinone_listed=true`, `binance_listed=false`, `default_exchange=COINONE`으로 관리합니다.
+- `ALICE`처럼 바이낸스에만 있는 종목은 `coinone_listed=false`, `binance_listed=true`, `default_exchange=BINANCE`로 관리합니다.
+- `admin_trading_blocked=true`이면 검색에는 표시할 수 있어도 주문 가능 목록과 챗봇 주문 제안에서는 차단합니다.
+
 ### admin_symbol_reconciliation_runs
 
 관리자가 종목 마스터 정리 스캔을 실행한 단위 이력을 저장합니다. `SKHYV`처럼 정식 상장 전 사용되던 임시 해외주식 심볼이 검색 후보나 랭킹 캐시에 남아 있는지 점검할 때 사용합니다.

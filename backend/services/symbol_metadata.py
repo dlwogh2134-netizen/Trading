@@ -24,7 +24,6 @@ COIN_DISPLAY_NAMES = {
     "ADA": "에이다",
     "TRX": "트론",
     "AVAX": "아발란체",
-    "SHIB": "시바이누",
     "DOT": "폴카닷",
     "LINK": "체인링크",
     "BCH": "비트코인캐시",
@@ -66,11 +65,7 @@ COIN_DISPLAY_NAMES = {
 }
 
 # 가상자산 목록 전역 캐시
-_crypto_cache = {
-    "coinone": [],  # 코인원 상장 코인 심볼 리스트 (예: ["BTC", "ETH", "XRP"])
-    "binance": [],  # 바이낸스 USDT 상장 코인 심볼 리스트 (예: ["BTCUSDT", "ETHUSDT"])
-    "last_updated": 0.0
-}
+_crypto_cache = {"coinone": [], "binance": [], "last_updated": 0.0}
 _crypto_cache_lock = threading.Lock()
 CRYPTO_CACHE_TTL = 3600 * 24  # 24시간 캐시 유지
 
@@ -185,7 +180,7 @@ def get_cached_crypto_symbols() -> dict:
     return _crypto_cache
 
 
-def normalize_crypto_base_symbol(symbol: object) -> str:
+def normalize_crypto_base_symbol(symbol: str | None) -> str:
     """
     거래소별 마켓 심볼(BTCUSDT, KRW-BTC 등)을 사용자 기준 기본 심볼(BTC)로 정규화합니다.
     """
@@ -209,6 +204,15 @@ def search_crypto_symbols(query: str, limit: int = 10) -> list[dict]:
     검색어(query)를 기반으로 코인원/바이낸스 상장 코인을 기본 심볼 단위로 병합 검색합니다.
     """
     query = str(query or "").strip().upper()
+    try:
+        from backend.services.crypto_asset_service import search_crypto_assets
+
+        db_results = search_crypto_assets(query, limit=limit)
+        if db_results:
+            return db_results
+    except Exception:
+        logger.warning("[SymbolMetadata] crypto_assets 검색 실패, 실시간 캐시로 폴백합니다.", exc_info=True)
+
     cache = get_cached_crypto_symbols()
     merged = {}
 
@@ -230,11 +234,7 @@ def search_crypto_symbols(query: str, limit: int = 10) -> list[dict]:
             values.append(value)
 
     def matches(base_symbol: str, market_symbol: str, korean_name: str) -> bool:
-        return (
-            query in base_symbol
-            or query in market_symbol
-            or bool(korean_name and query in korean_name.upper())
-        )
+        return query in base_symbol or query in market_symbol or bool(korean_name and query in korean_name.upper())
 
     # 1. 코인원 검색
     for sym in cache["coinone"]:
@@ -258,10 +258,9 @@ def search_crypto_symbols(query: str, limit: int = 10) -> list[dict]:
             append_unique(entry["exchanges"], "BINANCE")
             append_unique(entry["aliases"], sym)
 
-    results = []
-    for entry in merged.values():
+    results = list(merged.values())
+    for entry in results:
         entry["market"] = " · ".join(entry["markets"]) if entry["markets"] else ""
-        results.append(entry)
 
     results.sort(key=lambda item: (0 if item["symbol"] == query else 1, len(item["symbol"]), item["symbol"]))
 

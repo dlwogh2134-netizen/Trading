@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../supabaseClient'
 import { buildApiErrorText } from '../lib/apiError.js'
+import AdminCryptoAssetsPanel from './AdminCryptoAssetsPanel.jsx'
+import AdminDeleteConfirmModal from './AdminDeleteConfirmModal.jsx'
+import AdminSummaryCard from './AdminSummaryCard.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
@@ -26,15 +29,6 @@ function formatDate(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '-'
   return date.toLocaleString()
-}
-
-function SummaryCard({ label, value }) {
-  return (
-    <div className="rounded border border-slate-800 bg-[#0f172a] p-4">
-      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</p>
-      <p className="mt-2 text-xl font-black text-white">{Number(value || 0).toLocaleString()}</p>
-    </div>
-  )
 }
 
 export default function AdminSymbolReconciliation() {
@@ -172,46 +166,34 @@ export default function AdminSymbolReconciliation() {
 
   return (
     <section className="flex flex-col gap-5">
+      <AdminCryptoAssetsPanel authHeaders={authHeaders} />
+
       <div className="ai-glass rounded-lg p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-ai-cyan">Symbol Reconciliation</p>
             <h2 className="mt-2 text-2xl font-bold text-white">종목 정리</h2>
-            <p className="mt-2 text-sm leading-6 text-slate-400">
-              임시코드, 오래된 캐시, 비활성 후보를 점검하고 관리자 승인으로 정리합니다.
-            </p>
+            <p className="mt-2 text-sm leading-6 text-slate-400">임시코드, 오래된 캐시, 비활성 후보를 점검하고 관리자 승인으로 정리합니다.</p>
           </div>
-          <button
-            type="button"
-            onClick={runScan}
-            disabled={actionLoading === 'scan'}
-            className="rounded bg-blue-600 px-4 py-2 text-xs font-black text-[#ffffff] transition hover:bg-blue-700 active:scale-95"
-          >
+          <button type="button" onClick={runScan} disabled={actionLoading === 'scan'} className="rounded bg-blue-600 px-4 py-2 text-xs font-black text-[#ffffff] transition hover:bg-blue-700 active:scale-95">
             {actionLoading === 'scan' ? '스캔 중...' : '스캔 실행'}
           </button>
         </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <SummaryCard label="전체 검사" value={run?.checked_count} />
-        <SummaryCard label="정상" value={run?.normal_count} />
-        <SummaryCard label="의심" value={run?.suspicious_count} />
-        <SummaryCard label="비활성 예정" value={run?.deactivation_candidate_count} />
-        <SummaryCard label="삭제 가능" value={run?.deletable_count} />
+        <AdminSummaryCard label="전체 검사" value={run?.checked_count} />
+        <AdminSummaryCard label="정상" value={run?.normal_count} />
+        <AdminSummaryCard label="의심" value={run?.suspicious_count} />
+        <AdminSummaryCard label="비활성 예정" value={run?.deactivation_candidate_count} />
+        <AdminSummaryCard label="삭제 가능" value={run?.deletable_count} />
       </div>
 
       <div className="rounded border border-slate-800 bg-[#0f172a] p-4">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
             {Object.entries(STATUS_LABELS).map(([status, label]) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => setStatusFilter(status)}
-                className={`rounded px-3 py-1.5 text-xs font-bold transition ${
-                  statusFilter === status ? 'bg-ai-cyan text-[#07111f]' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
+              <button key={status} type="button" onClick={() => setStatusFilter(status)} className={`rounded px-3 py-1.5 text-xs font-bold transition ${statusFilter === status ? 'bg-ai-cyan text-[#07111f]' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
                 {label}
               </button>
             ))}
@@ -281,41 +263,11 @@ export default function AdminSymbolReconciliation() {
             })}
           </tbody>
         </table>
-        {!loading && filteredItems.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-slate-500">표시할 스캔 결과가 없습니다.</p>
-        ) : null}
+        {!loading && filteredItems.length === 0 ? <p className="px-4 py-8 text-center text-sm text-slate-500">표시할 스캔 결과가 없습니다.</p> : null}
         {loading ? <p className="px-4 py-8 text-center text-sm text-slate-500">스캔 결과를 불러오는 중입니다...</p> : null}
       </div>
 
-      {deleteConfirm ? (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-lg border border-red-500/30 bg-[#0f172a] p-5 shadow-2xl">
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-red-300">삭제 확인</p>
-            <h3 className="mt-2 text-lg font-black text-white">선택한 종목을 삭제하시겠습니까?</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-300">
-              선택한 {deleteConfirm.symbols.length}개 종목의 캐시 데이터를 삭제합니다. 서버에서 참조 여부를 다시 확인하며,
-              참조가 있는 종목은 삭제되지 않습니다.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDeleteConfirm(null)}
-                className="rounded border border-slate-700 px-4 py-2 text-xs font-bold text-slate-300 transition hover:border-slate-500 hover:text-white"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={confirmDeleteAction}
-                disabled={actionLoading === 'delete'}
-                className="rounded bg-red-500 px-4 py-2 text-xs font-black text-white transition hover:bg-red-400 disabled:opacity-60"
-              >
-                삭제
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <AdminDeleteConfirmModal deleteConfirm={deleteConfirm} actionLoading={actionLoading} onCancel={() => setDeleteConfirm(null)} onConfirm={confirmDeleteAction} />
     </section>
   )
 }

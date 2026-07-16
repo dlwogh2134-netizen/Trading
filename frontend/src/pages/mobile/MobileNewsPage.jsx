@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Header from '../../components/Header.jsx'
 import { ensureNewsSummaries, fetchNewsArticles } from '../../lib/supabaseClient.js'
 
@@ -78,6 +78,7 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
   const [lastFetchedAt, setLastFetchedAt] = useState('')
   const [page, setPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
+  const newsRequestSeq = useRef(0)
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(totalCount / PAGE_SIZE)), [totalCount])
 
@@ -99,6 +100,8 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
   }, [maxVisiblePages, page, totalPages])
 
   const loadNews = useCallback(async () => {
+    const requestSeq = newsRequestSeq.current + 1
+    newsRequestSeq.current = requestSeq
     setNewsLoading(true)
     setNewsError('')
 
@@ -111,21 +114,27 @@ export default function News({ isLoggedIn, userEmail, handleLogout, hideHeader =
         offset: (page - 1) * PAGE_SIZE,
       })
 
+      if (requestSeq !== newsRequestSeq.current) return
+
       const items = res?.items || []
       setNewsItems(items)
       setTotalCount(res?.totalCount || 0)
       setLastFetchedAt(items?.[0]?.fetched_at || '')
     } catch (error) {
+      if (requestSeq !== newsRequestSeq.current) return
       setNewsError(error.message)
     } finally {
-      setNewsLoading(false)
+      if (requestSeq === newsRequestSeq.current) {
+        setNewsLoading(false)
+      }
     }
   }, [newsCategory, newsMarket, newsQuery, page])
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(loadNews, 0)
+    const delay = newsQuery.trim() ? 350 : 0
+    const timeoutId = window.setTimeout(loadNews, delay)
     return () => window.clearTimeout(timeoutId)
-  }, [loadNews])
+  }, [loadNews, newsQuery])
 
   const handleSummaryToggle = useCallback(
     async (item) => {
