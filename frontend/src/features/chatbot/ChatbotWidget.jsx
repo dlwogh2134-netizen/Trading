@@ -23,6 +23,7 @@ import {
 import { buildChatbotTraceBadges } from './chatbotTrace'
 import { buildTradeHistoryPresentation } from './chatbotTradeHistoryPresentation'
 import { buildWatchlistPresentation } from './chatbotWatchlistPresentation'
+import ChatMarkdown from './ChatMarkdown.jsx'
 
 const INITIAL_MESSAGES = [
   {
@@ -210,7 +211,9 @@ function ChatMessage({ message, onAction }) {
               <TradeHistoryResults presentation={tradeHistoryPresentation} />
             ) : hasWatchlistTable && !message.isStreaming ? (
               <WatchlistResults presentation={watchlistPresentation} />
-            ) : message.text}
+            ) : (
+              <ChatMarkdown messageText={message.text} />
+            )}
           </div>
         )}
         {hasMessageBody && messageTime && (
