@@ -240,6 +240,16 @@ erDiagram
     *   `ai_summary` (TEXT) - AI RAG용 정교한 기사 요약본
     *   `ai_summary_model` (TEXT)
     *   `ai_summary_generated_at` (TIMESTAMPTZ)
+    *   `relevance_score` (INTEGER) - 저장 전 뉴스 품질 게이트가 계산한 0~100 관련도 점수입니다.
+    *   `quality_status` (TEXT) - `PASS`, `HIGH_QUALITY`, `LOW_CONFIDENCE`, `REJECTED` 중 하나이며 NULL은 마이그레이션/백필 전 상태만 허용합니다.
+    *   `excluded_reason` (TEXT) - 저장 제외 사유입니다. 저장된 정상 기사에는 기본적으로 NULL입니다.
+    *   `quality_checked_at` (TIMESTAMPTZ) - 품질 게이트 또는 백필이 품질 메타데이터를 확정한 시각입니다.
+*   **뉴스 보관 정책**:
+    *   일반 뉴스(`quality_status <> 'HIGH_QUALITY'` 또는 NULL)는 `published_at` 기준 7일 후 물리 삭제합니다.
+    *   고품질 뉴스(`quality_status='HIGH_QUALITY'`)는 `published_at` 기준 30일 후 물리 삭제합니다.
+    *   삭제는 `is_active=false` 소프트 삭제가 아니라 `news_articles` row 물리 삭제로 수행합니다.
+    *   현재 수집량과 스케줄러 cadence는 유지하며, 보관 기간과 품질 게이트로 저장 용량 증가를 제어합니다.
+    *   Tavily는 챗봇 최신 검색 폴백 전용이며, 예약 뉴스 수집 provider로 사용하지 않습니다. 예약 수집은 현재 `NAVER`, `FINNHUB` 경로를 사용합니다.
 *   **RLS**:
     *   조회는 인증된 모든 사용자(`authenticated`) 가능.
 
@@ -254,6 +264,9 @@ erDiagram
     *   `fetched_count` (INTEGER)
     *   `started_at` (TIMESTAMPTZ)
     *   `error_message` (TEXT)
+*   **뉴스 수집 로그 보관 정책**:
+    *   `started_at` 기준 7일이 지난 `news_fetch_logs` row는 물리 삭제합니다.
+    *   이 정책은 뉴스 수집 로그에만 적용되며, DART 공시/공시 로그 보관 정책은 별도 트랙입니다.
 
 ### 2.6.1 dart_corp_codes
 *   **용도**: OpenDART 고유번호(`corp_code`)와 국내 주식 종목코드(`stock_code`)를 매핑하는 상장사 사전 테이블입니다.

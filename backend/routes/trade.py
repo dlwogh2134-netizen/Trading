@@ -20,6 +20,7 @@ from backend.services.kis_client import KISClient
 from backend.services.coinone_client import CoinoneClient
 from backend.services.binance_client import BinanceClient, BinanceFuturesClient
 from backend.services.crypto_cost_basis_service import get_transfer_source_amount
+from backend.services.crypto_asset_service import validate_crypto_asset_tradable
 from backend.services.error_message_service import format_error_payload
 from backend.services.exchange_client import MARKET_CLOSED_ORDER_MESSAGE, MarketClosedError, is_market_closed_order_error
 from backend.services.order_entry_service import (
@@ -69,6 +70,24 @@ def _normalize_binance_chart_symbol(symbol: str) -> str:
     if any(normalized.endswith(quote_asset) for quote_asset in BINANCE_SPOT_QUOTE_ASSETS):
         return normalized
     return f"{normalized}USDT"
+
+
+def _crypto_base_symbol_for_policy(exchange: str, symbol: str) -> str:
+    normalized = str(symbol or "").strip().upper().replace("_", "").replace("/", "")
+    if exchange in {"BINANCE", "BINANCE_UM_FUTURES"}:
+        for quote_asset in BINANCE_SPOT_QUOTE_ASSETS:
+            if normalized.endswith(quote_asset) and len(normalized) > len(quote_asset):
+                return normalized[:-len(quote_asset)]
+    if exchange == "COINONE" and normalized.endswith("KRW") and len(normalized) > 3:
+        return normalized[:-3]
+    return normalized
+
+
+def _validate_crypto_asset_policy(exchange: str, symbol: str) -> None:
+    normalized_exchange = str(exchange or "").upper()
+    if normalized_exchange not in CRYPTO_EXCHANGES:
+        return
+    validate_crypto_asset_tradable(_crypto_base_symbol_for_policy(normalized_exchange, symbol), normalized_exchange)
 
 
 def determine_market_country(symbol: str) -> str:
@@ -2613,6 +2632,10 @@ def precheck_manual_order():
             "success": False,
             "message": "실거래 시장가 주문은 100,000원 하드캡을 보장할 수 없어 지원하지 않습니다. 지정가를 입력해 주세요.",
         }), 400
+    try:
+        _validate_crypto_asset_policy(exchange, symbol)
+    except ValueError as error:
+        return jsonify({"success": False, "message": str(error)}), 400
 
     try:
         record, access_key, secret_key = _load_user_exchange_record(auth_header, user_id, exchange, broker_env)
@@ -2711,6 +2734,10 @@ def place_manual_order():
             "success": False,
             "message": "실거래 시장가 주문은 100,000원 하드캡을 보장할 수 없어 지원하지 않습니다. 지정가를 입력해 주세요.",
         }), 400
+    try:
+        _validate_crypto_asset_policy(exchange, str(symbol))
+    except ValueError as error:
+        return jsonify({"success": False, "message": str(error)}), 400
 
     try:
         qty = float(quantity)

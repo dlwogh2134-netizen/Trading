@@ -283,7 +283,13 @@ def upsert_user_api_key(auth_header: str, data: dict):
 SERVICE_ROLE_TIMEOUT_SECONDS = 15
 
 
-def query_supabase_as_service_role(endpoint: str, method: str = "GET", json_data: dict = None, params: dict = None) -> any:
+def query_supabase_as_service_role(
+    endpoint: str,
+    method: str = "GET",
+    json_data: dict | list[dict] | None = None,
+    params: dict | None = None,
+    extra_headers: dict | None = None,
+) -> any:
     """
     사용자 JWT 인증 없이 SUPABASE_SERVICE_ROLE_KEY 권한으로 Supabase REST API를 직접 쿼리합니다.
     주로 백그라운드 스케줄러, 토큰 캐시 DB화 등 관리자 수준 동기화 작업에 사용됩니다.
@@ -298,6 +304,11 @@ def query_supabase_as_service_role(endpoint: str, method: str = "GET", json_data
         "Authorization": f"Bearer {service_role_key}",
         "Content-Type": "application/json"
     }
+    if extra_headers:
+        for header_name, header_value in extra_headers.items():
+            if str(header_name).casefold() != "prefer":
+                raise ValueError("추가 Supabase 헤더는 Prefer만 허용됩니다.")
+            headers["Prefer"] = str(header_value)
     
     if method == "GET":
         res = requests.get(url, headers=headers, params=params, timeout=SERVICE_ROLE_TIMEOUT_SECONDS)
@@ -322,7 +333,12 @@ def query_supabase_as_service_role(endpoint: str, method: str = "GET", json_data
             return res.text
     return None
 
-def safe_query_supabase_as_service_role(endpoint: str, method: str = "GET", json_data: dict = None, params: dict = None) -> any:
+def safe_query_supabase_as_service_role(
+    endpoint: str,
+    method: str = "GET",
+    json_data: dict | list[dict] | None = None,
+    params: dict | None = None,
+) -> any:
     """
     safe_query_supabase의 service_role 버전. 예외를 무시하고 진행합니다.
     """

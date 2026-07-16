@@ -16,6 +16,7 @@ from backend.services.disclosure_knowledge_sync_service import DisclosureKnowled
 from backend.services.embedding_service import EmbeddingService
 from backend.services.knowledge_chunk_service import KnowledgeChunkService
 from backend.services.news_repository import NewsRepository
+from backend.services.news_quality_service import NewsQualityService
 from backend.services.news_summary_service import NewsSummaryService
 from backend.services.crypto_asset_service import find_crypto_asset_for_query
 from backend.services.symbol_metadata import COIN_DISPLAY_NAMES, SYMBOL_METADATA
@@ -62,6 +63,7 @@ class ChatbotWebFallbackSearchService:
     def __init__(self) -> None:
         self.rag_service = ChatbotRAGService()
         self.news_repository = NewsRepository()
+        self.quality_service = NewsQualityService()
         self.dart_repository = DartRepository()
         self.dart_analysis_service = DartDisclosureAnalysisService()
         self.disclosure_knowledge_sync_service = DisclosureKnowledgeSyncService(
@@ -796,8 +798,21 @@ class ChatbotWebFallbackSearchService:
         }
 
     def _try_upsert_news(self, articles: list[dict[str, Any]]) -> None:
+        quality_service = getattr(self, "quality_service", None)
+        if quality_service is None:
+            quality_service = NewsQualityService()
+            self.quality_service = quality_service
+
+        accepted_articles = []
+        for article in articles:
+            scored_article = quality_service.apply_quality(article)
+            if scored_article:
+                accepted_articles.append(scored_article)
+        if not accepted_articles:
+            return
+
         try:
-            self.news_repository.upsert_articles(articles)
+            self.news_repository.upsert_articles(accepted_articles)
         except Exception:
             return
 

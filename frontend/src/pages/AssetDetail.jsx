@@ -26,6 +26,7 @@ import {
   isUsStockSymbol,
   normalizeCandleTime,
   normalizeStockSymbol,
+  sortNewsByPublishedAtDesc,
 } from './assetDetailModel.js'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
@@ -1055,7 +1056,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       const response = await fetch(`${API_BASE_URL}/api/news?symbol=${encodeURIComponent(newsSymbol)}&limit=10`)
       const resData = await response.json()
       if (resData.success && resData.data && resData.data.items) {
-        setNewsList(resData.data.items)
+        setNewsList(sortNewsByPublishedAtDesc(resData.data.items))
       }
     } catch (e) {
       console.error("뉴스 로드 실패:", e)
@@ -1119,10 +1120,16 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setNewsSyncing(true)
     setNewsSyncMessage({ text: '', isError: false })
     try {
+      const authHeader = await getAuthHeader()
+      if (!authHeader) {
+        setNewsSyncMessage({ text: '로그인이 필요합니다.', isError: true })
+        return
+      }
       const response = await fetch(`${API_BASE_URL}/api/news/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          Authorization: authHeader,
         },
         body: JSON.stringify({
           symbol: resolvedAssetType === 'STOCK' ? getExchangeSymbol(exchange) : getDetailBaseSymbol(),

@@ -31,22 +31,44 @@ def _merge_payload(base_symbol: str, existing: dict[str, JsonValue] | None) -> d
     now = _utc_now()
     return {
         "base_symbol": base_symbol,
+        "display_name_ko": existing.get("display_name_ko") if existing else None,
+        "display_name_en": existing.get("display_name_en") if existing else None,
+        "aliases": existing.get("aliases") if existing else [],
         "default_exchange": existing.get("default_exchange") if existing else "COINONE",
         "is_visible": existing.get("is_visible") if existing else True,
         "admin_trading_blocked": existing.get("admin_trading_blocked") if existing else False,
+        "admin_block_reason": existing.get("admin_block_reason") if existing else None,
+        "admin_note": existing.get("admin_note") if existing else None,
+        "coinone_listed": False,
+        "coinone_symbol": existing.get("coinone_symbol") if existing else None,
+        "coinone_tradable": False,
+        "coinone_exchange_status": None,
+        "coinone_deposit_status": None,
+        "coinone_withdraw_status": None,
+        "coinone_raw_status": None,
+        "coinone_last_synced_at": None,
+        "binance_listed": False,
+        "binance_symbol": existing.get("binance_symbol") if existing else None,
+        "binance_tradable": False,
+        "binance_status": None,
+        "binance_raw_status": None,
+        "binance_last_synced_at": None,
         "source": "API_SYNC",
         "last_synced_at": now,
         "updated_at": now,
     }
 
 
-def _upsert_asset(payload: dict[str, JsonValue], existing_symbols: set[str]) -> None:
-    symbol = str(payload.get("base_symbol") or "")
-    if symbol in existing_symbols:
-        query_supabase_as_service_role(f"crypto_assets?base_symbol=eq.{symbol}", "PATCH", json_data=payload)
+def _bulk_upsert_assets(payloads: list[dict[str, JsonValue]]) -> None:
+    if not payloads:
         return
-    query_supabase_as_service_role("crypto_assets", "POST", json_data=payload)
-    existing_symbols.add(symbol)
+    query_supabase_as_service_role(
+        "crypto_assets",
+        "POST",
+        json_data=payloads,
+        params={"on_conflict": "base_symbol"},
+        extra_headers={"Prefer": "resolution=merge-duplicates"},
+    )
 
 
 def _merge_coinone_assets(
@@ -128,9 +150,7 @@ def sync_crypto_assets() -> dict[str, JsonValue]:
     synced_at = _utc_now()
     coinone_count = _merge_coinone_assets(merged, existing_by_symbol, synced_at)
     binance_count = _merge_binance_assets(merged, existing_by_symbol, synced_at)
-    existing_symbols = set(existing_by_symbol)
-    for payload in merged.values():
-        _upsert_asset(payload, existing_symbols)
+    _bulk_upsert_assets(list(merged.values()))
 
     return {
         "synced_count": len(merged),

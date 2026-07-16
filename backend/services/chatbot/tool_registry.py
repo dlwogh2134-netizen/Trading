@@ -33,6 +33,7 @@ from backend.services.chatbot.portfolio_summary_service import (
 )
 from backend.services.chatbot.recommendation_service import ChatbotRecommendationService
 from backend.services.chatbot.asset_ml_outlook import build_single_asset_ml_outlook
+from backend.services.crypto_asset_service import find_crypto_asset_for_query, validate_crypto_asset_tradable
 from backend.services.toss_client import TossClient
 from backend.utils.crypto_helper import CryptoHelper
 
@@ -203,10 +204,21 @@ def _detect_exchange(text: str) -> str | None:
     return None
 
 
-def _default_exchange_for_asset(asset_type: str, market: str) -> str:
+def _default_exchange_for_asset(asset_type: str, market: str, symbol: str | None = None) -> str:
     if str(asset_type or "").upper() == "CRYPTO":
+        crypto_asset = find_crypto_asset_for_query(symbol or "")
+        if crypto_asset and crypto_asset.get("default_exchange"):
+            return str(crypto_asset["default_exchange"]).upper()
         return "COINONE"
     return "TOSS"
+
+
+def _crypto_asset_policy_error(symbol: str, exchange: str) -> str | None:
+    try:
+        validate_crypto_asset_tradable(symbol, exchange)
+        return None
+    except ValueError as error:
+        return str(error)
 
 
 def _detect_env(text: str) -> str | None:
@@ -880,7 +892,7 @@ def _resolve_asset_price_for_krw_conversion(auth_header: str, message: str, cont
         display_name = str(symbol_data.get("display_name") or symbol).strip()
         asset_type = str(symbol_data.get("asset_type") or "").upper()
         market = str(symbol_data.get("market") or "").upper()
-        exchange = _detect_exchange(message) or _default_exchange_for_asset(asset_type, market)
+        exchange = _detect_exchange(message) or _default_exchange_for_asset(asset_type, market, symbol)
         broker_env = _detect_env(message) or "REAL"
 
     if current_price <= 0 or not currency:
@@ -888,7 +900,7 @@ def _resolve_asset_price_for_krw_conversion(auth_header: str, message: str, cont
             "/api/chart/quote",
             auth_header,
             params={
-                "exchange": exchange or _default_exchange_for_asset(asset_type, market),
+                "exchange": exchange or _default_exchange_for_asset(asset_type, market, symbol),
                 "symbol": symbol,
                 "broker_env": broker_env,
             },
@@ -1149,7 +1161,7 @@ def get_asset_trade_status(auth_header: str, message: str) -> dict:
     display_name = str(symbol_data.get("display_name") or symbol).strip()
     asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
     market = str(symbol_data.get("market") or "").upper()
-    exchange = _default_exchange_for_asset(asset_type, market)
+    exchange = _default_exchange_for_asset(asset_type, market, symbol)
     label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
 
     if not _is_stock_asset_for_status(asset_type, exchange):
@@ -1218,7 +1230,7 @@ def get_asset_price(auth_header: str, message: str, exchange: str = None, broker
     asset_type = str(symbol_data.get("asset_type") or "").upper()
     market = str(symbol_data.get("market") or "").strip().upper()
     label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
-    exchange = exchange or _detect_exchange(message) or _default_exchange_for_asset(asset_type, market)
+    exchange = exchange or _detect_exchange(message) or _default_exchange_for_asset(asset_type, market, symbol)
     broker_env = broker_env or _detect_env(message) or "REAL"
     try:
         payload = _get_internal(
@@ -1345,7 +1357,7 @@ def get_asset_orderbook(auth_header: str, message: str, exchange: str = None, br
     asset_type = str(symbol_data.get("asset_type") or "").upper()
     market = str(symbol_data.get("market") or "").strip().upper()
     label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
-    exchange = exchange or _detect_exchange(message) or _default_exchange_for_asset(asset_type, market)
+    exchange = exchange or _detect_exchange(message) or _default_exchange_for_asset(asset_type, market, symbol)
     broker_env = broker_env or _detect_env(message) or "REAL"
 
     try:
@@ -1445,7 +1457,7 @@ def get_asset_candles(auth_header: str, message: str, exchange: str = None, brok
     asset_type = str(symbol_data.get("asset_type") or "").upper()
     market = str(symbol_data.get("market") or "").strip().upper()
     label = f"{display_name}({symbol})" if display_name and display_name.upper() != symbol else symbol
-    exchange = exchange or _detect_exchange(message) or _default_exchange_for_asset(asset_type, market)
+    exchange = exchange or _detect_exchange(message) or _default_exchange_for_asset(asset_type, market, symbol)
     broker_env = broker_env or _detect_env(message) or "REAL"
     interval = interval or _detect_candle_interval(message)
     count = int(count) if count else 20
@@ -2010,7 +2022,7 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
     asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
     market = str(symbol_data.get("market") or "").upper()
     explicit_exchange = _detect_exchange(message)
-    exchange = explicit_exchange or _default_exchange_for_asset(asset_type, market)
+    exchange = explicit_exchange or _default_exchange_for_asset(asset_type, market, symbol)
     price = parsed.price
     if (
         not explicit_exchange
@@ -2039,6 +2051,19 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
     else:
         broker_env = "MOCK" if asset_type == "CRYPTO" and not explicit_exchange else "REAL"
 
+    if asset_type == "CRYPTO":
+        policy_error = _crypto_asset_policy_error(symbol, exchange)
+        if policy_error:
+            return {
+                "reply": policy_error,
+                "data": {
+                    "source": "CHATBOT_ORDER_PARSER",
+                    "reason": "crypto_asset_policy_blocked",
+                    "exchange": exchange,
+                    "symbol": symbol,
+                },
+            }
+
     if exchange == "COINONE" and parsed.order_type == "MARKET":
         return {
             "reply": (
@@ -2052,14 +2077,6 @@ def create_trade_proposal_from_message(auth_header: str, message: str, intent: P
                 "symbol": symbol,
             },
         }
-
-    if (
-        not explicit_exchange
-        and exchange == "COINONE"
-        and broker_env == "MOCK"
-        and price is not None
-    ):
-        exchange = "BINANCE"
 
     if broker_env == "MOCK" and not _exchange_has_mock_env(exchange):
         return _build_unsupported_broker_env_result(exchange, broker_env, symbol)
@@ -3656,7 +3673,7 @@ def run_chatbot_tool(auth_header: str | None, message: str) -> dict | None:
             symbol_data = _resolve_symbol(auth_header, order_intent.symbol_query)
             asset_type = str(symbol_data.get("asset_type") or "STOCK").upper()
             market = str(symbol_data.get("market") or "").upper()
-            exchange = _default_exchange_for_asset(asset_type, market)
+            exchange = _default_exchange_for_asset(asset_type, market, str(symbol_data.get("symbol") or order_intent.symbol_query))
             broker_env = "MOCK"
             return _store_order_confirmation(
                 auth_header,

@@ -7,7 +7,9 @@ from typing import Any
 
 import requests
 
+from backend.services.news_error_sanitizer import sanitize_external_error_message
 from backend.services.news_query_planner import NewsQuery, NewsQueryPlanner
+from backend.services.news_quality_service import NewsQualityService
 from backend.services.news_repository import NewsRepository
 from backend.services.symbol_metadata import SYMBOL_METADATA
 
@@ -19,6 +21,7 @@ class NewsIngestService:
         self.finnhub_api_key = os.getenv("FINNHUB_API_KEY", "")
         self.repository = NewsRepository()
         self.query_planner = NewsQueryPlanner(self.repository)
+        self.quality_service = NewsQualityService()
         self.max_items_per_source = int(os.getenv("NEWS_MAX_ITEMS_PER_QUERY", "12"))
 
     def run_once(self) -> dict[str, Any]:
@@ -130,6 +133,7 @@ class NewsIngestService:
         per_query_results: list[dict[str, Any]] = []
         saved_count = 0
         duplicate_count = 0
+        rejected_count = 0
 
         for query in selected_queries:
             query_started_at = datetime.now(timezone.utc).isoformat()
@@ -141,9 +145,12 @@ class NewsIngestService:
                 else:
                     articles = []
 
+                accepted_articles = self._apply_quality_gate(articles)
+                query_rejected_count = len(articles) - len(accepted_articles)
+                rejected_count += query_rejected_count
                 batches.extend(articles)
-                deduplicated = self._deduplicate(articles)
-                duplicate_count += len(articles) - len(deduplicated)
+                deduplicated = self._deduplicate(accepted_articles)
+                duplicate_count += len(accepted_articles) - len(deduplicated)
                 if deduplicated:
                     self.repository.upsert_articles(deduplicated)
                     saved_count += len(deduplicated)
@@ -155,10 +162,13 @@ class NewsIngestService:
                         "query_category": query.category,
                         "status": "SUCCESS",
                         "fetched_count": len(articles),
+                        "accepted_count": len(accepted_articles),
+                        "rejected_count": query_rejected_count,
                     }
                 )
                 self._insert_query_log(query, "SUCCESS", len(articles), query_started_at)
             except Exception as exc:
+                safe_error_message = sanitize_external_error_message(exc)
                 per_query_results.append(
                     {
                         "provider": query.provider,
@@ -167,10 +177,16 @@ class NewsIngestService:
                         "query_category": query.category,
                         "status": "FAILED",
                         "fetched_count": 0,
-                        "error_message": str(exc),
+                        "error_message": safe_error_message,
                     }
                 )
-                self._insert_query_log(query, "FAILED", 0, query_started_at, error_message=str(exc))
+                self._insert_query_log(
+                    query,
+                    "FAILED",
+                    0,
+                    query_started_at,
+                    error_message=safe_error_message,
+                )
 
         for skipped in skipped_queries:
             self._insert_skipped_log(skipped, started_at)
@@ -179,11 +195,20 @@ class NewsIngestService:
             "inserted": saved_count,
             "fetched": len(batches),
             "deduplicated": duplicate_count,
+            "rejected": rejected_count,
             "queries_called": len(selected_queries),
             "queries_skipped": len(skipped_queries),
             "skipped": skipped_queries[:20],
             "query_results": per_query_results,
         }
+
+    def _apply_quality_gate(self, articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        accepted_articles: list[dict[str, Any]] = []
+        for article in articles:
+            scored_article = self.quality_service.apply_quality(article)
+            if scored_article:
+                accepted_articles.append(scored_article)
+        return accepted_articles
 
     def _fetch_naver(self, query: NewsQuery) -> list[dict[str, Any]]:
         response = requests.get(

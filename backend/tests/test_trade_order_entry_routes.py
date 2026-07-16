@@ -313,6 +313,68 @@ def test_blocked_precheck_does_not_issue_proposal_token(client, monkeypatch):
     assert data["blockers"] == ["실거래 1회 주문 한도 100,000원을 초과했습니다."]
 
 
+def test_crypto_precheck_blocks_admin_blocked_asset_before_exchange_client(client, monkeypatch):
+    order = {
+        "account_id": "COINONE:REAL:key-1",
+        "exchange": "COINONE",
+        "asset_type": "CRYPTO_SPOT",
+        "broker_env": "REAL",
+        "intent": "BUY",
+        "symbol": "H",
+        "symbol_selected": True,
+        "quantity": 2,
+        "order_type": "LIMIT",
+        "price": 100,
+        "idempotency_key": str(uuid.UUID("55555555-5555-4555-8555-555555555555")),
+    }
+    client_loaded = {"value": False}
+
+    def fail_policy(exchange, symbol):
+        raise ValueError("휴머니티(H) 종목은 관리자에 의해 거래가 차단되었습니다.")
+
+    def fake_load_client(*_args, **_kwargs):
+        client_loaded["value"] = True
+        return {"id": "key-1"}, "access", "secret"
+
+    monkeypatch.setattr(trade, "_validate_crypto_asset_policy", fail_policy)
+    monkeypatch.setattr(trade, "_load_user_exchange_record", fake_load_client)
+
+    response = client.post("/api/trade/precheck", json=order, headers=AUTH)
+
+    assert response.status_code == 400
+    assert "관리자에 의해 거래가 차단" in response.get_json()["message"]
+    assert client_loaded["value"] is False
+
+
+def test_crypto_direct_order_blocks_admin_blocked_asset_before_exchange_client(client, monkeypatch):
+    order = {
+        "exchange": "COINONE",
+        "symbol": "H",
+        "action": "BUY",
+        "order_type": "LIMIT",
+        "quantity": 2,
+        "price": 100,
+        "broker_env": "REAL",
+    }
+    client_loaded = {"value": False}
+
+    def fail_policy(exchange, symbol):
+        raise ValueError("휴머니티(H) 종목은 관리자에 의해 거래가 차단되었습니다.")
+
+    def fake_load_client(*_args, **_kwargs):
+        client_loaded["value"] = True
+        return {"id": "key-1"}, "access", "secret"
+
+    monkeypatch.setattr(trade, "_validate_crypto_asset_policy", fail_policy)
+    monkeypatch.setattr(trade, "_load_user_exchange_record", fake_load_client)
+
+    response = client.post("/api/trade/order", json=order, headers=AUTH)
+
+    assert response.status_code == 400
+    assert "관리자에 의해 거래가 차단" in response.get_json()["message"]
+    assert client_loaded["value"] is False
+
+
 def test_approval_restores_server_signed_futures_options(monkeypatch):
     proposal = {
         "id": "proposal-1",

@@ -167,6 +167,14 @@ export const formatNewsSource = (source) => {
   return source || 'NEWS'
 }
 
+export const sortNewsByPublishedAtDesc = (items = []) => {
+  return [...items].sort((left, right) => {
+    const rightTime = new Date(right?.published_at || 0).getTime()
+    const leftTime = new Date(left?.published_at || 0).getTime()
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0)
+  })
+}
+
 export const formatDisclosureDate = (value) => {
   const text = String(value || '').trim()
   if (/^\d{8}$/.test(text)) {

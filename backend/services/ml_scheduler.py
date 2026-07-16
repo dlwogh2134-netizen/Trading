@@ -1,14 +1,17 @@
 import json
 import logging
 import os
-import time
-import threading
-import requests
-import yaml
-import sys
 import subprocess
+import sys
+import threading
+import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol
+
+import requests
+import yaml
 
 from backend.services.lock_service import distributed_lock
 from backend.services.ml_automation_service import resolve_automation_preset
@@ -51,6 +54,75 @@ def get_stock_shadow_preset_keys() -> list[str]:
 _news_ingest_started = False
 _dart_ingest_started = False
 _ml_automation_started = False
+
+
+class _NewsRetentionCleanupCounts(Protocol):
+    normal_news: int
+    high_quality_news: int
+    logs: int
+
+
+class _NewsRetentionRepository(Protocol):
+    def cleanup_expired_news_retention(self) -> _NewsRetentionCleanupCounts:
+        ...
+
+
+class _NewsIngestService(Protocol):
+    repository: _NewsRetentionRepository
+
+    def run_once(self) -> Mapping[str, int | str | None]:
+        ...
+
+
+def _format_korea_date(now_utc: datetime | None = None) -> str:
+    current_utc = now_utc or datetime.utcnow()
+    return (current_utc + timedelta(hours=9)).strftime("%Y-%m-%d")
+
+
+def run_news_retention_cleanup_once(
+    news_ingest_service: _NewsIngestService,
+    last_cleanup_date: str | None,
+    korea_date: str,
+) -> str:
+    if last_cleanup_date == korea_date:
+        return last_cleanup_date
+
+    try:
+        counts = news_ingest_service.repository.cleanup_expired_news_retention()
+        logger.info(
+            "[NewsRetentionCleanup] run complete date=%s deleted_normal=%s deleted_high_quality=%s deleted_logs=%s",
+            korea_date,
+            counts.normal_news,
+            counts.high_quality_news,
+            counts.logs,
+        )
+    except (RuntimeError, ValueError, requests.exceptions.RequestException) as error:
+        logger.exception("[NewsRetentionCleanup] run failed date=%s: %s", korea_date, error)
+    return korea_date
+
+
+def run_news_ingest_scheduler_once(
+    news_ingest_service: _NewsIngestService,
+    last_cleanup_date: str | None = None,
+    now_utc: datetime | None = None,
+) -> str | None:
+    with distributed_lock("news_ingest", 600) as locked:
+        if locked:
+            next_cleanup_date = run_news_retention_cleanup_once(
+                news_ingest_service,
+                last_cleanup_date,
+                _format_korea_date(now_utc),
+            )
+            result = news_ingest_service.run_once()
+            logger.info(
+                "[NewsIngestScheduler] run complete fetched=%s inserted=%s skipped=%s",
+                result.get("fetched"),
+                result.get("inserted"),
+                result.get("queries_skipped"),
+            )
+            return next_cleanup_date
+        logger.info("[NewsIngestScheduler] lock not acquired")
+    return last_cleanup_date
 
 def resolve_model_version_from_config(config_path: str) -> str | None:
     """학습 설정 파일에서 모델 버전을 읽어 자동 감사 대상에 사용합니다."""
@@ -153,20 +225,13 @@ def start_news_ingest_scheduler(news_ingest_service, news_ingest_enabled: bool, 
     logger.info("[NewsIngestScheduler] started interval=%ss", news_ingest_interval_seconds)
 
     def _loop() -> None:
+        last_cleanup_date: str | None = None
         while True:
             try:
-                # 10분(600초) 동안 유효한 뉴스 수집 분산 락 획득 시도
-                with distributed_lock("news_ingest", 600) as locked:
-                    if locked:
-                        result = news_ingest_service.run_once()
-                        logger.info(
-                            "[NewsIngestScheduler] run complete fetched=%s inserted=%s skipped=%s",
-                            result.get("fetched"),
-                            result.get("inserted"),
-                            result.get("queries_skipped"),
-                        )
-                    else:
-                        logger.info("[NewsIngestScheduler] lock not acquired")
+                last_cleanup_date = run_news_ingest_scheduler_once(
+                    news_ingest_service,
+                    last_cleanup_date=last_cleanup_date,
+                )
             except Exception as error:
                 logger.exception("[NewsIngestScheduler] run failed: %s", error)
             now_kr = datetime.utcnow() + timedelta(hours=9)

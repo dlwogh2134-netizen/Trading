@@ -3,6 +3,16 @@
 확인일: 2026-07-09  
 확인 기준: 현재 로컬 코드, 마이그레이션 파일, Supabase REST 조회 결과
 
+## 2026-07-16 뉴스 보관/품질 게이트 확정
+
+- `news_articles`는 일반 뉴스 7일, `HIGH_QUALITY` 뉴스 30일 기준으로 물리 삭제합니다.
+- `news_fetch_logs`는 `started_at` 기준 7일 후 물리 삭제합니다.
+- 현재 뉴스 수집량과 스케줄러 cadence는 유지합니다.
+- Tavily는 예약 뉴스 수집 provider가 아니라 챗봇 최신 검색 폴백 전용입니다.
+- 예약 뉴스 수집은 `NAVER`, `FINNHUB` 경로를 유지하며 `NewsIngestService`에 Tavily fetcher를 추가하지 않습니다.
+- DART 공시와 DART 공시 로그 보관 정책은 이 뉴스 보관 정책과 분리합니다.
+- 2026-07-16 Supabase 검증 후 `news_articles`는 18,019건, `news_fetch_logs`는 15,192건이 남았고 만료 대상은 모두 0건입니다.
+
 ## 1. 요약
 
 현재 구현은 `Obsidian 노트 동기화 -> user_knowledge_notes 저장`까지 실제 DB에서 확인되었습니다.  
@@ -18,7 +28,7 @@
 | Vector DB 테이블 | `knowledge_chunks` 2,298건 존재 | 테이블 및 일부 임베딩 데이터 존재 |
 | Embedding | 최근 조회 샘플 기준 `DISCLOSURE:EMBEDDED` 존재 | 공시 쪽 임베딩은 진행된 흔적 있음 |
 | 자동메모리 | `user_memory_facts` 0건 | 생성 로직/샘플 데이터 필요 |
-| Tavily | 코드 기준 미연동 | 후속 작업 |
+| Tavily | 챗봇 최신 검색 폴백 전용 | 예약 뉴스 수집에는 사용하지 않음 |
 | 챗봇 RAG 연결 | 현재 챗봇은 `knowledge_chunks` 검색을 사용하지 않음 | 후속 작업 |
 
 ## 2. 코드 기준 완료된 작업
@@ -165,7 +175,10 @@ Supabase REST API를 service role로 조회했습니다. 문서에는 노트 본
 
 - 뉴스 DB는 이미 대량 수집되어 있습니다.
 - 현재 코드와 DB 기준 뉴스 provider는 `NAVER`, `FINNHUB`가 실제 사용 중입니다.
-- Tavily는 아직 DB provider로 들어오지 않았습니다.
+- Tavily는 예약 뉴스 수집 DB provider로 들어오지 않았고, 앞으로도 챗봇 최신 검색 폴백 전용으로 유지합니다.
+- 2026-07-16 기준 뉴스 품질 메타데이터(`relevance_score`, `quality_status`, `excluded_reason`, `quality_checked_at`)가 추가되었습니다.
+- 보관 정책은 일반 뉴스 7일 물리 삭제, `HIGH_QUALITY` 뉴스 30일 물리 삭제입니다.
+- 예약 수집량과 cadence는 유지하며, 품질 게이트와 물리 삭제로 저장 용량을 제어합니다.
 
 ## 4. 문서와 실제 코드의 차이
 
@@ -315,44 +328,37 @@ embedding:
 - `GET /api/knowledge/obsidian/auto-memory`가 빈 배열이 아닌 값을 반환
 - Obsidian marker 영역에 자동 반영됨
 
-### 6.5 5순위: Tavily 추가
+### 6.5 5순위: Tavily 챗봇 폴백 유지
 
 현재 상태:
 
 - 코드 기준 뉴스 provider는 `NAVER`, `FINNHUB`
 - DB 기준 최근 샘플도 `NAVER`, `FINNHUB`
-- Tavily provider는 아직 없음
+- Tavily provider는 예약 뉴스 수집에 추가하지 않습니다.
 
-추천 설계:
+운영 결정:
 
-- Tavily를 별도 개인 메모리로 저장하지 않습니다.
-- 기존 `news_articles`에 `source='TAVILY'` provider로 저장하는 방식이 좋습니다.
-- 이후 `knowledge_chunks.source_type='NEWS'`로 chunk 생성합니다.
+- 예약 수집 provider는 `NAVER`, `FINNHUB`만 유지합니다.
+- Tavily 결과를 스케줄러가 `news_articles.source='TAVILY'`로 저장하는 흐름은 만들지 않습니다.
+- Tavily 결과를 정기 chunk 생성 대상으로 연결하지 않습니다.
 
 이유:
 
-- Tavily는 최신 웹/뉴스 검색 provider입니다.
+- Tavily는 챗봇 최신 웹/뉴스 검색 폴백입니다.
 - Obsidian/자동메모리는 사용자 개인 지식입니다.
 - 두 개를 섞으면 출처 우선순위와 삭제 권한이 복잡해집니다.
 
 작업:
 
-1. 환경변수 추가
-   - `TAVILY_API_KEY`
-   - `NEWS_TAVILY_DAILY_QUERY_BUDGET`
-   - `NEWS_TAVILY_MAX_ITEMS_PER_QUERY`
-2. `NewsQueryPlanner`에 Tavily query 후보 추가
-3. `NewsIngestService`에 `_fetch_tavily()` 추가
-4. 결과를 `news_articles` 포맷으로 정규화
-5. fetch log에 `source='TAVILY'` 기록
-6. Tavily 결과를 chunk로 변환하는 후속 작업 연결
+1. 예약 ingestion 코드에서 Tavily fetcher, Tavily query planner, `source='TAVILY'` fetch log를 추가하지 않습니다.
+2. 챗봇 폴백으로 Tavily를 사용할 경우 호출량 제한, 인증, 캐시 우선 원칙을 별도 적용합니다.
+3. `news_articles` 자동 보관 정책은 Tavily가 아니라 현재 `NAVER`/`FINNHUB` 수집량을 기준으로 운영합니다.
 
 완료 기준:
 
-- `news_articles.source='TAVILY'` row 생성
-- Tavily 호출량 제한 적용
-- 중복 URL deduplication 동작
-- Tavily 기사도 `knowledge_chunks.source_type='NEWS'`로 검색 가능
+- 예약 뉴스 수집에 `news_articles.source='TAVILY'` row가 생성되지 않음
+- 챗봇 폴백에서만 Tavily 호출량 제한 적용
+- DB 캐시와 기존 provider 결과가 있으면 Tavily 재호출 생략
 
 ### 6.6 6순위: 챗봇 RAG 연결
 
@@ -408,6 +414,8 @@ Tavily는 외부 유료 API 한도가 있으므로 다음 방어가 필요합니
 - query log 기반 일일 호출량 제한
 - 동일 query 반복 호출 캐싱
 - DB에 최신 결과가 있으면 Tavily 재호출 생략
+- 예약 뉴스 수집 스케줄러에서는 Tavily를 호출하지 않음
+- 챗봇 폴백에서만 Tavily를 사용할 수 있으며, DB 캐시와 기존 provider 결과를 먼저 확인
 
 ### 7.3 민감 데이터 처리
 
@@ -438,10 +446,10 @@ Tavily는 외부 유료 API 한도가 있으므로 다음 방어가 필요합니
 
 ### Tavily/뉴스 담당
 
-- Tavily provider 추가 여부 확정
-- `NewsIngestService`에 Tavily fetcher 추가
-- `news_articles.source='TAVILY'` 저장
-- 호출량 제한 및 fetch log 연결
+- Tavily는 예약 뉴스 수집 provider로 추가하지 않음
+- `NewsIngestService`에 Tavily fetcher를 추가하지 않음
+- `news_articles.source='TAVILY'` 예약 저장 흐름을 만들지 않음
+- 챗봇 폴백으로 사용할 때만 호출량 제한과 캐시 우선 원칙 적용
 
 ### 챗봇 담당
 
@@ -456,4 +464,4 @@ Tavily는 외부 유료 API 한도가 있으므로 다음 방어가 필요합니
 다만 실제 DB 기준으로는 Obsidian 노트가 `user_knowledge_notes`에는 저장되어 있지만 `knowledge_chunks`에는 아직 연결되어 있지 않습니다.
 
 다음 작업의 출발점은 Tavily가 아니라 Obsidian chunk 재동기화 확인입니다.  
-그 다음 순서로 embedding 처리, vector 검색 RPC, 챗봇 RAG 연결, Tavily provider 추가를 진행하는 것이 가장 안전합니다.
+그 다음 순서로 embedding 처리, vector 검색 RPC, 챗봇 RAG 연결을 진행하는 것이 가장 안전합니다. Tavily는 예약 수집 확장 대상이 아니라 챗봇 최신 검색 폴백으로만 유지합니다.

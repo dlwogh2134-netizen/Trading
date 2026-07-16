@@ -100,6 +100,7 @@ backend/
 │   ├── ml_scheduler.py
 │   ├── ml_split_model_promotion_service.py
 │   ├── news_ingest.py
+│   ├── news_quality_service.py
 │   ├── news_query_planner.py
 │   ├── news_repository.py
 │   ├── news_summary_service.py
@@ -145,6 +146,9 @@ backend/
   - `chatbot/portfolio_summary_service.py`는 거래소별 KRW·USD·USDT 잔고를 원화로 환산하고 REAL/MOCK 계좌 합계를 분리
   - `chatbot/llm_client.py`는 OpenAI Chat Completions 스트림의 텍스트 delta를 전달하고 분할된 tool-call과 usage를 누적
   - `chatbot/qa_event_repository.py`는 챗봇 QA 분석용 자동 이벤트를 `chatbot_qa_events`에 service role로 저장하며, 민감한 거래소 raw payload 대신 trace·도구·지연시간 요약만 남깁니다.
+  - `news_quality_service.py`는 예약 뉴스 저장 전 기사 제목·요약·URL·종목 신호를 기준으로 `PASS`/`HIGH_QUALITY` 품질 메타데이터를 계산하고 위키·사전·커뮤니티성 결과를 저장 전 제외합니다.
+  - `news_repository.py`는 `news_articles` 일반 뉴스 7일, `HIGH_QUALITY` 뉴스 30일, `news_fetch_logs` 7일 물리 삭제를 수행하는 보관 정리 메서드를 포함합니다.
+  - `ml_scheduler.py`의 뉴스 수집 루프는 같은 worker 흐름에서 뉴스 보관 정리를 하루 1회 시도하며, 정리 실패가 뉴스 수집을 막지 않도록 분리해 로깅합니다.
   - `order_entry_service.py`는 구조화 주문 필수값, 주식·현물·선물 거래 목적, One-way/Hedge 주문 변환, 서비스 레버리지 상한, 주문 해시와 HMAC 사전검증 토큰을 담당합니다.
   - `chatbot/order_form_policy.py`는 일반 채팅의 자연어 주문 의도를 주문 제안 생성 전에 차단하고 상단 `매매 요청` 버튼을 이용하라는 안내만 반환합니다. 종목·수량·가격·거래소를 추출하거나 저장하지 않습니다.
   - `chatbot/tool_symbol_model.py`는 챗봇 도구가 공유하는 종목 별칭, 심볼 검색어 추출, 종목 후보 정규화, 모호한 종목 선택 응답 생성을 담당합니다.

@@ -253,10 +253,16 @@ export async function ensureNewsSummaries({ articleIds = [] }) {
     return { items: [], generatedCount: 0 }
   }
 
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session?.access_token) {
+    throw new Error('로그인이 필요합니다.')
+  }
+
   const response = await fetch(`${apiBaseUrl}/api/news/summaries/ensure`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      Authorization: `Bearer ${session.access_token}`,
     },
     body: JSON.stringify({ article_ids: articleIds }),
   })

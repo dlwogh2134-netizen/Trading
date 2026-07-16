@@ -57,6 +57,24 @@ def _exchange_options(row: dict[str, JsonValue]) -> list[str]:
     return options
 
 
+def _is_exchange_listed(row: dict[str, JsonValue], exchange: str) -> bool:
+    normalized = _normalize_symbol(exchange)
+    if normalized == "COINONE":
+        return bool(row.get("coinone_listed"))
+    if normalized in {"BINANCE", "BINANCE_UM_FUTURES"}:
+        return bool(row.get("binance_listed"))
+    return False
+
+
+def _is_exchange_tradable(row: dict[str, JsonValue], exchange: str) -> bool:
+    normalized = _normalize_symbol(exchange)
+    if normalized == "COINONE":
+        return bool(row.get("coinone_listed")) and bool(row.get("coinone_tradable"))
+    if normalized in {"BINANCE", "BINANCE_UM_FUTURES"}:
+        return bool(row.get("binance_listed")) and bool(row.get("binance_tradable"))
+    return False
+
+
 def _display_name(row: dict[str, JsonValue]) -> str:
     return (
         _compact_text(row.get("display_name_ko"))
@@ -215,12 +233,29 @@ def find_crypto_asset_for_query(query: str) -> dict[str, JsonValue] | None:
     return None
 
 
+def validate_crypto_asset_tradable(base_symbol: str, exchange: str) -> dict[str, JsonValue] | None:
+    asset = get_crypto_asset(base_symbol)
+    if not asset:
+        return None
+    display_name = _display_name(asset)
+    if asset.get("admin_trading_blocked"):
+        reason = _compact_text(asset.get("admin_block_reason"))
+        detail = f" 사유: {reason}" if reason else ""
+        raise ValueError(f"{display_name}({asset.get('base_symbol')}) 종목은 관리자에 의해 거래가 차단되었습니다.{detail}")
+    if not _is_exchange_listed(asset, exchange):
+        raise ValueError(f"{display_name}({asset.get('base_symbol')}) 종목은 {exchange}에 상장되어 있지 않습니다.")
+    if not _is_exchange_tradable(asset, exchange):
+        raise ValueError(f"{display_name}({asset.get('base_symbol')}) 종목은 현재 {exchange}에서 거래 가능 상태가 아닙니다.")
+    return asset
+
+
 def patch_crypto_asset(base_symbol: str, patch: CryptoAssetPatch) -> dict[str, JsonValue]:
     symbol = _normalize_symbol(base_symbol)
     if not symbol:
         raise ValueError("수정할 코인 심볼을 입력해 주세요.")
 
     payload: dict[str, JsonValue] = {"updated_at": _utc_now()}
+    current = get_crypto_asset(symbol) if patch.default_exchange is not None else None
     if patch.display_name_ko is not None:
         payload["display_name_ko"] = patch.display_name_ko.strip() or None
     if patch.display_name_en is not None:
@@ -231,6 +266,8 @@ def patch_crypto_asset(base_symbol: str, patch: CryptoAssetPatch) -> dict[str, J
         default_exchange = _normalize_symbol(patch.default_exchange)
         if default_exchange not in VALID_DEFAULT_EXCHANGES:
             raise ValueError("기본 거래소는 COINONE, BINANCE, BINANCE_UM_FUTURES 중 하나여야 합니다.")
+        if current and not _is_exchange_listed(current, default_exchange):
+            raise ValueError(f"{symbol} 종목은 {default_exchange}에 상장되어 있지 않아 기본 거래소로 설정할 수 없습니다.")
         payload["default_exchange"] = default_exchange
     if patch.is_visible is not None:
         payload["is_visible"] = patch.is_visible

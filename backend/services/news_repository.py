@@ -1,8 +1,34 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
+
+from backend.services.news_article_query_constants import (
+    DEFAULT_QUALITY_STATUS,
+    DEFAULT_RELEVANCE_SCORE,
+    NEWS_ARTICLE_SELECT,
+    VISIBLE_QUALITY_STATUS_FILTER,
+)
+from backend.services.news_filter_validation import (
+    normalize_news_article_ids,
+    normalize_news_limit,
+    normalize_news_market,
+    normalize_news_offset,
+    normalize_news_query,
+    normalize_news_symbol,
+)
+from backend.services.news_retention_service import (
+    NewsRetentionCleaner,
+    NewsRetentionCleanupCounts,
+    NewsRetentionDeleteError as NewsRetentionDeleteError,
+)
+from backend.services.news_symbol_query_service import (
+    NewsSymbolQueryDependencies,
+    NewsSymbolQueryService,
+    SymbolArticleCountQuery,
+    SymbolArticleQuery,
+)
 
 
 class NewsRepository:
@@ -19,32 +45,85 @@ class NewsRepository:
         self,
         market: str = "ALL",
         query: str = "",
+        symbol: str = "",
         limit: int = 10,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         if not self.supabase_url or not self.supabase_anon_key:
             return []
 
+        market = normalize_news_market(market)
+        query = normalize_news_query(query)
+        normalized_symbol = normalize_news_symbol(symbol)
+        limit = normalize_news_limit(limit)
+        offset = normalize_news_offset(offset)
+        if normalized_symbol:
+            return self._symbol_query_service().list_articles(
+                SymbolArticleQuery(
+                    market=market,
+                    query=query,
+                    symbol=normalized_symbol,
+                    limit=limit,
+                    offset=offset,
+                )
+            )
+
         params: dict[str, str] = {
-            "select": "id,market,source,source_article_id,title,summary,url,published_at,fetched_at,company_name,symbol,language,sentiment,content_hash,is_active,raw_payload,ai_summary,ai_summary_model,ai_summary_generated_at,ai_summary_prompt_version",
+            "select": NEWS_ARTICLE_SELECT,
             "order": "published_at.desc",
             "limit": str(limit),
             "offset": str(offset),
             "is_active": "eq.true",
+            "quality_status": VISIBLE_QUALITY_STATUS_FILTER,
         }
-        if market and market.upper() != "ALL":
-            params["market"] = f"eq.{market.upper()}"
+        if market != "ALL":
+            params["market"] = f"eq.{market}"
 
         if query:
-            q = query.strip()
-            or_clauses = [
-                f"title.ilike.*{q}*",
-                f"summary.ilike.*{q}*",
-                f"company_name.ilike.*{q}*",
-                f"symbol.ilike.*{q}*",
-            ]
-            params["or"] = f"({','.join(or_clauses)})"
+            params["or"] = self._text_search_filter(query)
 
+        return self._fetch_articles(params)
+
+    def count_articles(self, market: str = "ALL", query: str = "", symbol: str = "") -> int:
+        if not self.supabase_url or not self.supabase_anon_key:
+            return 0
+
+        market = normalize_news_market(market)
+        query = normalize_news_query(query)
+        normalized_symbol = normalize_news_symbol(symbol)
+        params: dict[str, str] = {
+            "select": "id",
+            "is_active": "eq.true",
+            "quality_status": VISIBLE_QUALITY_STATUS_FILTER,
+        }
+
+        if normalized_symbol:
+            return self._symbol_query_service().count_articles(
+                SymbolArticleCountQuery(
+                    market=market,
+                    query=query,
+                    symbol=normalized_symbol,
+                )
+            )
+        elif query:
+            params["or"] = self._text_search_filter(query)
+
+        if market != "ALL":
+            params["market"] = f"eq.{market}"
+
+        return self._fetch_article_count_with_bounded_fallback(params)
+
+    def _symbol_query_service(self) -> NewsSymbolQueryService:
+        return NewsSymbolQueryService(
+            NewsSymbolQueryDependencies(
+                fetch_articles=self._fetch_articles,
+                fetch_article_count=self._fetch_article_count,
+                fetch_bounded_article_count=self._fetch_bounded_article_count,
+                build_text_search_filter=self._text_search_filter,
+            )
+        )
+
+    def _fetch_articles(self, params: dict[str, str]) -> list[dict[str, Any]]:
         response = requests.get(
             f"{self.supabase_url}/rest/v1/news_articles",
             headers=self._read_headers(),
@@ -54,28 +133,7 @@ class NewsRepository:
         response.raise_for_status()
         return response.json()
 
-    def count_articles(self, market: str = "ALL", query: str = "") -> int:
-        if not self.supabase_url or not self.supabase_anon_key:
-            return 0
-
-        params: dict[str, str] = {
-            "select": "id",
-            "is_active": "eq.true",
-        }
-
-        if market and market.upper() != "ALL":
-            params["market"] = f"eq.{market.upper()}"
-
-        if query:
-            q = query.strip()
-            or_clauses = [
-                f"title.ilike.*{q}*",
-                f"summary.ilike.*{q}*",
-                f"company_name.ilike.*{q}*",
-                f"symbol.ilike.*{q}*",
-            ]
-            params["or"] = f"({','.join(or_clauses)})"
-
+    def _fetch_article_count(self, params: dict[str, str]) -> int:
         headers = {
             **self._read_headers(),
             "Prefer": "count=exact"
@@ -91,6 +149,37 @@ class NewsRepository:
 
         # Supabase는 Content-Range 헤더에 전체 count를 반환합니다.
         return int(response.headers.get("Content-Range", "0").split("/")[-1])
+
+    def _fetch_article_count_with_bounded_fallback(self, params: dict[str, str]) -> int:
+        try:
+            return self._fetch_article_count(params)
+        except requests.exceptions.HTTPError:
+            return self._fetch_bounded_article_count(params)
+
+    def _fetch_bounded_article_count(self, params: dict[str, str]) -> int:
+        bounded_params = {
+            **params,
+            "select": "id",
+            "order": "published_at.desc",
+            "limit": "10",
+        }
+        response = requests.get(
+            f"{self.supabase_url}/rest/v1/news_articles",
+            headers=self._read_headers(),
+            params=bounded_params,
+            timeout=15,
+        )
+        response.raise_for_status()
+        return len(response.json())
+
+    def _text_search_filter(self, query: str) -> str:
+        or_clauses = [
+            f"title.ilike.*{query}*",
+            f"summary.ilike.*{query}*",
+            f"company_name.ilike.*{query}*",
+            f"symbol.ilike.*{query}*",
+        ]
+        return f"({','.join(or_clauses)})"
 
     def list_watchlist_symbols(self, limit: int = 5) -> list[dict[str, Any]]:
         if not self.supabase_url or not self.supabase_service_role_key:
@@ -163,7 +252,7 @@ class NewsRepository:
         if not self.supabase_url or not self.supabase_anon_key or not ids:
             return []
 
-        ids = [str(item).strip() for item in ids if str(item).strip()]
+        ids = normalize_news_article_ids(ids)
         if not ids:
             return []
 
@@ -228,13 +317,36 @@ class NewsRepository:
         if not self.is_configured or not articles:
             return
 
+        quality_checked_at = datetime.now(timezone.utc).isoformat()
+        normalized_articles = [
+            self._with_default_quality_metadata(article, quality_checked_at)
+            for article in articles
+        ]
+
         response = requests.post(
             f"{self.supabase_url}/rest/v1/news_articles?on_conflict=url",
             headers=self._write_headers(),
-            json=articles,
+            json=normalized_articles,
             timeout=30,
         )
         response.raise_for_status()
+
+    def _with_default_quality_metadata(
+        self,
+        article: dict[str, Any],
+        quality_checked_at: str,
+    ) -> dict[str, Any]:
+        status = str(article.get("quality_status") or DEFAULT_QUALITY_STATUS)
+        relevance_score = article.get("relevance_score")
+        return {
+            **article,
+            "quality_status": status,
+            "relevance_score": (
+                DEFAULT_RELEVANCE_SCORE if relevance_score is None else relevance_score
+            ),
+            "excluded_reason": article.get("excluded_reason"),
+            "quality_checked_at": article.get("quality_checked_at") or quality_checked_at,
+        }
 
     def insert_fetch_log(self, payload: dict[str, Any]) -> None:
         if not self.is_configured:
@@ -247,12 +359,20 @@ class NewsRepository:
         )
         response.raise_for_status()
 
+    def cleanup_expired_news_retention(
+        self,
+        now: datetime | None = None,
+    ) -> NewsRetentionCleanupCounts:
+        return NewsRetentionCleaner(
+            supabase_url=self.supabase_url,
+            service_role_key=self.supabase_service_role_key,
+        ).cleanup_expired(now=now)
+
     def _read_headers(self) -> dict[str, str]:
         return {
             "apikey": self.supabase_anon_key,
             "Authorization": f"Bearer {self.supabase_anon_key}",
             "Content-Type": "application/json",
-            "Prefer": "count=exact",
         }
 
     def _service_read_headers(self) -> dict[str, str]:
