@@ -3895,18 +3895,21 @@ def register_conditional_rule(
         "status": "RUNNING",
     }
 
+    import logging
+    rule_logger = logging.getLogger(__name__)
+
     try:
-        safe_query_supabase(
+        query_supabase(
             auth_header,
             "auto_trading_rules",
             "POST",
             json_data=row,
         )
     except Exception as error:
-        logger.exception("Failed to insert auto trading rule: %s", str(error))
+        rule_logger.exception("Failed to insert auto trading rule: %s", str(error))
         return {
-            "reply": f"조건감시 데이터베이스 등록 중 오류가 발생했습니다: {str(error)[:100]}",
-            "data": {"error": "db_insert_failed"},
+            "reply": f"조건감시 데이터베이스 등록 중 오류가 발생했습니다: {str(error)[:200]}",
+            "data": {"error": "db_insert_failed", "details": str(error)},
         }
 
     # 유저 확인 텍스트 포맷

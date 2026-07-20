@@ -15,7 +15,7 @@ def test_register_conditional_rule_success():
     with patch("backend.services.chatbot.tool_registry._resolve_symbol") as mock_resolve, \
          patch("backend.services.chatbot.tool_registry.get_asset_price") as mock_price, \
          patch("backend.services.auth_service.get_user_id_from_header") as mock_auth, \
-         patch("backend.services.chatbot.tool_registry.safe_query_supabase") as mock_supabase:
+         patch("backend.services.chatbot.tool_registry.query_supabase") as mock_supabase:
 
         # 1. 심볼 해석 모킹
         mock_resolve.return_value = {
@@ -68,7 +68,7 @@ def test_register_conditional_rule_success():
         assert rule["execution_mode"] == "PROPOSAL"  # "자동" 키워드가 없으므로 기본값 PROPOSAL
         assert rule["status"] == "RUNNING"
 
-        # 실제 safe_query_supabase 호출 시 json_data 인자로 전달되었는지 엄격히 확인
+        # 실제 query_supabase 호출 시 json_data 인자로 전달되었는지 엄격히 확인
         mock_supabase.assert_called_once_with(
             auth_header,
             "auto_trading_rules",
@@ -83,7 +83,7 @@ def test_register_conditional_rule_auto_mode():
     with patch("backend.services.chatbot.tool_registry._resolve_symbol") as mock_resolve, \
          patch("backend.services.chatbot.tool_registry.get_asset_price") as mock_price, \
          patch("backend.services.auth_service.get_user_id_from_header") as mock_auth, \
-         patch("backend.services.chatbot.tool_registry.safe_query_supabase") as mock_supabase:
+         patch("backend.services.chatbot.tool_registry.query_supabase") as mock_supabase:
 
         mock_resolve.return_value = {
             "symbol": "XRP",
