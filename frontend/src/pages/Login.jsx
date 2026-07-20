@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
+import { SplineScene } from '@/components/ui/splite'
+import { Spotlight } from '@/components/ui/spotlight'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -166,17 +168,40 @@ export default function Login() {
         </div>
       </div>
 
-      {/* 우측 패널: 배경 이미지 및 상태 카드 */}
-      <div className="hidden lg:block lg:w-7/12 relative bg-[#1d1f27] overflow-hidden">
+      {/* 우측 패널: 3D SplineScene 및 Spotlight */}
+      <div className="hidden lg:block lg:w-7/12 relative bg-black overflow-hidden select-none">
         {/* 블렌딩을 위한 오버레이 그라디언트 */}
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0c0e15] to-transparent z-10 w-32"></div>
-        <div 
-          className="absolute inset-0 w-full h-full bg-cover bg-center opacity-40 mix-blend-screen animate-[spin_180s_linear_infinite] scale-[1.1]" 
-          style={{ backgroundImage: "url('https://lh3.googleusercontent.com/aida-public/AB6AXuApLxgfDjYyQecXJZuWNXU9Ga_b7gYY3LPueCaxOazI8GjN9-RO0LWVrVv7c7sp6cBStFrPAWkr9-CSXMBCaIeUFGuwrKINONZTSbMklhQNkkUqTXSVcQctVEG5h3WMCb5gEGhygwwyk54ai7IDnqpk6FWQ7Zub8IV6OpayDku7z1TcG4f-c6Fb2k28tAyhbifVOFUdg195Z1r9H5Hra-t3ZQcY33i0X-18iU3i-igI384E5nJdCSKyMVw6WkLYNHbGZxsBTIJ3mTE')" }}
-        ></div>
+        <div className="absolute inset-0 bg-gradient-to-r from-[#0c0e15] to-transparent z-10 w-32 pointer-events-none"></div>
         
+        {/* Spotlight 마우스 트래킹 */}
+        <Spotlight
+          className="-top-40 left-0 md:left-60 md:-top-20"
+          size={400}
+        />
+
+        <div className="flex h-full relative w-full">
+          {/* Left overlay content */}
+          <div className="absolute left-10 top-0 bottom-0 z-10 flex flex-col justify-center pointer-events-none max-w-md">
+            <h1 className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-b from-neutral-50 to-neutral-400">
+              Interactive 3D
+            </h1>
+            <p className="mt-4 text-neutral-400 text-sm leading-relaxed">
+              Bring your UI to life with beautiful 3D scenes. Create immersive experiences 
+              that capture attention and enhance your design.
+            </p>
+          </div>
+
+          {/* Spline Canvas */}
+          <div className="w-full h-full relative z-0">
+            <SplineScene 
+              scene="https://prod.spline.design/kZDDjO5HuC9GJUM2/scene.splinecode"
+              className="w-full h-full"
+            />
+          </div>
+        </div>
+
         {/* 글래스모피즘 스타일의 시스템 상태 카드 */}
-        <div className="absolute bottom-20 right-20 z-20 backdrop-blur-xl bg-ai-cyan/5 border border-slate-700/50 p-6 rounded-lg max-w-sm">
+        <div className="absolute bottom-20 right-20 z-20 backdrop-blur-xl bg-ai-cyan/5 border border-slate-700/50 p-6 rounded-lg max-w-sm pointer-events-none">
           <div className="flex items-center gap-2 mb-3">
             <span className="material-symbols-outlined text-ai-cyan">auto_awesome</span>
             <span className="text-[11px] font-bold text-ai-cyan uppercase tracking-wider">System Status</span>
