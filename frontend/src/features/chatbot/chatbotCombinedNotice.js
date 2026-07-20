@@ -27,12 +27,13 @@ function buildNoResultNotice(section, result) {
 }
 
 export function buildCombinedResultNotices(toolResult) {
-  if (toolResult?.source !== 'NEWS_DISCLOSURE_COMBINED') {
+  const combinedResult = toolResult?.source === 'COMPOUND_INFO' ? toolResult.secondary : toolResult
+  if (combinedResult?.source !== 'NEWS_DISCLOSURE_COMBINED') {
     return []
   }
 
   return [
-    buildNoResultNotice('news', toolResult.news),
-    buildNoResultNotice('disclosure', toolResult.disclosure),
+    buildNoResultNotice('news', combinedResult.news),
+    buildNoResultNotice('disclosure', combinedResult.disclosure),
   ].filter(Boolean)
 }

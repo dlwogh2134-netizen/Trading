@@ -295,6 +295,11 @@ erDiagram
 *   **RLS**:
     *   활성 공시는 공개 조회 가능하고, 수집/수정은 `service_role`만 수행합니다.
 
+*   **공시 보관 정책**:
+    *   `rcept_dt` 기준 30일이 지난 `dart_disclosures` row는 물리 삭제합니다.
+    *   삭제 시 동일한 `rcept_no`의 `dart_disclosure_analyses`와 `knowledge_chunks(source_type='DISCLOSURE')`를 먼저 함께 삭제합니다.
+    *   `cleanup_expired_disclosures` RPC가 5,000건 단위 원자적 배치로 처리하며, 뉴스 수집 전 하루 1회 실행합니다.
+
 ### 2.6.3 dart_fetch_logs
 *   **용도**: OpenDART 전체 공시 목록 수집 및 최근 1년 백필 작업의 실행 결과를 기록합니다.
 *   **주요 컬럼**:

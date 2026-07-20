@@ -386,7 +386,8 @@ class ChatbotWebFallbackSearchService:
 
     @staticmethod
     def _combined_disclosure_result_not_found(query: str) -> dict[str, Any]:
-        message = f"'{query}'에 맞는 DART 공시 결과를 찾지 못했습니다. 종목명은 인식했지만 저장된 공시가 없거나 최근 수집 범위에 없을 수 있습니다."
+        subject = ChatbotWebFallbackSearchService._normalize_disclosure_query(query)
+        message = f"{subject}에 맞는 최근 30일 이내 DART 공시 결과를 찾지 못했습니다. 종목명은 인식했지만 최근 30일 수집 범위에 해당 공시가 없습니다."
         return {
             "reply": message,
             "data": {
@@ -647,6 +648,8 @@ class ChatbotWebFallbackSearchService:
                 "is_active": True,
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
+            if self._is_quote_only_news_article(article):
+                continue
             if self._is_relevant_company_news(search_query, article):
                 article["company_name"] = search_query
                 articles.append(article)
@@ -1036,7 +1039,42 @@ class ChatbotWebFallbackSearchService:
     def _filter_company_news_rows(cls, query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if cls._is_broad_news_query(query):
             return rows
-        return [row for row in rows if cls._is_relevant_company_news(query, row)]
+        return [
+            row
+            for row in rows
+            if not cls._is_quote_only_news_article(row)
+            and cls._is_relevant_company_news(query, row)
+        ]
+
+    @staticmethod
+    def _is_quote_only_news_article(article: dict[str, Any]) -> bool:
+        text = " ".join(
+            str(article.get(field) or "")
+            for field in ("title", "summary")
+        ).lower()
+        quote_markers = (
+            "실시간 티커",
+            "오늘의 주가",
+            "stock price",
+            "real-time ticker",
+        )
+        company_activity_markers = (
+            "계약",
+            "실적",
+            "매출",
+            "영업이익",
+            "투자",
+            "공급",
+            "인수",
+            "신제품",
+            "earnings",
+            "revenue",
+            "contract",
+            "investment",
+        )
+        return any(marker in text for marker in quote_markers) and not any(
+            marker in text for marker in company_activity_markers
+        )
 
     @classmethod
     def _filter_company_disclosure_rows(cls, query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1085,6 +1123,11 @@ class ChatbotWebFallbackSearchService:
     @staticmethod
     def _normalize_disclosure_query(query: str) -> str:
         text = re.sub(r"\s+", " ", str(query or "")).strip()
+        text = re.sub(
+            r"(?:현재\s*)?(?:주가|시세|현재가|가격|실시간\s*티커)(?:와|과|랑|및)?",
+            " ",
+            text,
+        )
         keywords = [
             "\uacf5\uc2dc",
             "\ubcf4\uc5ec\uc918",
@@ -1340,6 +1383,11 @@ class ChatbotWebFallbackSearchService:
     @staticmethod
     def _normalize_news_query(query: str) -> str:
         text = re.sub(r"\s+", " ", str(query or "")).strip()
+        text = re.sub(
+            r"(?:현재\s*)?(?:주가|시세|현재가|가격|실시간\s*티커)(?:와|과|랑|및)?",
+            " ",
+            text,
+        )
         keywords = [
             "뉴스",
             "기사",

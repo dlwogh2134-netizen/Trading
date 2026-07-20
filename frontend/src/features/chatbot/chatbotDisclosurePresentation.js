@@ -76,7 +76,8 @@ function isUsefulDisclosurePair(label, value) {
 }
 
 export function buildDisclosurePresentation(toolResult) {
-  const disclosureResult = toolResult?.source === 'NEWS_DISCLOSURE_COMBINED' ? toolResult.disclosure : toolResult
+  const compoundResult = toolResult?.source === 'COMPOUND_INFO' ? toolResult.secondary : toolResult
+  const disclosureResult = compoundResult?.source === 'NEWS_DISCLOSURE_COMBINED' ? compoundResult.disclosure : compoundResult
 
   if (disclosureResult?.source !== 'DISCLOSURE_DB' || !Array.isArray(disclosureResult.items)) {
     return { items: [], sourceUrl: '' }

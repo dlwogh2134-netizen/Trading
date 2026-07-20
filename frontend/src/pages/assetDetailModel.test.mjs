@@ -26,6 +26,7 @@ import {
   getDisclosureToneClass,
   getOrderSideLabel,
   getOrderStatusLabel,
+  getSupportedCryptoOrderExchanges,
   getPolicyReasonLabel,
   getPolicyReasonLabels,
   getProbabilityLevel,
@@ -58,6 +59,42 @@ describe('assetDetailModel', () => {
     assert.equal(isCancelReplaceExchange('COINONE'), true)
     assert.equal(isCancelReplaceExchange('BINANCE_UM_FUTURES'), true)
     assert.equal(isCancelReplaceExchange('TOSS'), false)
+  })
+
+  it('resolves crypto order exchanges from listing and tradable metadata', () => {
+    assert.deepEqual(
+      getSupportedCryptoOrderExchanges({
+        coinone_listed: true,
+        coinone_tradable: true,
+        binance_listed: false,
+        binance_tradable: false,
+      }),
+      ['COINONE'],
+    )
+    assert.deepEqual(
+      getSupportedCryptoOrderExchanges({
+        coinone_listed: false,
+        coinone_tradable: false,
+        binance_listed: true,
+        binance_tradable: true,
+      }),
+      ['BINANCE', 'BINANCE_UM_FUTURES'],
+    )
+    assert.deepEqual(
+      getSupportedCryptoOrderExchanges({
+        coinone_listed: true,
+        coinone_tradable: true,
+        binance_listed: true,
+        binance_tradable: true,
+      }),
+      ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'],
+    )
+    assert.deepEqual(
+      getSupportedCryptoOrderExchanges({
+        exchanges: ['BINANCE'],
+      }),
+      ['BINANCE', 'BINANCE_UM_FUTURES'],
+    )
   })
 
   it('returns Korean labels for order and auto rule states', () => {

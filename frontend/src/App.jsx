@@ -3,7 +3,6 @@ import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-d
 import { supabase } from './supabaseClient'
 import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
-import Signup from './pages/Signup'
 import News from './pages/News'
 import Inquiry from './pages/Inquiry'
 import Settings from './pages/Settings'
@@ -293,7 +292,7 @@ function AppShell({
             )}
           />
           <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
+          <Route path="/signup" element={<Navigate to="/login" replace />} />
           <Route
             path="/asset/:assetType"
             element={(

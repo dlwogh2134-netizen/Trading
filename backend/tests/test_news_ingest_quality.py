@@ -183,6 +183,37 @@ def test_news_quality_rejects_ambiguous_company_name_without_listed_context() ->
     ]
 
 
+def test_naver_quality_rejects_personal_health_story_even_with_incidental_investment_word() -> None:
+    service = NewsQualityService()
+    result = service.score_article(
+        _article(
+            title="신지, 인바디 측정불가 결과 공개…투자 고민도 털어놔",
+            summary="방송인이 체성분 검사와 일상 근황을 전하며 팬들과 소통했습니다.",
+            url="https://www.example.com/entertainment/inbody-check",
+            symbol="041830",
+            company_name="인바디",
+        )
+    )
+
+    assert result.quality_status == "REJECTED"
+    assert result.excluded_reason == "NON_INVESTMENT_CONTEXT"
+
+
+def test_naver_quality_keeps_healthcare_product_news_for_healthcare_stock() -> None:
+    service = NewsQualityService()
+    result = service.score_article(
+        _article(
+            title="인바디, 체성분 분석기 신제품 출시",
+            summary="헬스케어 장비 신제품을 출시하고 병원·피트니스센터 공급을 확대합니다.",
+            url="https://www.example.com/market/inbody-product",
+            symbol="041830",
+            company_name="인바디",
+        )
+    )
+
+    assert result.quality_status in {"PASS", "HIGH_QUALITY"}
+
+
 def test_news_quality_does_not_treat_ir_substrings_in_urls_as_listed_context() -> None:
     # Given: URL에 우연히 ir 문자열이 포함된 생활/연예 기사입니다.
     service = NewsQualityService()
@@ -209,8 +240,8 @@ def test_news_quality_does_not_treat_ir_substrings_in_urls_as_listed_context() -
     # Then: URL의 우연한 부분문자열만으로 상장사 맥락으로 통과하지 않습니다.
     assert [result.quality_status for result in results] == ["REJECTED", "REJECTED"]
     assert [result.excluded_reason for result in results] == [
-        "NO_LISTED_COMPANY_CONTEXT",
-        "NO_LISTED_COMPANY_CONTEXT",
+        "NON_INVESTMENT_CONTEXT",
+        "NON_INVESTMENT_CONTEXT",
     ]
 
 
@@ -278,7 +309,7 @@ def test_news_quality_rejects_apple_product_mentions_without_investment_context(
     )
 
     assert result.quality_status == "REJECTED"
-    assert result.excluded_reason == "NO_LISTED_COMPANY_CONTEXT"
+    assert result.excluded_reason == "NON_INVESTMENT_CONTEXT"
 
 
 def test_symbol_relevance_uses_requested_apple_identity_over_stale_row_metadata() -> None:
@@ -295,4 +326,22 @@ def test_symbol_relevance_uses_requested_apple_identity_over_stale_row_metadata(
         },
         symbol="AAPL",
         company_name="Apple",
+    )
+
+
+def test_naver_symbol_relevance_accepts_company_signal_in_summary() -> None:
+    service = NewsQualityService()
+
+    assert service.is_symbol_article_relevant(
+        {
+            "source": "NAVER",
+            "title": "헬스케어 장비 공급 확대 전망",
+            "summary": "인바디가 병원과 피트니스센터에 신제품 공급을 확대합니다.",
+            "url": "https://www.example.com/market/inbody",
+            "symbol": "041830",
+            "company_name": "인바디",
+            "published_at": "2026-07-20T00:00:00+00:00",
+        },
+        symbol="041830",
+        company_name="인바디",
     )

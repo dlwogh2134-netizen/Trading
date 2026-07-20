@@ -5,7 +5,6 @@ import MobileDashboard from '../pages/mobile/MobileDashboard.jsx'
 import MobileNews from '../pages/mobile/MobileNews.jsx'
 import MobileSettings from '../pages/mobile/MobileSettings.jsx'
 import MobileLogin from '../pages/mobile/MobileLogin.jsx'
-import MobileSignup from '../pages/mobile/MobileSignup.jsx'
 import MobileInquiry from '../pages/mobile/MobileInquiry.jsx'
 import MobileMarketRankings from '../pages/mobile/MobileMarketRankings.jsx'
 import MobileAdminMlData from '../pages/mobile/MobileAdminMlData.jsx'
@@ -170,7 +169,7 @@ export default function MobileRoutes({
             )}
           />
           <Route path="/login" element={<MobileLogin />} />
-          <Route path="/signup" element={<MobileSignup />} />
+          <Route path="/signup" element={<Navigate to="/login" replace />} />
           <Route
             path="/asset/:assetType"
             element={(

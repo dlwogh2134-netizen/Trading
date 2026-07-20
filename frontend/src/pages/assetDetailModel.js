@@ -104,6 +104,40 @@ export const isCancelReplaceExchange = (exchange) => (
   ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(String(exchange || '').toUpperCase())
 )
 
+const normalizeExchangeList = (values = []) => (
+  Array.isArray(values)
+    ? values.map((value) => String(value || '').trim().toUpperCase()).filter(Boolean)
+    : []
+)
+
+const hasBooleanExchangeMetadata = (metadata = {}) => (
+  ['coinone_listed', 'coinone_tradable', 'binance_listed', 'binance_tradable']
+    .some((key) => typeof metadata[key] === 'boolean')
+)
+
+export const getSupportedCryptoOrderExchanges = (metadata = {}) => {
+  if (!metadata || typeof metadata !== 'object') return []
+
+  if (hasBooleanExchangeMetadata(metadata)) {
+    const supported = []
+    if (metadata.coinone_listed === true && metadata.coinone_tradable === true) {
+      supported.push('COINONE')
+    }
+    if (metadata.binance_listed === true && metadata.binance_tradable === true) {
+      supported.push('BINANCE', 'BINANCE_UM_FUTURES')
+    }
+    return supported
+  }
+
+  const legacyOptions = normalizeExchangeList(metadata.exchange_options?.length ? metadata.exchange_options : metadata.exchanges)
+  const supported = []
+  if (legacyOptions.includes('COINONE')) supported.push('COINONE')
+  if (legacyOptions.includes('BINANCE') || legacyOptions.includes('BINANCE_UM_FUTURES')) {
+    supported.push('BINANCE', 'BINANCE_UM_FUTURES')
+  }
+  return [...new Set(supported)]
+}
+
 export const getStockWarningBadgeTone = (warningType) => (
   STOCK_WARNING_BADGE_META[String(warningType || '').toUpperCase()]?.tone
   || 'border-slate-600 bg-slate-800/70 text-slate-200'

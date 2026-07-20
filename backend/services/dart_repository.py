@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -6,6 +7,8 @@ from requests import HTTPError
 
 
 class DartRepository:
+    DISCLOSURE_RETENTION_DAYS = 30
+
     def __init__(self) -> None:
         self.supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
         self.supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -31,6 +34,7 @@ class DartRepository:
             "limit": str(limit),
             "offset": str(offset),
             "is_active": "eq.true",
+            "rcept_dt": f"gte.{self._retention_cutoff_date()}",
         }
         normalized_symbol = str(symbol or "").strip()
         if normalized_symbol:
@@ -56,6 +60,7 @@ class DartRepository:
         params: dict[str, str] = {
             "select": "id",
             "is_active": "eq.true",
+            "rcept_dt": f"gte.{self._retention_cutoff_date()}",
         }
         normalized_symbol = str(symbol or "").strip()
         if normalized_symbol:
@@ -72,6 +77,11 @@ class DartRepository:
         )
         response.raise_for_status()
         return int(response.headers.get("Content-Range", "0").split("/")[-1])
+
+    @classmethod
+    def _retention_cutoff_date(cls) -> str:
+        korea_now = datetime.now(timezone.utc) + timedelta(hours=9)
+        return (korea_now.date() - timedelta(days=cls.DISCLOSURE_RETENTION_DAYS)).isoformat()
 
     def get_disclosure_by_rcept_no(self, rcept_no: str) -> dict[str, Any] | None:
         if not self.supabase_url or not self.supabase_anon_key:

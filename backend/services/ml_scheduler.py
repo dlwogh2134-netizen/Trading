@@ -96,6 +96,21 @@ def run_news_retention_cleanup_once(
             counts.high_quality_news,
             counts.logs,
         )
+        disclosure_cleanup = getattr(
+            news_ingest_service.repository,
+            "cleanup_expired_disclosure_retention",
+            None,
+        )
+        if callable(disclosure_cleanup):
+            disclosure_counts = disclosure_cleanup()
+            logger.info(
+                "[DisclosureRetentionCleanup] run complete date=%s deleted_disclosures=%s deleted_analyses=%s deleted_chunks=%s batches=%s",
+                korea_date,
+                disclosure_counts.disclosures,
+                disclosure_counts.analyses,
+                disclosure_counts.chunks,
+                disclosure_counts.batches,
+            )
     except (RuntimeError, ValueError, requests.exceptions.RequestException) as error:
         logger.exception("[NewsRetentionCleanup] run failed date=%s: %s", korea_date, error)
     return korea_date

@@ -9,11 +9,13 @@ import pytest
 
 from backend.services import ml_scheduler
 from backend.services.news_repository import NewsRetentionCleanupCounts
+from backend.services.news_retention_service import DisclosureRetentionCleanupCounts
 
 
 class FakeRepository:
     def __init__(self, *, should_fail: bool = False) -> None:
         self.cleanup_calls = 0
+        self.disclosure_cleanup_calls = 0
         self.should_fail = should_fail
 
     def cleanup_expired_news_retention(self) -> NewsRetentionCleanupCounts:
@@ -21,6 +23,10 @@ class FakeRepository:
         if self.should_fail:
             raise RuntimeError("cleanup failed")
         return NewsRetentionCleanupCounts(normal_news=2, high_quality_news=1, logs=3)
+
+    def cleanup_expired_disclosure_retention(self) -> DisclosureRetentionCleanupCounts:
+        self.disclosure_cleanup_calls += 1
+        return DisclosureRetentionCleanupCounts(disclosures=5, analyses=2, chunks=4, batches=1)
 
 
 class FakeNewsIngestService:
@@ -65,8 +71,10 @@ def test_news_cleanup_scheduler_invokes_cleanup_once_per_korea_day(
     assert first_cleanup_date == "2026-07-16"
     assert second_cleanup_date == "2026-07-16"
     assert service.repository.cleanup_calls == 1
+    assert service.repository.disclosure_cleanup_calls == 1
     assert service.run_calls == 2
     assert "deleted_normal=2 deleted_high_quality=1 deleted_logs=3" in caplog.text
+    assert "deleted_disclosures=5 deleted_analyses=2 deleted_chunks=4 batches=1" in caplog.text
 
 
 def test_news_cleanup_scheduler_logs_cleanup_failure_and_still_ingests(
@@ -87,5 +95,6 @@ def test_news_cleanup_scheduler_logs_cleanup_failure_and_still_ingests(
     # Then: 실패는 로그로 남고 당일 재시도를 막기 위해 날짜가 기록되며 수집은 계속 실행됩니다.
     assert cleanup_date == "2026-07-16"
     assert service.repository.cleanup_calls == 1
+    assert service.repository.disclosure_cleanup_calls == 0
     assert service.run_calls == 1
     assert "[NewsRetentionCleanup] run failed date=2026-07-16" in caplog.text

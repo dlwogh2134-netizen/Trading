@@ -23,6 +23,9 @@ CountArticles = Callable[[dict[str, str]], int]
 BuildTextSearchFilter = Callable[[str], str]
 
 MAX_EXACT_ID_EXCLUSION_COUNT: Final[int] = 1100
+SMALL_SYMBOL_PAGE_LIMIT: Final[int] = 10
+SYMBOL_PAGE_OVERFETCH_FACTOR: Final[int] = 5
+MAX_SYMBOL_PAGE_FETCH_LIMIT: Final[int] = 50
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +81,7 @@ class NewsSymbolQueryService:
         self.quality_service = NewsQualityService()
 
     def list_articles(self, query: SymbolArticleQuery) -> list[NewsArticleRow]:
+        exact_fetch_limit = self._initial_exact_fetch_limit(query)
         exact_rows = self._sort_symbol_articles(
             self._visible_articles(
                 self.dependencies.fetch_articles(
@@ -85,7 +89,7 @@ class NewsSymbolQueryService:
                         ExactArticleQuery(
                             market=query.market,
                             symbol=query.symbol,
-                            limit=query.limit,
+                            limit=exact_fetch_limit,
                             offset=query.offset,
                         )
                     )
@@ -100,7 +104,7 @@ class NewsSymbolQueryService:
             return selected_rows
 
         if query.offset == 0:
-            known_exact_count = len(exact_rows)
+            known_exact_count = query.limit
             excluded_ids = self._article_ids(exact_rows)
         else:
             exact_count = self._count_with_bounded_fallback(
@@ -134,6 +138,14 @@ class NewsSymbolQueryService:
             company_name=query.query,
         )
         return self._sort_symbol_articles([*selected_rows, *fallback_rows[:remaining]])
+
+    def _initial_exact_fetch_limit(self, query: SymbolArticleQuery) -> int:
+        if query.offset > 0 or query.limit <= 0 or query.limit > SMALL_SYMBOL_PAGE_LIMIT:
+            return query.limit
+        return min(
+            query.limit * SYMBOL_PAGE_OVERFETCH_FACTOR,
+            MAX_SYMBOL_PAGE_FETCH_LIMIT,
+        )
 
     def count_articles(self, query: SymbolArticleCountQuery) -> int:
         exact_params = self._exact_params(

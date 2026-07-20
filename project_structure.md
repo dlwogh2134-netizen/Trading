@@ -505,3 +505,9 @@ supabase/
 * `backend/scripts/embed_pending_knowledge_chunks.py`: Embeds pending chunks, defaulting to `DISCLOSURE`.
 * `supabase/migrations/20260709103000_add_knowledge_chunk_vector_search.sql`: Adds the vector index and `match_knowledge_chunks` RPC.
 * This flow excludes news and DART original text; only saved disclosure summaries and metadata are indexed.
+
+## 7. Retention cleanup
+
+* `backend/services/news_retention_service.py`: Keeps general news for 7 days, high-quality news for 30 days, and DART disclosures with their analyses and `DISCLOSURE` chunks for 30 days.
+* `backend/services/ml_scheduler.py`: Runs the disclosure cleanup before the daily news ingest under the existing distributed lock.
+* `supabase/migrations/20260720120000_add_disclosure_retention_cleanup.sql`: Defines the service-role-only RPC used for atomic 5,000-row disclosure cleanup batches.

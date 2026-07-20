@@ -202,6 +202,57 @@ def test_symbol_lookup_fetches_exact_rows_by_recency_before_quality_limit(
     )
 
 
+def test_symbol_lookup_overfetches_small_pages_before_quality_filter(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_repository: NewsRepository,
+) -> None:
+    # Given: 최신 페이지 앞에 기존 비관련 행이 있고 뒤에 신규 관련 행이 있습니다.
+    calls: list[GetCall] = []
+    exact_rows = [
+        {
+            "id": "legacy-off-topic",
+            "source": "NAVER",
+            "symbol": "041830",
+            "company_name": "인바디",
+            "title": "신지, 인바디 측정불가 결과 공개",
+            "summary": "방송인의 체성분 검사와 일상 근황입니다.",
+            "url": "https://example.com/entertainment",
+            "quality_status": "PASS",
+            "published_at": _published_days_ago(0),
+        },
+        {
+            "id": "new-investment-news",
+            "source": "NAVER",
+            "symbol": "041830",
+            "company_name": "인바디",
+            "title": "인바디 실적 개선 전망",
+            "summary": "인바디 매출과 영업이익 개선 전망을 다룹니다.",
+            "url": "https://example.com/market",
+            "quality_status": "PASS",
+            "published_at": _published_days_ago(1),
+        },
+    ]
+
+    def fake_get(
+        url: str,
+        *,
+        headers: dict[str, str],
+        params: dict[str, str],
+        timeout: int,
+    ) -> FakeGetResponse:
+        calls.append(GetCall(url=url, params=params, timeout=timeout))
+        return FakeGetResponse(payload=exact_rows[: int(params.get("limit", "0"))])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    # When: 종목 상세 뉴스에서 1건을 요청합니다.
+    result = configured_repository.list_articles(symbol="041830", limit=1)
+
+    # Then: 품질 필터 후에도 관련 신규 기사가 화면에 채워집니다.
+    assert [item["id"] for item in result] == ["new-investment-news"]
+    assert int(calls[0].params["limit"]) > 1
+
+
 def test_symbol_lookup_falls_back_to_active_text_search_when_exact_rows_are_empty(
     monkeypatch: pytest.MonkeyPatch,
     configured_repository: NewsRepository,

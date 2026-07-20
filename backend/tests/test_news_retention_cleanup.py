@@ -5,6 +5,7 @@ import pytest
 import requests
 
 from backend.services.news_repository import NewsRepository, NewsRetentionDeleteError
+from backend.services.news_retention_service import DisclosureRetentionDeleteError
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,16 @@ class FakeDeleteResponse:
     @property
     def headers(self) -> dict[str, str]:
         return {"Content-Range": self.content_range}
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRpcResponse:
+    status_code: int
+    payload: list[dict[str, int | bool]]
+    text: str = ""
+
+    def json(self) -> list[dict[str, int | bool]]:
+        return self.payload
 
 
 def test_cleanup_expired_news_retention_deletes_expected_rows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,3 +145,90 @@ def test_cleanup_expired_news_retention_raises_structured_error_on_delete_failur
     assert getattr(error, "status_code") == 500
     assert getattr(error, "response_text") == '{"message":"boom"}'
     assert len(calls) == 1
+
+
+def test_cleanup_expired_disclosure_retention_deletes_atomic_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co/")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
+    calls: list[dict[str, object]] = []
+    responses = [
+        FakeRpcResponse(
+            status_code=200,
+            payload=[
+                {
+                    "deleted_disclosures": 5000,
+                    "deleted_analyses": 90,
+                    "deleted_chunks": 100,
+                    "has_more": True,
+                }
+            ],
+        ),
+        FakeRpcResponse(
+            status_code=200,
+            payload=[
+                {
+                    "deleted_disclosures": 12,
+                    "deleted_analyses": 3,
+                    "deleted_chunks": 6,
+                    "has_more": False,
+                }
+            ],
+        ),
+    ]
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: int,
+    ) -> FakeRpcResponse:
+        calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        return responses.pop(0)
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    repository = NewsRepository()
+
+    result = repository.cleanup_expired_disclosure_retention(
+        now=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result.disclosures == 5012
+    assert result.analyses == 93
+    assert result.chunks == 106
+    assert result.batches == 2
+    assert len(calls) == 2
+    assert calls[0]["url"] == "https://project.supabase.co/rest/v1/rpc/cleanup_expired_disclosures"
+    assert calls[0]["json"] == {"p_cutoff_date": "2026-06-20", "p_batch_size": 5000}
+    assert calls[0]["timeout"] == 60
+
+
+def test_cleanup_expired_disclosure_retention_raises_structured_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: int,
+    ) -> FakeRpcResponse:
+        return FakeRpcResponse(status_code=500, payload=[], text='{"message":"boom"}')
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    repository = NewsRepository()
+
+    with pytest.raises(DisclosureRetentionDeleteError) as exc_info:
+        repository.cleanup_expired_disclosure_retention(
+            now=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc),
+        )
+
+    error = exc_info.value
+    assert error.table == "rpc/cleanup_expired_disclosures"
+    assert error.status_code == 500
+    assert error.response_text == '{"message":"boom"}'

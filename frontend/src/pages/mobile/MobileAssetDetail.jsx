@@ -27,6 +27,7 @@ import {
   getAssetCurrencySign,
   getAssetPriceDigits,
   getOrderSideLabel,
+  getSupportedCryptoOrderExchanges,
   isActionableOrderStatus,
   isCancelReplaceExchange,
   isUsStockSymbol,
@@ -241,6 +242,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [isMlSignalExpanded, setIsMlSignalExpanded] = useState(false)
   const [isFavorite, setIsFavorite] = useState(false)
   const [symbolLookupReady, setSymbolLookupReady] = useState(false)
+  const [cryptoOrderExchanges, setCryptoOrderExchanges] = useState([])
 
   // URL 파라미터 변경 시 렌더링 도중에 상태 즉시 동기화 (컴포넌트 재사용 버그 원천 차단)
   const [prevSymbol, setPrevSymbol] = useState(symbol)
@@ -401,6 +403,28 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     if (targetExchange === 'COINONE') return baseSymbol
     if (['BINANCE', 'BINANCE_UM_FUTURES'].includes(targetExchange)) return `${baseSymbol}USDT`
     return baseSymbol
+  }
+
+  const getCryptoOrderExchangeLabel = (targetExchange = exchange) => {
+    const normalizedExchange = String(targetExchange || '').toUpperCase()
+    if (normalizedExchange === 'COINONE') return '코인원'
+    if (normalizedExchange === 'BINANCE') return '바이낸스 현물'
+    if (normalizedExchange === 'BINANCE_UM_FUTURES') return '바이낸스 선물'
+    return normalizedExchange || '선택 거래소'
+  }
+
+  const isCryptoOrderExchangeUnavailable = (targetExchange = exchange) => (
+    resolvedAssetType === 'CRYPTO'
+    && symbolLookupReady
+    && cryptoOrderExchanges.length > 0
+    && !cryptoOrderExchanges.includes(String(targetExchange || '').toUpperCase())
+  )
+
+  const getUnsupportedCryptoExchangeMessage = (targetExchange = exchange) => {
+    const supportedLabels = cryptoOrderExchanges.map(getCryptoOrderExchangeLabel).join(', ')
+    return supportedLabels
+      ? `${displayName || getDetailBaseSymbol()} 종목은 ${getCryptoOrderExchangeLabel(targetExchange)}에서 거래할 수 없습니다. 지원 거래소: ${supportedLabels}`
+      : `${displayName || getDetailBaseSymbol()} 종목은 현재 선택한 거래소에서 거래할 수 없습니다.`
   }
 
   const getSymbolQueryCandidates = () => {
@@ -843,13 +867,21 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         setResolvedSymbol(normalizeStockSymbol(resData.data.symbol || symbol))
         setResolvedMarket(String(resData.data.market || '').trim().toUpperCase())
         if (mappedAssetType === 'CRYPTO') {
+          const supportedOrderExchanges = getSupportedCryptoOrderExchanges(resData.data)
+          setCryptoOrderExchanges(supportedOrderExchanges)
           const lookupExchange = String(resData.data.default_exchange || '').toUpperCase()
-          const nextExchange = ['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(routeExchange)
+          const routeExchangeSupported = supportedOrderExchanges.includes(routeExchange)
+          const lookupExchangeSupported = supportedOrderExchanges.includes(lookupExchange)
+          const nextExchange = routeExchangeSupported
             ? routeExchange
-            : lookupExchange
+            : lookupExchangeSupported
+              ? lookupExchange
+              : supportedOrderExchanges[0] || lookupExchange
           if (['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(nextExchange) && exchange !== nextExchange) {
             setExchange(nextExchange)
           }
+        } else {
+          setCryptoOrderExchanges([])
         }
         setSymbolLookupReady(true)
       } else {
@@ -1110,7 +1142,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     if (resolvedAssetType !== 'STOCK') {
       setDisclosureList([])
       setSelectedDisclosureId('')
-      return
+      return []
     }
 
     setLoadingDisclosures(true)
@@ -1120,12 +1152,14 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       if (resData.success && resData.data && resData.data.items) {
         setDisclosureList(resData.data.items)
         setSelectedDisclosureId('')
+        return resData.data.items
       }
     } catch (error) {
       console.error('공시 목록 로드 실패:', error)
     } finally {
       setLoadingDisclosures(false)
     }
+    return []
   }
 
   const handleRequestDisclosureSync = async () => {
@@ -1148,11 +1182,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         return
       }
 
+      const visibleDisclosures = await fetchDisclosureList()
       setDisclosureSyncMessage({
-        text: `공시 ${Number(resData.data?.saved || 0)}건을 확인했습니다.`,
+        text: visibleDisclosures.length > 0
+          ? `최근 30일 이내 공시 ${visibleDisclosures.length}건을 확인했습니다.`
+          : '최근 30일 이내 공시가 없습니다.',
         isError: false,
       })
-      await fetchDisclosureList()
     } catch (error) {
       setDisclosureSyncMessage({
         text: `공시 수집 요청 오류: ${error.message}`,
@@ -1900,6 +1936,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setOrderPrecheck(null)
     setPrecheckMessage('')
     setDisplayName(symbol)
+    setCryptoOrderExchanges([])
 
     // 비동기 꼬임 방지를 위한 Ref 변수 강제 초기화
     hasAppliedInitialFitRef.current = false
@@ -1914,6 +1951,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     if (isResolvedUsStock && newEx === 'KIS') {
       alert("해외주식은 Toss API만 지원합니다.");
       return;
+    }
+
+    if (resolvedAssetType === 'CRYPTO' && isCryptoOrderExchangeUnavailable(newEx)) {
+      alert(getUnsupportedCryptoExchangeMessage(newEx))
+      return
     }
 
     // 가상자산은 Real만 가용하므로 항상 통과, 주식의 경우 KIS MOCK은 기본 제공 폴백이므로 항상 통과
@@ -2115,6 +2157,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return
     }
     
+    if (cryptoOrderExchanges.length > 0 && !cryptoOrderExchanges.includes(exchange)) {
+      setExchange(cryptoOrderExchanges[0])
+      return
+    }
+
     if (!['COINONE', 'BINANCE', 'BINANCE_UM_FUTURES'].includes(exchange)) {
       const routeSymbol = String(symbol || '').toUpperCase()
       setExchange(routeSymbol.endsWith('USDT') || routeSymbol.endsWith('BUSD') ? 'BINANCE' : 'COINONE')
@@ -2126,7 +2173,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     if (!['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w', '1M'].includes(chartInterval)) {
       setChartInterval('1h')
     }
-  }, [resolvedAssetType, exchange, brokerEnv, chartInterval, brokerAvailability, tradeHoldingContext, symbol, resolvedSymbol, isResolvedUsStock])
+  }, [resolvedAssetType, exchange, brokerEnv, chartInterval, brokerAvailability, tradeHoldingContext, symbol, resolvedSymbol, isResolvedUsStock, cryptoOrderExchanges])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -2481,16 +2528,22 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   })();
   const overallFeedStatus = getOverallFeedStatus()
   const isTradingSuspended = resolvedAssetType === 'STOCK' && stockWarnings.some((warning) => String(warning.warning_type || '').toUpperCase() === 'TRADING_SUSPENDED')
+  const isUnsupportedCryptoOrderExchange = isCryptoOrderExchangeUnavailable(exchange)
   const tradeRestrictionMessage = isTradingSuspended
     ? '거래중지 종목으로 확인되어 주문을 비활성화했습니다. 거래 재개 후 다시 시도해 주세요.'
+    : isUnsupportedCryptoOrderExchange
+      ? getUnsupportedCryptoExchangeMessage(exchange)
     : orderPrecheck?.is_market_closed
       ? orderPrecheck.market_status_message || '현재는 거래가 불가능한 장외 시간(또는 휴장일)입니다.'
       : ''
-  const isOrderBlocked = isTradingSuspended || orderPrecheck?.is_market_closed || (brokerEnv === 'REAL' && (
+  const isOrderBlocked = isTradingSuspended || isUnsupportedCryptoOrderExchange || orderPrecheck?.is_market_closed || (brokerEnv === 'REAL' && (
     orderPrecheck?.futures_real_blocked ||
     orderPrecheck?.insufficient_cash ||
     orderPrecheck?.insufficient_holding
   ))
+  const isCoinoneOrderUnavailable = isCryptoOrderExchangeUnavailable('COINONE')
+  const isBinanceSpotOrderUnavailable = isCryptoOrderExchangeUnavailable('BINANCE')
+  const isBinanceFuturesOrderUnavailable = isCryptoOrderExchangeUnavailable('BINANCE_UM_FUTURES')
   const pageShellClassName = mobileLayout
     ? 'bg-[#070b19] text-[#e2e2ec] font-inter'
     : 'min-h-screen bg-[#070b19] text-[#e2e2ec] font-inter'
@@ -3067,24 +3120,27 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
                         <button
                           type="button"
                           onClick={() => handleExchangeChange('COINONE', 'REAL')}
-                          disabled={isTradingSuspended}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'COINONE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                          disabled={isTradingSuspended || isCoinoneOrderUnavailable}
+                          title={isCoinoneOrderUnavailable ? getUnsupportedCryptoExchangeMessage('COINONE') : undefined}
+                          className={`text-[10px] font-bold py-1.5 rounded transition-all ${isCoinoneOrderUnavailable ? 'cursor-not-allowed opacity-35 text-slate-600' : exchange === 'COINONE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60 cursor-pointer' : 'text-slate-400 hover:text-white cursor-pointer'}`}
                         >
                           코인원
                         </button>
                         <button
                           type="button"
                           onClick={() => handleExchangeChange('BINANCE', brokerEnv)}
-                          disabled={isTradingSuspended}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'BINANCE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                          disabled={isTradingSuspended || isBinanceSpotOrderUnavailable}
+                          title={isBinanceSpotOrderUnavailable ? getUnsupportedCryptoExchangeMessage('BINANCE') : undefined}
+                          className={`text-[10px] font-bold py-1.5 rounded transition-all ${isBinanceSpotOrderUnavailable ? 'cursor-not-allowed opacity-35 text-slate-600' : exchange === 'BINANCE' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60 cursor-pointer' : 'text-slate-400 hover:text-white cursor-pointer'}`}
                         >
                           바이낸스 현물
                         </button>
                         <button
                           type="button"
                           onClick={() => handleExchangeChange('BINANCE_UM_FUTURES', brokerEnv)}
-                          disabled={isTradingSuspended}
-                          className={`text-[10px] font-bold py-1.5 rounded transition-all cursor-pointer ${exchange === 'BINANCE_UM_FUTURES' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60' : 'text-slate-400 hover:text-white'}`}
+                          disabled={isTradingSuspended || isBinanceFuturesOrderUnavailable}
+                          title={isBinanceFuturesOrderUnavailable ? getUnsupportedCryptoExchangeMessage('BINANCE_UM_FUTURES') : undefined}
+                          className={`text-[10px] font-bold py-1.5 rounded transition-all ${isBinanceFuturesOrderUnavailable ? 'cursor-not-allowed opacity-35 text-slate-600' : exchange === 'BINANCE_UM_FUTURES' ? 'bg-[#1b253b] text-cyan-400 border border-cyan-900/60 cursor-pointer' : 'text-slate-400 hover:text-white cursor-pointer'}`}
                         >
                           바이낸스 선물
                         </button>

@@ -143,6 +143,53 @@ LISTED_COMPANY_CONTEXT_KEYWORDS = frozenset(
     }
 )
 
+NAVER_COMPANY_ACTIVITY_KEYWORDS = frozenset(
+    {
+        "실적",
+        "매출",
+        "영업이익",
+        "순이익",
+        "공시",
+        "계약",
+        "공급",
+        "수주",
+        "수출",
+        "생산",
+        "신제품",
+        "제품 출시",
+        "출시",
+        "인수",
+        "합병",
+        "지분",
+        "사업",
+        "신사업",
+        "투자 확대",
+        "자사주",
+        "배당",
+    }
+)
+
+NAVER_NON_INVESTMENT_CONTEXT_KEYWORDS = frozenset(
+    {
+        "연예인",
+        "방송인",
+        "팬미팅",
+        "팬들과",
+        "예능",
+        "근황",
+        "다이어트",
+        "체성분 검사",
+        "측정불가",
+        "쿠폰",
+        "경품",
+        "할인",
+        "쇼핑",
+        "이벤트",
+        "축제",
+        "프로모션",
+    }
+)
+
 COMMON_ALIASES = {
     "005930": frozenset({"삼성전자", "samsung electronics", "samsung"}),
     "000660": frozenset({"sk하이닉스", "하이닉스", "sk hynix", "hynix"}),
@@ -169,7 +216,12 @@ class NewsQualityResult:
 
 
 class NewsQualityService:
-    def score_article(self, article: dict[str, Any]) -> NewsQualityResult:
+    def score_article(
+        self,
+        article: dict[str, Any],
+        *,
+        apply_naver_context_filter: bool = True,
+    ) -> NewsQualityResult:
         checked_at = datetime.now(timezone.utc).isoformat()
         title = str(article.get("title") or "")
         summary = str(article.get("summary") or "")
@@ -189,6 +241,9 @@ class NewsQualityService:
         finance_keyword_count = sum(1 for keyword in FINANCE_KEYWORDS if keyword in text or keyword in url_text)
         trusted_domain = self._is_trusted_finance_domain(domain)
         score = self._score(exact_signal, finance_keyword_count, trusted_domain, self._is_recent(article))
+
+        if apply_naver_context_filter and self._is_naver_non_investment_context(article, text, url_text):
+            return NewsQualityResult(score, "REJECTED", "NON_INVESTMENT_CONTEXT", checked_at)
 
         if not exact_signal and symbol:
             return NewsQualityResult(score, "REJECTED", "NO_SYMBOL_SIGNAL", checked_at)
@@ -215,6 +270,22 @@ class NewsQualityService:
             "quality_checked_at": result.quality_checked_at,
         }
 
+    def _is_naver_non_investment_context(
+        self,
+        article: dict[str, Any],
+        text: str,
+        url_text: str,
+    ) -> bool:
+        if str(article.get("source") or "").strip().upper() != "NAVER":
+            return False
+        combined_text = f"{text} {url_text}"
+        has_non_investment_context = any(
+            keyword in combined_text for keyword in NAVER_NON_INVESTMENT_CONTEXT_KEYWORDS
+        )
+        if not has_non_investment_context:
+            return False
+        return not any(keyword in combined_text for keyword in NAVER_COMPANY_ACTIVITY_KEYWORDS)
+
     def is_symbol_article_relevant(
         self,
         article: dict[str, Any],
@@ -232,9 +303,13 @@ class NewsQualityService:
         title = str(merged_article.get("title") or "").lower()
         if title and merged_article["symbol"]:
             aliases = self._aliases(merged_article["symbol"], merged_article["company_name"])
-            if not any(alias in title for alias in aliases):
+            summary = str(merged_article.get("summary") or "").lower()
+            source = str(merged_article.get("source") or "").strip().upper()
+            title_has_alias = any(alias in title for alias in aliases)
+            summary_has_alias = any(alias in summary for alias in aliases)
+            if not title_has_alias and not (source == "NAVER" and summary_has_alias):
                 return False
-        result = self.score_article(merged_article)
+        result = self.score_article(merged_article, apply_naver_context_filter=False)
         return result.is_accepted
 
     def _aliases(self, symbol: str, company_name: str) -> frozenset[str]:

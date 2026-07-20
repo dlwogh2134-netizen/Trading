@@ -21,3 +21,23 @@ test('builds a disclosure target notice for combined news and disclosure results
     "'스타후르츠 공시'에 해당하는 공시 대상 종목을 인식하지 못했습니다. 종목명을 확인해서 다시 요청해 주세요.",
   ])
 })
+
+test('builds the recent disclosure notice from a compound result', () => {
+  const notices = buildCombinedResultNotices({
+    source: 'COMPOUND_INFO',
+    price: { source: 'ASSET_PRICE', current_price: 9300 },
+    secondary: {
+      source: 'NEWS_DISCLOSURE_COMBINED',
+      news: { source: 'NEWS_DB', items: [] },
+      disclosure: {
+        source: 'NO_RESULT',
+        reason: 'disclosure_result_not_found',
+        message: '최근 30일 이내 DART 공시가 없습니다.',
+      },
+    },
+  })
+
+  assert.deepEqual(notices, [
+    '최근 30일 이내 DART 공시가 없습니다.',
+  ])
+})

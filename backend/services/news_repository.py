@@ -19,6 +19,8 @@ from backend.services.news_filter_validation import (
     normalize_news_symbol,
 )
 from backend.services.news_retention_service import (
+    DisclosureRetentionCleanupCounts,
+    DisclosureRetentionCleaner,
     NewsRetentionCleaner,
     NewsRetentionCleanupCounts,
     NewsRetentionDeleteError as NewsRetentionDeleteError,
@@ -364,6 +366,15 @@ class NewsRepository:
         now: datetime | None = None,
     ) -> NewsRetentionCleanupCounts:
         return NewsRetentionCleaner(
+            supabase_url=self.supabase_url,
+            service_role_key=self.supabase_service_role_key,
+        ).cleanup_expired(now=now)
+
+    def cleanup_expired_disclosure_retention(
+        self,
+        now: datetime | None = None,
+    ) -> DisclosureRetentionCleanupCounts:
+        return DisclosureRetentionCleaner(
             supabase_url=self.supabase_url,
             service_role_key=self.supabase_service_role_key,
         ).cleanup_expired(now=now)

@@ -61,7 +61,8 @@ function resolveSummaryLines(aiSummary, fallbackSummary) {
 }
 
 export function buildNewsPresentation(toolResult) {
-  const newsResult = toolResult?.source === 'NEWS_DISCLOSURE_COMBINED' ? toolResult.news : toolResult
+  const compoundResult = toolResult?.source === 'COMPOUND_INFO' ? toolResult.secondary : toolResult
+  const newsResult = compoundResult?.source === 'NEWS_DISCLOSURE_COMBINED' ? compoundResult.news : compoundResult
 
   if (!NEWS_SOURCES.has(newsResult?.source) || !Array.isArray(newsResult.items)) {
     return { items: [] }

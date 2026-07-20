@@ -9,6 +9,7 @@ import { buildDisclosurePresentation } from './chatbotDisclosurePresentation'
 import { shouldSubmitChatbotInput } from './chatbotInput'
 import { buildMlRecommendationPresentation } from './chatbotMlRecommendationPresentation'
 import { buildNewsPresentation } from './chatbotNewsPresentation'
+import { buildPricePresentation } from './chatbotPricePresentation'
 import OrderEntryFlow from './OrderEntryFlow'
 import {
   buildProposalPrecheckSummary,
@@ -165,19 +166,21 @@ function ChatMessage({ message, onAction }) {
   const actions = Array.isArray(message.actions) ? message.actions : []
   const disclosurePresentation = buildDisclosurePresentation(message.toolResult)
   const newsPresentation = buildNewsPresentation(message.toolResult)
+  const pricePresentation = buildPricePresentation(message.toolResult)
   const mlRecommendationPresentation = buildMlRecommendationPresentation(message.toolResult)
   const tradeHistoryPresentation = buildTradeHistoryPresentation(message.toolResult)
   const watchlistPresentation = buildWatchlistPresentation(message.toolResult)
   const combinedResultNotices = !isUser ? buildCombinedResultNotices(message.toolResult) : []
   const hasDisclosureCards = !isUser && disclosurePresentation.items.length > 0
   const hasNewsCards = !isUser && newsPresentation.items.length > 0
+  const hasPriceCard = !isUser && pricePresentation.shouldRender
   const hasMlRecommendationCards = !isUser && mlRecommendationPresentation.shouldRender
   const hasTradeHistoryTable = !isUser && tradeHistoryPresentation.shouldRender
   const hasWatchlistTable = !isUser && watchlistPresentation.shouldRender
   const citations = !isUser ? buildChatbotCitations(message.toolResult) : []
   const traceBadges = !isUser ? buildChatbotTraceBadges({ traceSteps: message.traceSteps, toolResult: message.toolResult }) : []
   const hasCombinedResultNotice = combinedResultNotices.length > 0
-  const hasMessageBody = hasDisclosureCards || hasNewsCards || hasCombinedResultNotice || hasMlRecommendationCards || hasTradeHistoryTable || hasWatchlistTable || Boolean(message.text) || !message.isStreaming
+  const hasMessageBody = hasPriceCard || hasDisclosureCards || hasNewsCards || hasCombinedResultNotice || hasMlRecommendationCards || hasTradeHistoryTable || hasWatchlistTable || Boolean(message.text) || !message.isStreaming
 
   if (!hasMessageBody && traceBadges.length === 0) {
     return null
@@ -185,7 +188,7 @@ function ChatMessage({ message, onAction }) {
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col gap-1 ${hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || hasTradeHistoryTable || hasWatchlistTable ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex flex-col gap-1 ${hasPriceCard || hasDisclosureCards || hasNewsCards || hasMlRecommendationCards || hasTradeHistoryTable || hasWatchlistTable ? 'w-full max-w-[96%]' : 'max-w-[84%]'} ${isUser ? 'items-end' : 'items-start'}`}>
         {!isUser && traceBadges.length > 0 && (
           <TraceBadges badges={traceBadges} />
         )}
@@ -199,8 +202,9 @@ function ChatMessage({ message, onAction }) {
           >
             {hasMlRecommendationCards && !message.isStreaming ? (
               <MlRecommendationResults presentation={mlRecommendationPresentation} />
-            ) : (hasNewsCards || hasDisclosureCards || hasCombinedResultNotice) && !message.isStreaming ? (
+            ) : (hasPriceCard || hasNewsCards || hasDisclosureCards || hasCombinedResultNotice) && !message.isStreaming ? (
               <div className="space-y-3">
+                {hasPriceCard && <PriceResults presentation={pricePresentation} />}
                 {hasNewsCards && <NewsResults presentation={newsPresentation} />}
                 {hasDisclosureCards && <DisclosureResults presentation={disclosurePresentation} />}
                 {hasCombinedResultNotice && (
@@ -589,6 +593,32 @@ function DisclosureResults({ presentation }) {
         </div>
       ) : null}
     </div>
+  )
+}
+
+function PriceResults({ presentation }) {
+  const toneClass = presentation.changeTone === 'positive'
+    ? 'text-emerald-300'
+    : presentation.changeTone === 'negative'
+      ? 'text-rose-300'
+      : 'text-slate-200'
+
+  return (
+    <section className="space-y-2 rounded border border-cyan-500/25 bg-cyan-950/20 p-3">
+      <div className="flex items-center justify-between gap-2 border-b border-cyan-500/20 pb-2">
+        <div className="min-w-0">
+          <p className="font-bold text-cyan-200">현재 주가</p>
+          <p className="truncate text-[10px] text-slate-400">{presentation.displayName || presentation.symbol}</p>
+        </div>
+        <span className="shrink-0 rounded border border-cyan-500/30 px-2 py-0.5 text-[10px] font-bold text-cyan-100">
+          {presentation.currency}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <strong className="font-mono text-xl text-white">{presentation.priceText}</strong>
+        <span className={`font-mono text-sm font-bold ${toneClass}`}>{presentation.changeRateText}</span>
+      </div>
+    </section>
   )
 }
 

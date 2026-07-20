@@ -40,6 +40,7 @@ from backend.services.chatbot.tool_registry import (
     run_chatbot_tool,
     search_trade_history,
     search_web,
+    _is_asset_price_request,
 )
 from backend.services.chatbot.order_parser import parse_order_intent
 from backend.services.chatbot.order_form_policy import build_order_form_redirect
@@ -1044,7 +1045,7 @@ class ChatbotService:
                     },
                 }
 
-        if self._is_direct_disclosure_lookup(text):
+        if self._is_direct_disclosure_lookup(text) and not _is_asset_price_request(text):
             self._emit_trace(trace_callback, "tool_routing", "도구 확인")
             tool_result = search_web(auth_header, text) if auth_header else None
             if tool_result:
