@@ -26,7 +26,10 @@ describe('homeModel', () => {
   it('formats market value and sorts client rows by ranking', () => {
     assert.equal(formatHomeMarketValue({ trading_value: 120_000_000 }, 'value', '거래대금'), '1억원')
     assert.equal(formatHomeMarketValue({ volume: 12_345 }, 'volume', '거래량'), '12,345')
+    assert.equal(formatHomeMarketValue({ symbol: 'AAPL', asset_type: 'STOCK', change_rate: 5, trading_value: 2_500_000 }, 'value', '상승률'), '2,500,000원')
+    assert.equal(formatHomeMarketValue({ symbol: 'AAPL', asset_type: 'STOCK', trading_value: 2_500_000, trading_value_unit: 'USD' }, 'value', '상승률'), '$2,500,000')
     assert.equal(formatHomeMarketValue({ symbol: 'AAPL', asset_type: 'STOCK', change_rate: 5 }, 'value', '상승률'), '-')
+    assert.equal(formatChange({ change_rate: 1, live_change_rate: 5 }), '+5.00%')
 
     const rows = [
       { symbol: 'AAA', trading_value: 100, change_rate: -2 },
@@ -40,6 +43,15 @@ describe('homeModel', () => {
     assert.deepEqual(
       applyClientMarketFilters(rows, { region: '국내', ranking: '하락률' }).map((row) => row.symbol),
       ['AAA', 'CCC', 'BBB'],
+    )
+
+    const liveRows = [
+      { symbol: 'STALE', change_rate: 20, live_change_rate: 1 },
+      { symbol: 'LIVE', change_rate: 1, live_change_rate: 12 },
+    ]
+    assert.deepEqual(
+      applyClientMarketFilters(liveRows, { region: '국내', ranking: '상승률' }).map((row) => row.symbol),
+      ['LIVE', 'STALE'],
     )
   })
 

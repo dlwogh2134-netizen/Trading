@@ -652,6 +652,8 @@ class KISClient(ExchangeClient):
         change_rate = self._to_float(item.get("rate") or item.get("n_rate"))
         trading_volume = self._to_float(item.get("tvol") or item.get("a_tvol"))
         trading_value = self._to_float(item.get("tamt"))
+        trading_value_source = "api" if trading_value > 0 else "missing"
+        trading_value_unit = "USD" if trading_value > 0 else None
 
         return {
             "symbol": symbol,
@@ -662,6 +664,8 @@ class KISClient(ExchangeClient):
             "change_rate": change_rate,
             "trading_volume": trading_volume,
             "trading_value": trading_value,
+            "trading_value_source": trading_value_source,
+            "trading_value_unit": trading_value_unit,
             "as_of": datetime.utcnow().isoformat() + "Z",
             "raw": {**item, "_rank_source": source, "_exchange_code": item.get("excd")},
         }

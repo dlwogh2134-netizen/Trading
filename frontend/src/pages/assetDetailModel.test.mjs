@@ -32,6 +32,7 @@ import {
   getSignalGradeLabel,
   getSignalGradeTone,
   getStockWarningBadgeTone,
+  getNewsSyncMessage,
   isActionableOrderStatus,
   isCancelReplaceExchange,
   isDomesticStockSymbol,
@@ -121,6 +122,8 @@ describe('assetDetailModel', () => {
     assert.equal(formatPercent(0.1234, 1), '12.3%')
     assert.equal(formatReturnPercent(-0.1234, 2), '-12.34%')
     assert.equal(formatSignedPercentValue(3.45, 2), '+3.45%')
+    assert.equal(getNewsSyncMessage(3), '최근 7일 이내 투자 관련 뉴스 3건을 확인했습니다.')
+    assert.equal(getNewsSyncMessage(0), '최근 7일 이내 투자 관련 뉴스가 없습니다.')
   })
 
   it('labels ML probability, grade and policy reasons', () => {

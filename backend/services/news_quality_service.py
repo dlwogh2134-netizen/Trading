@@ -140,7 +140,6 @@ LISTED_COMPANY_CONTEXT_KEYWORDS = frozenset(
         "자사주",
         "인수",
         "합병",
-        "ir",
     }
 )
 
@@ -225,11 +224,16 @@ class NewsQualityService:
     ) -> bool:
         merged_article = {
             **article,
-            "symbol": str(article.get("symbol") or symbol or "").strip().upper(),
-            "company_name": str(article.get("company_name") or company_name or "").strip(),
+            "symbol": str(symbol or article.get("symbol") or "").strip().upper(),
+            "company_name": str(company_name or article.get("company_name") or "").strip(),
         }
         if not any(str(merged_article.get(field) or "").strip() for field in ("title", "summary", "url")):
             return True
+        title = str(merged_article.get("title") or "").lower()
+        if title and merged_article["symbol"]:
+            aliases = self._aliases(merged_article["symbol"], merged_article["company_name"])
+            if not any(alias in title for alias in aliases):
+                return False
         result = self.score_article(merged_article)
         return result.is_accepted
 
@@ -253,8 +257,6 @@ class NewsQualityService:
         return any(domain == trusted or domain.endswith(f".{trusted}") for trusted in TRUSTED_FINANCE_DOMAINS)
 
     def _is_missing_listed_company_context(self, symbol: str, text: str, url_text: str) -> bool:
-        if not symbol.isdigit():
-            return False
         if symbol.lower() in text or symbol.lower() in url_text:
             return False
         return not self._has_listed_company_context(text, url_text)

@@ -499,16 +499,10 @@ export default function WatchlistTab({ displayCurrency = 'KRW', exchangeRate = 1
     setNewsSyncMessage({ text: '', isError: false })
     try {
       const selectedAssetType = selectedItem.assetType || (selectedItem.market === '코인' ? 'CRYPTO' : 'STOCK')
-      const authHeader = await getAuthHeader()
-      if (!authHeader) {
-        setNewsSyncMessage({ text: '로그인이 필요합니다.', isError: true })
-        return
-      }
       const response = await fetch(`${API_BASE_URL}/api/news/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: authHeader,
         },
         body: JSON.stringify({
           symbol: selectedItem.id,

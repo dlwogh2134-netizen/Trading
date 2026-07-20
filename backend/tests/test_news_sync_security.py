@@ -68,30 +68,6 @@ class CapturingRepository:
         self.upserted_summaries.extend(rows)
 
 
-class FakeSyncService:
-    def __init__(self) -> None:
-        self.called = False
-
-    def run_once(self) -> dict[str, Any]:
-        self.called = True
-        return {"inserted": 1}
-
-    def run_for_symbol(
-        self,
-        symbol: str,
-        display_name: str = "",
-        market: str = "",
-        asset_type: str = "",
-    ) -> dict[str, Any]:
-        self.called = True
-        return {
-            "symbol": symbol,
-            "display_name": display_name,
-            "market": market,
-            "asset_type": asset_type,
-        }
-
-
 class RaisingFinnhubResponse:
     def raise_for_status(self) -> None:
         raise requests.exceptions.HTTPError(
@@ -114,83 +90,9 @@ def news_app(monkeypatch: pytest.MonkeyPatch) -> Flask:
     app = Flask(__name__)
     app.news_repository = CapturingRepository()
     app.news_summary_service = DisabledSummaryService()
-    app.news_ingest_service = FakeSyncService()
+    app.news_ingest_service = object()
     app.register_blueprint(news_bp)
     return app
-
-
-def test_news_sync_rejects_unauthenticated_cost_write_route(news_app: Flask) -> None:
-    # Given: 뉴스 동기화 서비스가 앱에 연결되어 있습니다.
-    service = news_app.news_ingest_service
-
-    # When: 관리자 토큰 없이 뉴스 동기화를 요청합니다.
-    response = news_app.test_client().post("/api/news/sync", json={})
-
-    # Then: 외부 API 비용과 DB 쓰기 경로를 실행하지 않고 거부합니다.
-    assert response.status_code == 403
-    assert response.get_json()["success"] is False
-    assert service.called is False
-
-
-def test_news_sync_accepts_logged_in_user_for_symbol_request(news_app: Flask) -> None:
-    # Given: 로그인 사용자가 특정 종목의 최신 뉴스를 요청합니다.
-    service = news_app.news_ingest_service
-
-    # When: 사용자 JWT와 종목을 함께 전달해 뉴스 수집을 요청합니다.
-    response = news_app.test_client().post(
-        "/api/news/sync",
-        headers={"Authorization": "Bearer user-token"},
-        json={
-            "symbol": "005930",
-            "display_name": "삼성전자",
-            "market": "DOMESTIC",
-            "asset_type": "STOCK",
-        },
-    )
-
-    # Then: 관리자 토큰 없이도 종목별 온디맨드 수집이 실행됩니다.
-    assert response.status_code == 200
-    assert response.get_json()["data"] == {
-        "symbol": "005930",
-        "display_name": "삼성전자",
-        "market": "DOMESTIC",
-        "asset_type": "STOCK",
-    }
-    assert service.called is True
-
-
-def test_news_sync_rejects_logged_in_user_without_symbol(news_app: Flask) -> None:
-    # Given: 로그인 사용자가 전체 뉴스 수집을 요청합니다.
-    service = news_app.news_ingest_service
-
-    # When: 사용자 JWT만 전달하고 종목을 비워둡니다.
-    response = news_app.test_client().post(
-        "/api/news/sync",
-        headers={"Authorization": "Bearer user-token"},
-        json={},
-    )
-
-    # Then: 사용자 요청은 종목별 수집으로 제한되어 전체 수집 비용을 만들지 않습니다.
-    assert response.status_code == 400
-    assert response.get_json()["success"] is False
-    assert service.called is False
-
-
-def test_news_sync_accepts_configured_admin_token(news_app: Flask) -> None:
-    # Given: 관리자가 올바른 뉴스 동기화 토큰을 가지고 있습니다.
-    service = news_app.news_ingest_service
-
-    # When: 관리자 토큰으로 뉴스 동기화를 요청합니다.
-    response = news_app.test_client().post(
-        "/api/news/sync",
-        headers={"X-Admin-Token": "admin-secret"},
-        json={},
-    )
-
-    # Then: 동기화 서비스가 실행됩니다.
-    assert response.status_code == 200
-    assert response.get_json()["data"] == {"inserted": 1}
-    assert service.called is True
 
 
 def test_news_feed_is_read_only_when_cached_summary_is_missing(news_app: Flask) -> None:

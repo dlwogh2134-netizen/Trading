@@ -1720,3 +1720,41 @@ def test_incomplete_ai_news_summary_uses_deterministic_fallback(monkeypatch):
     assert result["ai_summary_model"] == "fallback"
     assert "단계를 구축하고 있으며" not in result["ai_summary"]
     assert "정부가 반도체 메가산단 구축" in result["ai_summary"]
+
+
+def test_summary_normalization_keeps_two_valid_lines():
+    summary = NewsSummaryService()._normalize_summary(
+        "1. 애플이 신규 AI 기능을 공개했다.\n2. 시장 반응과 후속 일정은 아직 확인되지 않았다."
+    )
+
+    assert summary == (
+        "1. 애플이 신규 AI 기능을 공개했다.\n"
+        "2. 시장 반응과 후속 일정은 아직 확인되지 않았다."
+    )
+
+
+def test_summary_normalization_discards_meta_third_line():
+    summary = NewsSummaryService()._normalize_summary(
+        "1. 애플이 신규 AI 기능을 공개했다.\n"
+        "2. 시장 반응과 후속 일정은 아직 확인되지 않았다.\n"
+        "3. 기사 내용이 부족하여 구체적인 정보가 부족하다."
+    )
+
+    assert summary == (
+        "1. 애플이 신규 AI 기능을 공개했다.\n"
+        "2. 시장 반응과 후속 일정은 아직 확인되지 않았다."
+    )
+
+
+def test_summary_normalization_keeps_three_valid_lines():
+    summary = NewsSummaryService()._normalize_summary(
+        "1. 애플이 신규 AI 기능을 공개했다.\n"
+        "2. 해당 기능은 다음 소프트웨어 업데이트에 포함될 예정이다.\n"
+        "3. 회사는 개발자 대상 세부 내용을 공개했다."
+    )
+
+    assert summary == (
+        "1. 애플이 신규 AI 기능을 공개했다.\n"
+        "2. 해당 기능은 다음 소프트웨어 업데이트에 포함될 예정이다.\n"
+        "3. 회사는 개발자 대상 세부 내용을 공개했다."
+    )

@@ -22,6 +22,7 @@ import {
   getAssetCurrencySign,
   getAssetPriceDigits,
   getOrderSideLabel,
+  getNewsSyncMessage,
   isActionableOrderStatus,
   isCancelReplaceExchange,
   isUsStockSymbol,
@@ -1065,13 +1066,16 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       const response = await fetch(`${API_BASE_URL}/api/news?symbol=${encodeURIComponent(newsSymbol)}&limit=10`)
       const resData = await response.json()
       if (resData.success && resData.data && resData.data.items) {
-        setNewsList(sortNewsByPublishedAtDesc(resData.data.items))
+        const items = sortNewsByPublishedAtDesc(resData.data.items)
+        setNewsList(items)
+        return items
       }
     } catch (e) {
       console.error("뉴스 로드 실패:", e)
     } finally {
       setLoadingNews(false)
     }
+    return []
   }
 
   const handleToggleNewsSummary = async (item) => {
@@ -1089,10 +1093,6 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }
 
     setSelectedNewsId(articleId)
-
-    if (item.ai_summary) {
-      return
-    }
 
     setSummaryLoadingId(articleId)
 
@@ -1129,16 +1129,10 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setNewsSyncing(true)
     setNewsSyncMessage({ text: '', isError: false })
     try {
-      const authHeader = await getAuthHeader()
-      if (!authHeader) {
-        setNewsSyncMessage({ text: '로그인이 필요합니다.', isError: true })
-        return
-      }
       const response = await fetch(`${API_BASE_URL}/api/news/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: authHeader,
         },
         body: JSON.stringify({
           symbol: resolvedAssetType === 'STOCK' ? getExchangeSymbol(exchange) : getDetailBaseSymbol(),
@@ -1156,17 +1150,11 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
         return
       }
 
-      const insertedCount = Number(resData.data?.inserted || 0)
-      const fetchedCount = Number(resData.data?.fetched || 0)
+      const visibleNews = await fetchNewsList()
       setNewsSyncMessage({
-        text: insertedCount > 0
-          ? `뉴스 ${insertedCount}건을 새로 적재했습니다.`
-          : fetchedCount > 0
-            ? '수집은 완료됐지만 새로 적재된 뉴스는 없었습니다.'
-            : '수집 요청을 보냈지만 가져온 뉴스가 없었습니다.',
+        text: getNewsSyncMessage(visibleNews.length),
         isError: false,
       })
-      await fetchNewsList()
     } catch (error) {
       setNewsSyncMessage({
         text: `뉴스 수집 요청 오류: ${error.message}`,

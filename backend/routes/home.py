@@ -6,8 +6,12 @@ from flask import Blueprint, request, jsonify, current_app
 from backend.services.home_service import (
     build_home_overview,
     clamp_market_limit,
+    enrich_stock_rows_with_toss,
+    get_toss_env_credentials,
+    is_fresh_live_quote,
     fetch_coinone_overview,
     fetch_coinone_rankings,
+    fetch_top_turnover_stock_rows,
     format_krw_compact,
     normalize_ranking_label,
     split_kis_holdings,
@@ -162,13 +166,13 @@ def _apply_binance_cost_basis_overlay(auth_header: str, user_id: str, balance: d
 
 
 def build_direct_stock_ranking_rows(rows: list[dict], ranking: str, limit: int, is_foreign: bool = False) -> list[dict]:
-    normalized_ranking = normalize_ranking_label(ranking)
     ranked_rows = []
 
     for index, row in enumerate((rows or [])[:limit], start=1):
         trading_value = to_float(row.get("trading_value"))
-        change_rate = to_float(row.get("change_rate"))
-        current_price = to_float(row.get("current_price"))
+        trading_value_unit = str(row.get("trading_value_unit") or ("USD" if is_foreign else "KRW")).upper()
+        change_rate = to_float(row.get("live_change_rate") or row.get("change_rate"))
+        current_price = to_float(row.get("live_price") or row.get("current_price"))
         prefix = "+" if change_rate > 0 else ""
 
         ranked_rows.append({
@@ -177,12 +181,16 @@ def build_direct_stock_ranking_rows(rows: list[dict], ranking: str, limit: int, 
             "code": row.get("symbol"),
             "price": f"{current_price:,.2f}" if is_foreign and current_price else f"{current_price:,.0f}" if current_price else "-",
             "change": f"{prefix}{change_rate:.2f}%",
-            "value": "-" if is_foreign and normalized_ranking in {"up", "down"} else format_krw_compact(trading_value) if trading_value else "-",
+            "value": f"${trading_value:,.0f}" if trading_value and trading_value_unit == "USD" else format_krw_compact(trading_value) if trading_value else "-",
             "trading_value": trading_value,
             "trading_volume": to_float(row.get("trading_volume")),
             "market_segment": row.get("market_segment"),
             "market_country": row.get("market_country"),
             "as_of": row.get("as_of"),
+            "live_quote_as_of": row.get("live_quote_as_of"),
+            "live_quote_status": row.get("live_quote_status"),
+            "trading_value_source": row.get("trading_value_source"),
+            "trading_value_unit": trading_value_unit,
         })
 
     return ranked_rows
@@ -196,12 +204,12 @@ def sort_stock_rows_by_ranking(rows: list[dict], ranking: str) -> list[dict]:
         sortable_rows.sort(key=lambda row: to_float(row.get("trading_volume")), reverse=True)
     elif normalized_ranking == "up":
         sortable_rows.sort(
-            key=lambda row: (to_float(row.get("change_rate")), to_float(row.get("trading_value"))),
+            key=lambda row: (to_float(row.get("live_change_rate") or row.get("change_rate")), to_float(row.get("trading_value"))),
             reverse=True,
         )
     elif normalized_ranking == "down":
         sortable_rows.sort(
-            key=lambda row: (to_float(row.get("change_rate")), -to_float(row.get("trading_value"))),
+            key=lambda row: (to_float(row.get("live_change_rate") or row.get("change_rate")), -to_float(row.get("trading_value"))),
         )
     else:
         sortable_rows.sort(key=lambda row: to_float(row.get("trading_value")), reverse=True)
@@ -219,10 +227,51 @@ def merge_rank_rows(primary_rows: list[dict], fallback_rows: list[dict], ranking
 
     for row in fallback_rows or []:
         symbol = str(row.get("symbol") or "").strip().upper()
-        if symbol and symbol not in merged_by_symbol:
+        if symbol and symbol in merged_by_symbol:
+            merged = merged_by_symbol[symbol]
+            for field in ("trading_value", "trading_volume", "as_of", "trading_value_source", "trading_value_unit"):
+                if not to_float(merged.get(field)) and row.get(field) not in (None, "", 0, "0"):
+                    merged[field] = row[field]
+        elif symbol:
             merged_by_symbol[symbol] = dict(row)
 
     return sort_stock_rows_by_ranking(list(merged_by_symbol.values()), ranking)[:limit]
+
+
+def build_live_stock_ranking_rows(
+    rows: list[dict],
+    ranking: str,
+    limit: int,
+    is_foreign: bool,
+    user_id: str | None = None,
+    allow_network: bool = True,
+) -> list[dict]:
+    enriched_rows = enrich_stock_rows_with_toss(
+        rows,
+        user_id=user_id,
+        require_fresh=allow_network,
+        allow_network=allow_network,
+    )
+    toss_configured = bool(get_toss_env_credentials()["client_id"] and get_toss_env_credentials()["client_secret"])
+    if allow_network and toss_configured:
+        fresh_rows = [row for row in enriched_rows if is_fresh_live_quote(row)]
+        enriched_rows = fresh_rows
+    ranked_rows = sort_stock_rows_by_ranking(enriched_rows, ranking)[:limit]
+    result = build_direct_stock_ranking_rows(ranked_rows, ranking, limit, is_foreign=is_foreign)
+    for output, source in zip(result, ranked_rows):
+        output["quote_as_of"] = source.get("live_quote_as_of")
+        output["rank_as_of"] = source.get("live_quote_as_of")
+    return result
+
+
+def resolve_ranking_user_id(auth_header: str | None) -> str | None:
+    if not auth_header:
+        return None
+    try:
+        user_id, _ = get_user_id_from_header(auth_header)
+        return user_id
+    except Exception:
+        return None
 
 
 def require_market_sync_admin():
@@ -425,6 +474,29 @@ def get_market_rankings():
         is_overseas = normalized_region in {"해외", "US", "USA", "GLOBAL", "FOREIGN", "NASDAQ", "NYSE", "AMEX"}
 
         if is_domestic or is_overseas:
+            snapshot_region = "US" if is_overseas else "KR"
+            snapshot_rows = fetch_top_turnover_stock_rows(
+                limit=limit,
+                region=snapshot_region,
+                ranking=ranking,
+                horizon="실시간",
+                force_refresh=force_refresh,
+            )
+            return jsonify({
+                "success": True,
+                "data": {
+                    "items": snapshot_rows,
+                    "totalCount": len(snapshot_rows),
+                    "universeCount": len(snapshot_rows),
+                    "assetType": "STOCK",
+                    "marketSegment": market_segment,
+                    "ranking": ranking,
+                    "limit": limit,
+                    "message": "",
+                    "marketSnapshot": {},
+                },
+            })
+
             client = KISClient(
                 appkey=current_app.config.get("KIS_APPKEY", ""),
                 appsecret=current_app.config.get("KIS_APPSECRET", ""),
@@ -462,7 +534,14 @@ def get_market_rankings():
                 except Exception:
                     direct_rows = []
                 merged_rows = merge_rank_rows(direct_rows, repository_rows, ranking, limit)
-                stock_rows = build_direct_stock_ranking_rows(merged_rows, ranking, limit, is_foreign=True)
+                stock_rows = build_live_stock_ranking_rows(
+                    merged_rows,
+                    ranking,
+                    limit,
+                    is_foreign=True,
+                    user_id=resolve_ranking_user_id(auth_header),
+                    allow_network=force_refresh,
+                )
                 return jsonify({
                     "success": True,
                     "data": {
@@ -491,7 +570,14 @@ def get_market_rankings():
                 direct_rows = []
 
             merged_rows = merge_rank_rows(direct_rows, repository_rows, ranking, limit)
-            stock_rows = build_direct_stock_ranking_rows(merged_rows, ranking, limit, is_foreign=False)
+            stock_rows = build_live_stock_ranking_rows(
+                merged_rows,
+                ranking,
+                limit,
+                is_foreign=False,
+                user_id=resolve_ranking_user_id(auth_header),
+                allow_network=force_refresh,
+            )
             return jsonify({
                 "success": True,
                 "data": {

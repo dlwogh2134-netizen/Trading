@@ -183,6 +183,37 @@ def test_news_quality_rejects_ambiguous_company_name_without_listed_context() ->
     ]
 
 
+def test_news_quality_does_not_treat_ir_substrings_in_urls_as_listed_context() -> None:
+    # Given: URL에 우연히 ir 문자열이 포함된 생활/연예 기사입니다.
+    service = NewsQualityService()
+    articles = [
+        _article(
+            title="신지, 인바디 측정불가 결과 공개",
+            summary="방송인이 체성분 검사 결과와 일상 근황을 전했습니다.",
+            url="https://www.ziksir.com/news/articleView.html?idxno=140397",
+            symbol="041830",
+            company_name="인바디",
+        ),
+        _article(
+            title="제이쓴, 근육량 유지하고 체지방만 감소",
+            summary="방송인이 인바디 측정 결과를 공개했습니다.",
+            url="https://health.chosun.com/site/data/html_dir/2026071602410.html",
+            symbol="041830",
+            company_name="인바디",
+        ),
+    ]
+
+    # When: 종목별 품질 판정을 수행합니다.
+    results = [service.score_article(article) for article in articles]
+
+    # Then: URL의 우연한 부분문자열만으로 상장사 맥락으로 통과하지 않습니다.
+    assert [result.quality_status for result in results] == ["REJECTED", "REJECTED"]
+    assert [result.excluded_reason for result in results] == [
+        "NO_LISTED_COMPANY_CONTEXT",
+        "NO_LISTED_COMPANY_CONTEXT",
+    ]
+
+
 def test_news_quality_excluded_and_off_topic_articles_do_not_reach_upsert() -> None:
     # Given: 위키/나무/지식인/사전/커뮤니티/비금융 결과가 섞여 있습니다.
     articles = [
@@ -232,3 +263,36 @@ def test_news_quality_excluded_and_off_topic_articles_do_not_reach_upsert() -> N
     assert result["rejected"] == 5
     assert repository.upserted_articles == []
     assert result["query_results"][0]["rejected_count"] == 5
+
+
+def test_news_quality_rejects_apple_product_mentions_without_investment_context() -> None:
+    service = NewsQualityService()
+    result = service.score_article(
+        _article(
+            title="하나카드, 다양한 혜택 담은 2026 쿨 썸머 페스티벌 진행",
+            summary="Apple AirPods 4와 커피 쿠폰을 경품으로 제공한다.",
+            url="https://www.example.com/news/apple-airpods",
+            symbol="AAPL",
+            company_name="Apple",
+        )
+    )
+
+    assert result.quality_status == "REJECTED"
+    assert result.excluded_reason == "NO_LISTED_COMPANY_CONTEXT"
+
+
+def test_symbol_relevance_uses_requested_apple_identity_over_stale_row_metadata() -> None:
+    service = NewsQualityService()
+
+    assert not service.is_symbol_article_relevant(
+        {
+            "title": "TSMC, 스마트폰 비중 반토막...AI 매출 비중은 66% 돌파",
+            "summary": "NVIDIA 관련 반도체 시장의 AI 매출 소식입니다.",
+            "url": "https://www.example.com/semiconductor",
+            "symbol": "AAPL",
+            "company_name": "NVIDIA",
+            "published_at": "2026-07-20T00:00:00+00:00",
+        },
+        symbol="AAPL",
+        company_name="Apple",
+    )

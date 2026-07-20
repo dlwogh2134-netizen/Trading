@@ -17,6 +17,7 @@ HOME_STOCK_CLIENT_CACHE_LIMIT = int(os.getenv("HOME_STOCK_CLIENT_CACHE_LIMIT", "
 HOME_STOCK_SCAN_LIMIT = int(os.getenv("HOME_STOCK_SCAN_LIMIT", "120"))
 HOME_STOCK_SCAN_WORKERS = int(os.getenv("HOME_STOCK_SCAN_WORKERS", "4"))
 HOME_STOCK_CACHE_TTL_SECONDS = int(os.getenv("HOME_STOCK_CACHE_TTL_SECONDS", "300"))
+LIVE_QUOTE_CACHE_TTL_SECONDS = int(os.getenv("LIVE_QUOTE_CACHE_TTL_SECONDS", "30"))
 HOME_MARKET_RANK_LIMIT = int(os.getenv("HOME_MARKET_RANK_LIMIT", "50"))
 HOME_STOCK_PRIORITY_SYMBOLS = [
     symbol.strip().upper()
@@ -32,6 +33,7 @@ HOME_STOCK_TURNOVER_CACHE = {
     "expires_at": 0.0,
     "rows_by_key": {},
 }
+LIVE_QUOTE_CACHE: dict[str, dict] = {}
 KST = timezone(timedelta(hours=9))
 COIN_DISPLAY_NAMES = {
     "BTC": "Bitcoin",
@@ -98,7 +100,17 @@ def to_float(value, default=0.0):
 
 
 def parse_change_rate(row: dict) -> float:
-    return to_float(row.get("change_rate") or row.get("live_change_rate") or row.get("change"))
+    return to_float(row.get("live_change_rate") or row.get("change_rate") or row.get("change"))
+
+
+def is_fresh_live_quote(row: dict, now: datetime | None = None, max_age_seconds: int = LIVE_QUOTE_CACHE_TTL_SECONDS) -> bool:
+    quoted_at = parse_datetime(row.get("live_quote_as_of"))
+    if quoted_at is None:
+        return False
+    current_time = now or datetime.now(timezone.utc)
+    if quoted_at.tzinfo is None:
+        quoted_at = quoted_at.replace(tzinfo=timezone.utc)
+    return 0 <= (current_time - quoted_at).total_seconds() <= max_age_seconds
 
 
 def clamp_market_limit(value, default: int, maximum: int) -> int:
@@ -523,6 +535,8 @@ def fetch_top_turnover_stock_rows(
             "value": "-" if is_foreign and normalized_ranking in {"up", "down"} else format_krw_compact(trading_value) if trading_value else "-",
             "trading_value": trading_value,
             "trading_volume": to_float(row.get("trading_volume")),
+            "trading_value_source": row.get("trading_value_source"),
+            "trading_value_unit": row.get("trading_value_unit") or ("USD" if is_foreign else "KRW"),
             "market_segment": row.get("market_segment"),
             "market_country": row.get("market_country"),
             "as_of": row.get("as_of"),
@@ -602,21 +616,25 @@ def fetch_toss_price(symbol: str, user_id: str | None = None) -> dict:
     return client.get_price(symbol)
 
 
-def enrich_stock_rows_with_toss(rows: list[dict], user_id: str | None = None) -> list[dict]:
+def enrich_stock_rows_with_toss(
+    rows: list[dict],
+    user_id: str | None = None,
+    require_fresh: bool = False,
+    allow_network: bool = True,
+) -> list[dict]:
     enriched_rows = []
 
     for row in rows or []:
         symbol = str(row.get("code") or row.get("symbol") or "").strip()
         enriched = dict(row)
 
-        if enriched.get("price") and enriched.get("change") and enriched.get("value"):
-            enriched["live_symbol_used"] = symbol
-            enriched["live_price"] = to_float(enriched.get("current_price") or enriched.get("price"))
-            enriched["live_change_rate"] = to_float(enriched.get("change_rate"))
-            enriched_rows.append(enriched)
-            continue
+        cached_quote = LIVE_QUOTE_CACHE.get(symbol)
+        if cached_quote and is_fresh_live_quote(cached_quote):
+            quote = cached_quote
+        else:
+            quote = None
 
-        if symbol:
+        if symbol and quote is None and allow_network:
             try:
                 quote = fetch_toss_price(symbol, user_id)
                 current_price = to_float(quote.get("current_price"))
@@ -626,24 +644,49 @@ def enrich_stock_rows_with_toss(rows: list[dict], user_id: str | None = None) ->
                 if current_price and prev_close:
                     change_rate = ((current_price - prev_close) / prev_close) * 100 if prev_close else 0.0
 
+                quote_timestamp = datetime.now(timezone.utc).isoformat()
                 if current_price:
                     enriched["price"] = f"{current_price:,.0f}"
+                    enriched["current_price"] = current_price
                 prefix = "+" if change_rate > 0 else ""
                 enriched["change"] = f"{prefix}{change_rate:.2f}%"
+                enriched["change_rate"] = change_rate
                 if not enriched.get("value") and enriched.get("trading_value"):
                     enriched["value"] = format_krw_compact(to_float(enriched.get("trading_value")))
                 enriched["live_symbol_used"] = quote.get("symbol_used", symbol)
                 enriched["live_price"] = current_price
                 enriched["live_prev_close"] = prev_close
                 enriched["live_change_rate"] = change_rate
+                enriched["live_quote_as_of"] = quote_timestamp
+                enriched["live_quote_status"] = "fresh"
                 enriched["live_raw"] = quote.get("raw")
+                LIVE_QUOTE_CACHE[symbol] = {
+                    **quote,
+                    "live_price": current_price,
+                    "live_change_rate": change_rate,
+                    "live_quote_as_of": quote_timestamp,
+                }
                 raw_quote = quote.get("raw")
                 if not current_price and not change_rate and isinstance(raw_quote, dict):
                     error_obj = raw_quote.get("error")
                     if error_obj:
                         enriched["live_error"] = error_obj if isinstance(error_obj, str) else str(error_obj)
-            except Exception:
-                pass
+            except Exception as error:
+                enriched["live_quote_status"] = "stale" if enriched.get("live_quote_as_of") else "missing"
+                enriched["live_error"] = str(error)
+
+        if quote and is_fresh_live_quote(quote):
+            current_price = to_float(quote.get("live_price") or quote.get("current_price"))
+            change_rate = to_float(quote.get("live_change_rate") or quote.get("change_rate"))
+            enriched["current_price"] = current_price or to_float(enriched.get("current_price"))
+            enriched["live_price"] = current_price
+            enriched["live_change_rate"] = change_rate
+            enriched["change_rate"] = change_rate
+            enriched["change"] = f"{'+' if change_rate > 0 else ''}{change_rate:.2f}%"
+            enriched["live_quote_as_of"] = quote.get("live_quote_as_of")
+            enriched["live_quote_status"] = "fresh"
+        elif require_fresh and allow_network:
+            enriched["live_quote_status"] = "stale" if enriched.get("live_quote_as_of") else "missing"
 
         enriched_rows.append(enriched)
 
@@ -698,7 +741,21 @@ def build_home_overview(data: dict, auth_header: str | None = None) -> dict:
             horizon=filters.get("horizon", "실시간"),
             force_refresh=bool(filters.get("forceRefresh") or data.get("forceRefresh")),
         )
-        result["stocks"] = enrich_stock_rows_with_toss(stock_rows, user_id=user_id)
+        force_refresh = bool(filters.get("forceRefresh") or data.get("forceRefresh"))
+        enriched_rows = enrich_stock_rows_with_toss(
+            stock_rows,
+            user_id=user_id,
+            require_fresh=force_refresh,
+            allow_network=force_refresh,
+        )
+        if force_refresh and get_toss_env_credentials()["client_id"] and get_toss_env_credentials()["client_secret"]:
+            fresh_rows = [row for row in enriched_rows if is_fresh_live_quote(row)]
+            enriched_rows = fresh_rows
+        result["stocks"] = apply_stock_filters(
+            enriched_rows,
+            filters,
+            limit=HOME_STOCK_CLIENT_CACHE_LIMIT,
+        )
         result["market_snapshot"] = build_snapshot_meta(result["stocks"])
         if not result["stocks"]:
             empty_reason = "해외 주식 랭킹 스냅샷 데이터가 아직 없습니다." if normalize_market_segment(filters.get("region")) == "US" else "주식 거래대금 스냅샷 데이터가 아직 없습니다."

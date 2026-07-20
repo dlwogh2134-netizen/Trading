@@ -73,21 +73,15 @@ def get_news_feed():
 def sync_news_feed():
     """Naver/Finnhub 최신 뉴스를 DB에 동기화합니다. Tavily는 예약 수집에 사용하지 않습니다."""
     is_admin_request = _is_news_sync_admin_request()
-    is_user_request = _is_news_sync_logged_in_user_request()
-    if not is_admin_request and not is_user_request:
-        return jsonify({
-            "success": False,
-            "message": "로그인이 필요한 작업입니다.",
-        }), 403
 
     news_ingest_service = current_app.news_ingest_service
     try:
         data = request.get_json(silent=True) or {}
         symbol = normalize_news_symbol(str(data.get("symbol") or ""))
-        if is_user_request and not is_admin_request and not symbol:
+        if not is_admin_request and not symbol:
             return jsonify({
                 "success": False,
-                "message": "로그인 사용자의 뉴스 수집은 symbol 파라미터가 필요합니다.",
+                "message": "뉴스 수집 요청은 symbol 파라미터가 필요합니다.",
             }), 400
 
         if symbol:
@@ -172,10 +166,29 @@ def ensure_news_summaries():
 
             existing_summary = (article.get("ai_summary") or "").strip()
             existing_model = article.get("ai_summary_model")
-            if existing_summary and (existing_model != "fallback" or not news_summary_service.enabled):
+            existing_prompt_version = article.get("ai_summary_prompt_version")
+            normalize_summary = getattr(news_summary_service, "_normalize_summary", None)
+            normalized_existing_summary = (
+                normalize_summary(existing_summary)
+                if callable(normalize_summary)
+                else existing_summary
+            )
+            if (
+                normalized_existing_summary
+                and existing_prompt_version == news_summary_service.prompt_version
+                and (existing_model != "fallback" or not news_summary_service.enabled)
+            ):
+                if normalized_existing_summary != existing_summary:
+                    updates.append({
+                        "id": article_id,
+                        "ai_summary": normalized_existing_summary,
+                        "ai_summary_model": existing_model,
+                        "ai_summary_generated_at": article.get("ai_summary_generated_at"),
+                        "ai_summary_prompt_version": existing_prompt_version,
+                    })
                 items.append({
                     "id": article_id,
-                    "ai_summary": existing_summary,
+                    "ai_summary": normalized_existing_summary,
                     "ai_summary_model": article.get("ai_summary_model"),
                     "ai_summary_generated_at": article.get("ai_summary_generated_at"),
                     "ai_summary_prompt_version": article.get("ai_summary_prompt_version"),

@@ -21,7 +21,7 @@ class NewsSummaryService:
             "NEWS_SUMMARY_GEMINI_FALLBACK_MODEL",
             os.getenv("DART_GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite"),
         )
-        self.prompt_version = os.getenv("NEWS_SUMMARY_PROMPT_VERSION", "v1")
+        self.prompt_version = os.getenv("NEWS_SUMMARY_PROMPT_VERSION", "v2")
         self.timeout_seconds = int(os.getenv("NEWS_SUMMARY_TIMEOUT_SECONDS", "30"))
 
     @property
@@ -72,7 +72,7 @@ class NewsSummaryService:
                             "role": "system",
                             "content": (
                                 "너는 주식/코인 뉴스 게시판용 요약기다. "
-                                "항상 한국어로만 답하고, 반드시 3줄로만 출력한다. "
+                                "항상 한국어로만 답하고, 실제 기사 내용에 따라 최대 3줄로 출력한다. "
                                 "투자 권유나 가격 예측 없이 확인된 사실 중심으로 요약한다."
                             ),
                         },
@@ -108,7 +108,7 @@ class NewsSummaryService:
                         "model": model,
                         "system_instruction": (
                             "너는 주식/코인 뉴스 게시판용 요약기다. "
-                            "한국어 3줄로만 출력하고 투자 권유나 가격 예측은 하지 않는다."
+                            "한국어로 실제 기사 내용에 따라 최대 3줄로 출력하고 투자 권유나 가격 예측은 하지 않는다."
                         ),
                         "input": prompt,
                         "generation_config": {
@@ -142,14 +142,14 @@ class NewsSummaryService:
         url = self._clean(article.get("url", ""))
 
         return (
-            "아래 뉴스 기사를 3줄로 요약해줘.\n"
+            "아래 뉴스 기사를 실제 내용에 따라 최대 3줄로 요약해줘.\n"
             "출력 조건:\n"
             "1. 반드시 한국어\n"
-            "2. 정확히 3줄\n"
+            "2. 내용이 충분하면 3줄, 부족하면 1~2줄\n"
             "3. 각 줄은 1문장\n"
             "4. 각 줄은 '1. ', '2. ', '3. '로 시작\n"
             "5. 투자 권유, 매수/매도 권유, 주가 예측 금지\n"
-            "6. 제목과 내용이 부족하면 부족하다고 짧게 언급\n\n"
+            "6. 정보가 부족하면 확인된 사실만 1~2줄로 쓰고, '기사 내용이 부족하다'처럼 부족함을 설명하는 메타 문장을 절대 만들지 말 것\n\n"
             f"제목: {title}\n"
             f"본문 요약: {summary}\n"
             f"종목명: {company_name}\n"
@@ -225,15 +225,32 @@ class NewsSummaryService:
 
         normalized: list[str] = []
         for line in lines:
-            normalized.append(line if re.match(r"^\d+\.", line) else f"{len(normalized) + 1}. {line}")
+            if self._is_summary_meta_line(line):
+                continue
+            text_line = re.sub(r"^\d+\.\s*", "", line).strip()
+            normalized.append(f"{len(normalized) + 1}. {text_line}")
             if len(normalized) == 3:
                 break
 
-        if len(normalized) < 3:
+        if len(normalized) < 1:
             return ""
-        if any(self._is_incomplete_summary_line(line) for line in normalized[:3]):
+        if any(self._is_incomplete_summary_line(line) for line in normalized):
             return ""
-        return "\n".join(normalized[:3])
+        return "\n".join(normalized)
+
+    @staticmethod
+    def _is_summary_meta_line(line: str) -> bool:
+        text = re.sub(r"^\d+\.\s*", "", str(line or "")).strip()
+        meta_phrases = (
+            "기사 내용이 부족",
+            "내용이 부족",
+            "구체적인 정보가 부족",
+            "추가 정보가 필요",
+            "확인된 정보가 부족",
+            "요약할 내용이 부족",
+            "정보가 부족합니다",
+        )
+        return any(phrase in text for phrase in meta_phrases)
 
     @staticmethod
     def _split_summary_lines(text: str) -> list[str]:
@@ -261,14 +278,10 @@ class NewsSummaryService:
         if len(sentence) > 80:
             sentence = sentence[:79].rstrip() + "..."
 
-        subject = company_name or "해당 종목"
-        return "\n".join(
-            [
-                f"1. {title or sentence}",
-                f"2. {sentence}",
-                "3. 원문과 공시, 실적 발표 여부를 함께 확인하세요.",
-            ]
-        )
+        lines = [f"1. {title or sentence}"]
+        if summary and title and summary != title:
+            lines.append(f"2. {sentence}")
+        return "\n".join(lines)
 
     def _clean(self, value: Any) -> str:
         return re.sub(r"\s+", " ", str(value or "")).strip()

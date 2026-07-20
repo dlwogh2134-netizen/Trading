@@ -1064,16 +1064,10 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     setNewsSyncing(true)
     setNewsSyncMessage({ text: '', isError: false })
     try {
-      const authHeader = await getAuthHeader()
-      if (!authHeader) {
-        setNewsSyncMessage({ text: '로그인이 필요합니다.', isError: true })
-        return
-      }
       const response = await fetch(`${API_BASE_URL}/api/news/sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: authHeader,
         },
         body: JSON.stringify({
           symbol: resolvedAssetType === 'STOCK' ? getExchangeSymbol(exchange) : getDetailBaseSymbol(),

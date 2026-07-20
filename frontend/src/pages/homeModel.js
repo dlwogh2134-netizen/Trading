@@ -49,8 +49,8 @@ export const formatHomeMarketPrice = (row = {}) => {
 }
 
 export const formatChange = (row = {}) => {
-  if (typeof row.change === 'string' && row.change) return row.change
-  const change = Number(row.change_rate ?? row.changeRate ?? row.change_percent ?? row.changePercent ?? row.live_change_rate)
+  const liveChange = row.live_change_rate ?? row.liveChangeRate
+  const change = Number(liveChange ?? row.change_rate ?? row.changeRate ?? row.change_percent ?? row.changePercent ?? row.change)
   if (!Number.isFinite(change)) return '-'
   return `${change > 0 ? '+' : ''}${change.toFixed(2)}%`
 }
@@ -62,7 +62,7 @@ export const changeClass = (value) => {
 }
 
 export const numericHomeMarketChange = (row = {}) => {
-  const raw = row.change_rate ?? row.changeRate ?? row.change_percent ?? row.changePercent ?? row.live_change_rate ?? row.change
+  const raw = row.live_change_rate ?? row.liveChangeRate ?? row.change_rate ?? row.changeRate ?? row.change_percent ?? row.changePercent ?? row.change
   const value = Number(String(raw ?? '').replace('%', '').replace('+', ''))
   return Number.isFinite(value) ? value : 0
 }
@@ -83,9 +83,8 @@ export const numericHomeMarketMetric = (row = {}, metric = '거래대금') => {
   return numberPart
 }
 
-export const formatHomeMarketValue = (row = {}, valueKey = 'value', ranking = '거래대금') => {
+export const formatHomeMarketValue = (row = {}, valueKey = 'value') => {
   if (valueKey === 'change') return formatChange(row)
-  if (isForeignHomeMarketRow(row) && valueKey !== 'volume' && ['상승률', '하락률'].includes(ranking)) return '-'
 
   const direct = valueKey === 'volume'
     ? row.trading_volume ?? row.volume
@@ -100,6 +99,7 @@ export const formatHomeMarketValue = (row = {}, valueKey = 'value', ranking = '�
   }
   if (!Number.isFinite(numeric) || numeric <= 0) return '-'
   if (valueKey === 'volume') return Math.round(numeric).toLocaleString('ko-KR')
+  if (String(row.trading_value_unit ?? '').toUpperCase() === 'USD') return `$${Math.round(numeric).toLocaleString('en-US')}`
   if (numeric >= 1_000_000_000_000) return `${(numeric / 1_000_000_000_000).toFixed(1)}조원`
   if (numeric >= 100_000_000) return `${Math.round(numeric / 100_000_000).toLocaleString('ko-KR')}억원`
   return `${Math.round(numeric).toLocaleString('ko-KR')}원`

@@ -116,9 +116,6 @@ export default function AssetDetailNewsDisclosurePanel({
                         </>
                       ) : (
                         <div className={emptyStateClassName}>
-                          <p className="text-xs text-slate-500 font-mono">
-                            해당 종목의 저장된 뉴스가 없습니다.
-                          </p>
                           <button
                             type="button"
                             onClick={onRequestNewsSync}

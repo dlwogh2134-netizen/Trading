@@ -175,6 +175,14 @@ export const sortNewsByPublishedAtDesc = (items = []) => {
   })
 }
 
+export const getNewsSyncMessage = (visibleCount) => {
+  const count = Number(visibleCount)
+  if (Number.isFinite(count) && count > 0) {
+    return `최근 7일 이내 투자 관련 뉴스 ${count}건을 확인했습니다.`
+  }
+  return '최근 7일 이내 투자 관련 뉴스가 없습니다.'
+}
+
 export const formatDisclosureDate = (value) => {
   const text = String(value || '').trim()
   if (/^\d{8}$/.test(text)) {
