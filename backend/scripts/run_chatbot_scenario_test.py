@@ -240,6 +240,7 @@ def run_test_suite(report_path: str = "docs/superpowers/specs/2026-07-16-chatbot
         # Flask app context 하에서 실행
         with app.app_context():
             chatbot_service = ChatbotService()
+            chatbot_service.agent = None
             
             # 각 시나리오별로 순차 실행
             for sc in scenarios:

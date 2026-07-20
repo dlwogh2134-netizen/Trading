@@ -1,7 +1,18 @@
+import pytest
 from backend.services.chatbot.conversation_repository import ChatbotConversationRepository
 from backend.services.chatbot.chat_service import ChatbotService
 from backend.services.chatbot.market_context_followup import is_market_context_followup
 import backend.services.chatbot.chat_service as chat_service_module
+
+
+@pytest.fixture(autouse=True)
+def disable_langgraph_agent(monkeypatch):
+    """Disable LangGraph agent for legacy tests that mock llm_client."""
+    original_init = ChatbotService.__init__
+    def patched_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.agent = None
+    monkeypatch.setattr(ChatbotService, "__init__", patched_init)
 
 
 class FakeLLMClient:
