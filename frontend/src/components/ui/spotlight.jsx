@@ -18,6 +18,7 @@ export function Spotlight({
   const spotlightLeft = useTransform(mouseX, (x) => `${x - size / 2}px`);
   const spotlightTop = useTransform(mouseY, (y) => `${y - size / 2}px`);
 
+  // 부모 엘리먼트를 찾아서 상대 스타일 지정
   useEffect(() => {
     if (containerRef.current) {
       const parent = containerRef.current.parentElement;
@@ -32,9 +33,24 @@ export function Spotlight({
   const handleMouseMove = useCallback(
     (event) => {
       if (!parentElement) return;
-      const { left, top } = parentElement.getBoundingClientRect();
-      mouseX.set(event.clientX - left);
-      mouseY.set(event.clientY - top);
+
+      const { left, top, width, height } = parentElement.getBoundingClientRect();
+      const x = event.clientX - left;
+      const y = event.clientY - top;
+
+      // 마우스가 부모 엘리먼트 영역 내에 있는지 수학적으로 검증 (Spline 이벤트 캡처 폴백)
+      if (
+        event.clientX >= left &&
+        event.clientX <= left + width &&
+        event.clientY >= top &&
+        event.clientY <= top + height
+      ) {
+        setIsHovered(true);
+        mouseX.set(x);
+        mouseY.set(y);
+      } else {
+        setIsHovered(false);
+      }
     },
     [mouseX, mouseY, parentElement]
   );
@@ -42,15 +58,17 @@ export function Spotlight({
   useEffect(() => {
     if (!parentElement) return;
 
-    parentElement.addEventListener('mousemove', handleMouseMove);
+    // 3D Canvas의 이벤트 차단을 우회하기 위해 window 전역 객체에 mousemove 리스너를 등록합니다.
+    window.addEventListener('mousemove', handleMouseMove);
+
     const handleMouseEnter = () => setIsHovered(true);
     const handleMouseLeave = () => setIsHovered(false);
-    
+
     parentElement.addEventListener('mouseenter', handleMouseEnter);
     parentElement.addEventListener('mouseleave', handleMouseLeave);
 
     return () => {
-      parentElement.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mousemove', handleMouseMove);
       parentElement.removeEventListener('mouseenter', handleMouseEnter);
       parentElement.removeEventListener('mouseleave', handleMouseLeave);
     };
@@ -60,8 +78,7 @@ export function Spotlight({
     <motion.div
       ref={containerRef}
       className={cn(
-        'pointer-events-none absolute rounded-full bg-[radial-gradient(circle_at_center,var(--tw-gradient-stops),transparent_80%)] blur-xl transition-opacity duration-200',
-        'from-zinc-50 via-zinc-100 to-zinc-200',
+        'pointer-events-none absolute rounded-full blur-xl transition-opacity duration-200',
         isHovered ? 'opacity-100' : 'opacity-0',
         className
       )}
@@ -70,6 +87,8 @@ export function Spotlight({
         height: size,
         left: spotlightLeft,
         top: spotlightTop,
+        // Tailwind v4 그라디언트 파싱 오동작 방지를 위해 인라인 스타일로 화이트 광원 그라디언트를 직접 지정합니다.
+        backgroundImage: 'radial-gradient(circle at center, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 80%)',
       }}
     />
   );
