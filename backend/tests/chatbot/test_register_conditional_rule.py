@@ -15,7 +15,8 @@ def test_register_conditional_rule_success():
     with patch("backend.services.chatbot.tool_registry._resolve_symbol") as mock_resolve, \
          patch("backend.services.chatbot.tool_registry.get_asset_price") as mock_price, \
          patch("backend.services.auth_service.get_user_id_from_header") as mock_auth, \
-         patch("backend.services.chatbot.tool_registry.query_supabase") as mock_supabase:
+         patch("backend.services.chatbot.tool_registry.query_supabase") as mock_supabase, \
+         patch("backend.services.chatbot.tool_registry.get_portfolio_summary") as mock_portfolio:
 
         # 1. 심볼 해석 모킹
         mock_resolve.return_value = {
@@ -39,6 +40,21 @@ def test_register_conditional_rule_success():
 
         # 4. Supabase DB 인서트 모킹
         mock_supabase.return_value = {"success": True}
+
+        # 5. 보유 잔고 모킹
+        mock_portfolio.return_value = {
+            "data": {
+                "summaries": [
+                    {
+                        "exchange": "COINONE",
+                        "env": "REAL",
+                        "holdings": [
+                            {"symbol": "XRP", "qty": 1.6}
+                        ]
+                    }
+                ]
+            }
+        }
 
         # 실행
         auth_header = "Bearer test-token"
@@ -83,7 +99,8 @@ def test_register_conditional_rule_auto_mode():
     with patch("backend.services.chatbot.tool_registry._resolve_symbol") as mock_resolve, \
          patch("backend.services.chatbot.tool_registry.get_asset_price") as mock_price, \
          patch("backend.services.auth_service.get_user_id_from_header") as mock_auth, \
-         patch("backend.services.chatbot.tool_registry.query_supabase") as mock_supabase:
+         patch("backend.services.chatbot.tool_registry.query_supabase") as mock_supabase, \
+         patch("backend.services.chatbot.tool_registry.get_portfolio_summary") as mock_portfolio:
 
         mock_resolve.return_value = {
             "symbol": "XRP",
@@ -99,6 +116,19 @@ def test_register_conditional_rule_auto_mode():
         }
         mock_auth.return_value = ("test-user-uuid", "test-token")
         mock_supabase.return_value = {"success": True}
+        mock_portfolio.return_value = {
+            "data": {
+                "summaries": [
+                    {
+                        "exchange": "COINONE",
+                        "env": "REAL",
+                        "holdings": [
+                            {"symbol": "XRP", "qty": 1.6}
+                        ]
+                    }
+                ]
+            }
+        }
 
         # 실행 ("자동" 키워드가 포함됨)
         result = register_conditional_rule(
@@ -111,3 +141,5 @@ def test_register_conditional_rule_auto_mode():
         rule = result["data"]["rule"]
         assert rule["execution_mode"] == "AUTO"  # "자동매매" 키워드가 있으므로 AUTO로 설정되어야 함
         assert rule["stop_loss_rate"] == -99.0  # NOT NULL 제약조건 우회 보정값 -99.0 확인
+        assert rule["quantity"] == 1.6  # 보유 잔고에서 1.6개 자동 추출 확인
+        assert rule["investment_amount"] == 2560.0  # 보유 잔고(1.6) * 현재가(1600.0) 자동 매핑 확인

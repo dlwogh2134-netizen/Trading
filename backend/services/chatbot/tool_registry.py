@@ -3856,13 +3856,37 @@ def register_conditional_rule(
         }
 
     # 투자 금액 및 수량 계산
-    amount = _to_float(investment_amount)
-    if amount <= 0:
-        amount = 100000.0  # 기본값 10만원
-
     qty = _to_float(quantity)
-    if qty <= 0:
-        qty = amount / entry_price
+    amount = _to_float(investment_amount)
+
+    if qty <= 0 and amount <= 0:
+        # 사용자가 둘 다 지정하지 않았다면 계좌 보유 잔고 전량 조회
+        portfolio = get_portfolio_summary(auth_header, message, exchange=exchange, broker_env=broker_env)
+        summaries = (portfolio.get("data") or {}).get("summaries") or []
+        
+        holding_qty = 0.0
+        for item in summaries:
+            if item.get("exchange") == exchange and item.get("env") == broker_env:
+                for h in item.get("holdings") or []:
+                    h_symbol = str(h.get("symbol") or h.get("currency") or "").upper()
+                    if h_symbol == symbol or h_symbol == ticker:
+                        holding_qty = _to_float(h.get("qty") or h.get("quantity") or h.get("balance") or h.get("available_qty"))
+                        break
+        
+        if holding_qty > 0:
+            qty = holding_qty
+            amount = qty * entry_price
+        else:
+            return {
+                "reply": f"현재 {exchange} {broker_env} 계좌에 '{display_name}' 보유 잔고가 없어 조건감시를 등록할 수 없습니다. 먼저 매수를 진행해 주세요.",
+                "data": {"error": "no_holding_balance"},
+            }
+    else:
+        # 한쪽만 기입된 경우 보정
+        if qty <= 0:
+            qty = amount / entry_price
+        if amount <= 0:
+            amount = qty * entry_price
 
     # 백분율 기재 변환
     tp_rate = _to_float(target_profit_rate)
