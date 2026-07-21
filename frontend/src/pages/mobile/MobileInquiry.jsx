@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Header from '../../components/Header.jsx'
 import { SidebarNav } from '../../components/DashboardComponents.jsx'
 import { DASHBOARD_QUERY_TABS, DASHBOARD_ROUTE, INQUIRY_ROUTES } from '../../dashboardConstants.js'
+import { setBrowserTab } from '../../lib/browserTab.js'
 import { supabase } from '../../supabaseClient.js'
 import {
   HISTORY_PAGE_SIZE,
@@ -297,6 +298,11 @@ export default function Inquiry({ isLoggedIn, userEmail, handleLogout, hideHeade
   const [inquiryError, setInquiryError] = useState('')
   const navigate = useNavigate()
   const { pathname } = useLocation()
+
+  useEffect(() => {
+    return setBrowserTab({ title: 'ANTRY - 고객센터' })
+  }, [])
+
   const isWriteView = pathname === INQUIRY_ROUTES.write
   const isHistoryView = pathname === INQUIRY_ROUTES.history
 
