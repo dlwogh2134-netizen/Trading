@@ -26,7 +26,9 @@ import {
   getAssetCurrencyDigits,
   getAssetCurrencySign,
   getAssetPriceDigits,
+  findTradableOrderAccount,
   getOrderSideLabel,
+  getOrderEntryAssetType,
   getSupportedCryptoOrderExchanges,
   isActionableOrderStatus,
   isCancelReplaceExchange,
@@ -235,6 +237,8 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   const [precheckLoading, setPrecheckLoading] = useState(false)
   const [precheckMessage, setPrecheckMessage] = useState('')
   const [brokerAvailability, setBrokerAvailability] = useState(null)
+  const [orderAccounts, setOrderAccounts] = useState([])
+  const [orderAccountsLoading, setOrderAccountsLoading] = useState(false)
   const [tradeHoldingContext, setTradeHoldingContext] = useState(null)
   const [mlSignal, setMlSignal] = useState(null)
   const [mlSignalLoading, setMlSignalLoading] = useState(false)
@@ -845,6 +849,30 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       console.error('브로커 등록 상태 로드 실패:', error)
     }
   }
+
+  const loadOrderAccounts = async () => {
+    const authHeader = await getAuthHeader()
+    if (!authHeader) {
+      setOrderAccounts([])
+      return
+    }
+
+    setOrderAccountsLoading(true)
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/trade/order-entry/accounts`, {
+        headers: { Authorization: authHeader },
+      })
+      const resData = await response.json()
+      setOrderAccounts(resData.success && Array.isArray(resData.data?.accounts) ? resData.data.accounts : [])
+    } catch (error) {
+      console.error('주문 계좌 목록 로드 실패:', error)
+      setOrderAccounts([])
+    } finally {
+      setOrderAccountsLoading(false)
+    }
+  }
+
+  const selectedOrderAccount = findTradableOrderAccount(orderAccounts, exchange, brokerEnv)
 
   // 종목 메타데이터(한글명 등) 조회
   const fetchSymbolMetadata = async () => {
@@ -1867,6 +1895,13 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return
     }
 
+    if (orderAccountsLoading) return
+    if (!selectedOrderAccount?.id) {
+      setOrderPrecheck(null)
+      setPrecheckMessage('주문 가능한 계좌를 연결하거나 선택해 주세요.')
+      return
+    }
+
     if (!quantity || Number(quantity) <= 0) {
       setOrderPrecheck(null)
       setPrecheckMessage('')
@@ -1890,8 +1925,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
           'Authorization': authHeader,
         },
         body: JSON.stringify({
+          account_id: selectedOrderAccount.id,
           exchange,
+          asset_type: getOrderEntryAssetType(exchange),
+          intent: effectiveSide,
           symbol: getExchangeSymbol(exchange),
+          symbol_selected: true,
           action: effectiveSide,
           order_type: orderType,
           quantity: Number(quantity),
@@ -1987,6 +2026,10 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     loadBrokerAvailability()
   })
 
+  const loadOrderAccountsEvent = useEffectEvent(() => {
+    loadOrderAccounts()
+  })
+
   const loadTradeHoldingContextEvent = useEffectEvent(() => {
     loadTradeHoldingContext()
   })
@@ -2051,6 +2094,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
   useEffect(() => {
     fetchSymbolMetadataEvent()
     loadBrokerAvailabilityEvent()
+    loadOrderAccountsEvent()
     loadTradeHoldingContextEvent()
   }, [symbol, normalizedRouteAssetType])
 
@@ -2223,7 +2267,7 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     }, isStockAsset ? 800 : 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [exchange, symbol, effectiveSide, orderType, price, quantity, brokerEnv, isStockAsset, effectiveReduceOnly, futuresLeverage, futuresMarginType])
+  }, [exchange, symbol, effectiveSide, orderType, price, quantity, brokerEnv, isStockAsset, effectiveReduceOnly, futuresLeverage, futuresMarginType, selectedOrderAccount?.id, orderAccountsLoading])
 
   // 3. TradingView Lightweight Charts 차트 초기 생성 및 리사이즈 대응
   useEffect(() => {
@@ -2390,6 +2434,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
       return
     }
 
+    if (!selectedOrderAccount?.id) {
+      setTradeMessage({ text: '주문 가능한 계좌를 연결하거나 선택해 주세요.', isError: true })
+      setSubmitting(false)
+      return
+    }
+
     if (!quantity || parseFloat(quantity) <= 0) {
       setTradeMessage({ text: '올바른 주문 수량을 입력하세요.', isError: true })
       setSubmitting(false)
@@ -2431,8 +2481,12 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
 
     try {
       const payload = {
+        account_id: selectedOrderAccount.id,
         exchange,
+        asset_type: getOrderEntryAssetType(exchange),
+        intent: effectiveSide,
         symbol: getExchangeSymbol(exchange),
+        symbol_selected: true,
         action: effectiveSide,
         order_type: orderType,
         quantity: parseFloat(quantity),
@@ -2541,9 +2595,9 @@ export default function AssetDetail({ isLoggedIn, userEmail, handleLogout, userP
     orderPrecheck?.insufficient_cash ||
     orderPrecheck?.insufficient_holding
   ))
-  const isCoinoneOrderUnavailable = isCryptoOrderExchangeUnavailable('COINONE')
-  const isBinanceSpotOrderUnavailable = isCryptoOrderExchangeUnavailable('BINANCE')
-  const isBinanceFuturesOrderUnavailable = isCryptoOrderExchangeUnavailable('BINANCE_UM_FUTURES')
+  const isCoinoneOrderUnavailable = isCryptoOrderExchangeUnavailable('COINONE') || (!orderAccountsLoading && !findTradableOrderAccount(orderAccounts, 'COINONE', 'REAL'))
+  const isBinanceSpotOrderUnavailable = isCryptoOrderExchangeUnavailable('BINANCE') || (!orderAccountsLoading && !findTradableOrderAccount(orderAccounts, 'BINANCE', brokerEnv))
+  const isBinanceFuturesOrderUnavailable = isCryptoOrderExchangeUnavailable('BINANCE_UM_FUTURES') || (!orderAccountsLoading && !findTradableOrderAccount(orderAccounts, 'BINANCE_UM_FUTURES', brokerEnv))
   const pageShellClassName = mobileLayout
     ? 'bg-[#070b19] text-[#e2e2ec] font-inter'
     : 'min-h-screen bg-[#070b19] text-[#e2e2ec] font-inter'
