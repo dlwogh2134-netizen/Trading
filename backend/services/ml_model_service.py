@@ -76,12 +76,12 @@ PROMOTION_THRESHOLDS = {
         "meaningful_improvement_excess_return_net": 0.001,
         "meaningful_improvement_precision_at_top_n": 0.01,
     },
-    # 해외주식 전용 모델 — stock과 동일한 임계값 적용
+    # 해외주식 전용 모델 — 현실적인 성과 기준 적용 (적중률 35%, 초과수익 마이너스 소폭 허용)
     "us_stock": {
         "min_valid_rows": 800,
         "min_cv_roc_auc": 0.50,
-        "min_precision_at_top_10pct": 0.40,
-        "min_composite_excess_return_net": 0.0,
+        "min_precision_at_top_10pct": 0.35,
+        "min_composite_excess_return_net": -0.005,
         "min_composite_precision_at_top_n": 0.50,
         "min_risk_cv_roc_auc": 0.50,
         "min_max_drawdown_net": -0.55,

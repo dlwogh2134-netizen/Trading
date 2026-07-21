@@ -9,6 +9,7 @@ data:
 model:
   version: lgbm_us_stock_signal_v1
   asset_type: STOCK
+  min_listing_days: 120
   output_path: models/lgbm_us_stock_signal_v1.joblib
   horizon_periods: 3
   up_return_threshold: 0.01

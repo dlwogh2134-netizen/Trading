@@ -215,6 +215,16 @@ export function ActiveSignalPanel({ title, data, loading, error, guardReport, on
   )
 }
 
+const getAssetTypeLabel = (assetType) => {
+  const mapping = {
+    'STOCK': '주식 모델',
+    'CRYPTO': '코인 모델',
+    'STOCK_KR': '국내주식 모델',
+    'STOCK_US': '해외주식 모델',
+  }
+  return mapping[assetType] || assetType
+}
+
 export function ServingAuditPanel({ data, loading, error, onRefresh, compactGuards = false }) {
   const guardGridClass = compactGuards ? 'mt-4 grid gap-2' : 'mt-4 grid gap-3 md:grid-cols-2'
   const guardCardClass = compactGuards
@@ -265,7 +275,7 @@ export function ServingAuditPanel({ data, loading, error, onRefresh, compactGuar
               <div key={assetKey} className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs font-bold text-white">{report.asset_type === 'STOCK' ? '주식 모델' : '코인 모델'}</p>
+                    <p className="text-xs font-bold text-white">{getAssetTypeLabel(report.asset_type)}</p>
                     <p className="mt-1 text-xs leading-5 text-slate-400">{report.message}</p>
                   </div>
                   <AuditBadge status={report.status} />
@@ -340,7 +350,7 @@ export function ModelSwitchPanel({ data, rowsByAsset, promotionChecks, loading, 
               <article key={report.asset_type} className="rounded-lg border border-slate-800 bg-[#0f172a] p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-sm font-bold text-white">{report.asset_type === 'STOCK' ? '주식 모델' : '코인 모델'}</p>
+                    <p className="text-sm font-bold text-white">{getAssetTypeLabel(report.asset_type)}</p>
                     <p className="mt-1 text-xs leading-5 text-slate-400">{report.message}</p>
                   </div>
                   <span className={`rounded border px-2 py-1 text-[10px] font-bold ${guardStatus.tone}`}>
