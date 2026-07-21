@@ -544,8 +544,8 @@ def test_asset_outlook_uses_ml_signal_for_predictive_question(monkeypatch):
     assert result["data"]["asset_key"] == "kr_stock"
     assert result["data"]["symbol"] == "005930"
     assert result["data"]["model_version"] == "lgbm_kr_stock_signal_v1"
-    assert "상승 확률: 63.0%" in result["reply"]
-    assert "모델 기반 참고 신호" in result["reply"]
+    assert "상승 가능성 63.0%" in result["reply"]
+    assert "종목의 ML 참고 신호입니다." in result["reply"]
 
 
 def test_asset_outlook_explains_missing_ml_prediction_without_news_fallback(monkeypatch):
