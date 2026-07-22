@@ -74,11 +74,14 @@ def _get_current_price_coinone(symbol: str) -> float | None:
     """코인원 현재가를 조회합니다. 실패 시 None 반환."""
     try:
         from backend.services.coinone_client import CoinoneClient
-        ticker = CoinoneClient.get_ticker(symbol)
-        if ticker:
-            price = ticker.get("last") or ticker.get("current_price") or ticker.get("close")
-            if price:
-                return float(price)
+        client = CoinoneClient.__new__(CoinoneClient)  # 인증 없이 퍼블릭 API만 사용
+        client.access_token = ""
+        client.secret_key = b""
+        client.base_url = "https://api.coinone.co.kr"
+        price_data = client.get_price(symbol)
+        price = price_data.get("current_price") or price_data.get("last") or price_data.get("close")
+        if price:
+            return float(price)
     except Exception as e:
         logger.warning(f"[AiFundScheduler] 코인원 현재가 조회 실패 ({symbol}): {e}")
     return None
@@ -89,9 +92,9 @@ def _build_exchange_client(exchange_type: str, config: dict):
     exchange = exchange_type.lower()
     if exchange == "coinone":
         from backend.services.coinone_client import CoinoneClient
-        api_key = os.getenv("COINONE_API_KEY", "")
+        access_token = os.getenv("COINONE_ACCESS_TOKEN", "") or os.getenv("COINONE_API_KEY", "")
         secret_key = os.getenv("COINONE_SECRET_KEY", "")
-        return CoinoneClient(api_key=api_key, secret_key=secret_key)
+        return CoinoneClient(access_token=access_token, secret_key=secret_key)
     # toss / binance 는 향후 추가
     return None
 
