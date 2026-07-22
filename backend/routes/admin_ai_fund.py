@@ -55,6 +55,23 @@ def upsert_ai_fund_config():
         return jsonify(format_error_payload(err, "설정 저장 에러")), 500
 
 
+@admin_ai_fund_bp.route("/api/admin/ai-fund/logs", methods=["GET"])
+def get_ai_fund_trade_logs():
+    try:
+        auth_header = request.headers.get("Authorization")
+        _extract_bearer_token(auth_header)
+        
+        logs = safe_query_supabase_as_service_role(
+            "admin_ai_trade_logs",
+            params={"order": "created_at.desc", "limit": "50"}
+        ) or []
+        return jsonify({"success": True, "logs": logs}), 200
+    except ValueError as val_err:
+        return jsonify(format_error_payload(val_err, "인증 에러")), 401
+    except Exception as err:
+        return jsonify(format_error_payload(err, "트레이딩 로그 조회 에러")), 500
+
+
 @admin_ai_fund_bp.route("/api/admin/ai-fund/kill-switch", methods=["POST"])
 def execute_kill_switch():
     try:
