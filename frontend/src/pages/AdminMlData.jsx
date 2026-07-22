@@ -41,7 +41,8 @@ import {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5050'
 
-export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideHeader = false }) {
+export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, userProfile, hideHeader = false }) {
+
   const [adminTab, setAdminTab] = useState('ml')
   const [mode, setMode] = useState('crypto')
   const [form, setForm] = useState(presets.crypto)
@@ -1001,8 +1002,9 @@ export default function AdminMlData({ isLoggedIn, userEmail, handleLogout, hideH
         )}
 
         {adminTab === 'ai-fund' && (
-          <AdminAiFundDashboard />
+          <AdminAiFundDashboard userId={userProfile?.id} />
         )}
+
       </main>
 
 

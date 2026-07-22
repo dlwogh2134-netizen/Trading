@@ -122,7 +122,9 @@ export default function DesktopRoutes({
               isLoggedIn={isLoggedIn}
               userEmail={userEmail}
               handleLogout={handleLogout}
+              userProfile={userProfile}
             />
+
           </AdminProtectedRoute>
         )}
       />
