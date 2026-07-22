@@ -452,3 +452,24 @@ class CoinoneClient:
             "secondary_address": transaction.get("secondary_address") or secondary_address,
             "raw": data,
         }
+
+    @staticmethod
+    def get_krw_markets() -> list[dict]:
+        """
+        코인원 퍼블릭 API에서 거래 가능한 전체 KRW 마켓 종목 목록(300개 이상)을 거래대금 순으로 정렬하여 조회합니다.
+        """
+        url = "https://api.coinone.co.kr/public/v2/ticker_new/krw"
+        try:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                tickers = data.get("tickers") or []
+                sorted_tickers = sorted(
+                    tickers,
+                    key=lambda t: float(t.get("quote_volume", 0) or 0),
+                    reverse=True
+                )
+                return sorted_tickers
+        except Exception as err:
+            return []
+

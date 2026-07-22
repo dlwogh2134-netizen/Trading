@@ -50,6 +50,12 @@ def get_stock_shadow_preset_keys() -> list[str]:
     """
     return ["kr-stock-v1-full", "us-stock-v1-full", "stock-v11-full"]
 
+
+def get_crypto_shadow_preset_keys() -> list[str]:
+    """코인 자동화 시 실행할 프리셋 키 목록을 반환합니다 (200+ 알트코인 유니버스 v10 포함)."""
+    return ["crypto-v10-full", "crypto-v9-full"]
+
+
 # 모듈 수준의 전역 상태 변수
 _news_ingest_started = False
 _dart_ingest_started = False
