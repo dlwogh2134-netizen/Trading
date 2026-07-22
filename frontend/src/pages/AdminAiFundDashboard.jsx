@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../supabaseClient'
 
 export default function AdminAiFundDashboard({ userId }) {
-  const [exchangeType, setExchangeType] = useState('coinone')
+  const [selectedExchanges, setSelectedExchanges] = useState(['coinone', 'toss'])
   const [capital, setCapital] = useState(5000000)
   const [riskPreset, setRiskPreset] = useState('neutral')
   const [isActive, setIsActive] = useState(false)
@@ -11,7 +11,6 @@ export default function AdminAiFundDashboard({ userId }) {
   const [currentUserId, setCurrentUserId] = useState(userId || '')
   const [tradeLogs, setTradeLogs] = useState([])
   const [lastCheckTime, setLastCheckTime] = useState(new Date().toLocaleTimeString())
-  const [configId, setConfigId] = useState(null)
 
   useEffect(() => {
     if (!currentUserId) {
@@ -23,6 +22,21 @@ export default function AdminAiFundDashboard({ userId }) {
     }
   }, [currentUserId])
 
+  const toggleExchange = (exKey) => {
+    setMessage('')
+    setSelectedExchanges((prev) => {
+      if (prev.includes(exKey)) {
+        if (prev.length <= 1) {
+          setMessage('최소 1개 이상의 운용 거래소를 선택해야 합니다.')
+          return prev
+        }
+        return prev.filter((item) => item !== exKey)
+      } else {
+        return [...prev, exKey]
+      }
+    })
+  }
+
   useEffect(() => {
     if (!currentUserId) return
 
@@ -31,18 +45,23 @@ export default function AdminAiFundDashboard({ userId }) {
         .from('admin_ai_fund_configs')
         .select('*')
         .eq('user_id', currentUserId)
-        .eq('exchange_type', exchangeType)
-        .maybeSingle()
 
-      if (configData) {
-        setConfigId(configData.id || null)
-        setCapital(configData.allocated_capital || 5000000)
-        setRiskPreset(configData.risk_preset || 'neutral')
-        setIsActive(configData.is_active || false)
-      } else {
-        setConfigId(null)
+      if (configData && configData.length > 0) {
+        const activeExchanges = configData
+          .filter((cfg) => cfg.is_active)
+          .map((cfg) => cfg.exchange_type)
+        if (activeExchanges.length > 0) {
+          setSelectedExchanges(activeExchanges)
+          setIsActive(true)
+        } else {
+          setSelectedExchanges(configData.map((cfg) => cfg.exchange_type))
+          setIsActive(false)
+        }
+
+        const firstCfg = configData[0]
+        setCapital(firstCfg.allocated_capital || 5000000)
+        setRiskPreset(firstCfg.risk_preset || 'neutral')
       }
-
 
       const { data: logsData } = await supabase
         .from('admin_ai_trade_logs')
@@ -110,17 +129,16 @@ export default function AdminAiFundDashboard({ userId }) {
       supabase.removeChannel(configChannel)
       supabase.removeChannel(logChannel)
     }
-  }, [currentUserId, exchangeType])
-
+  }, [currentUserId])
 
   const handleToggleActive = async () => {
     setLoading(true)
     setMessage('')
     try {
       const nextActive = !isActive
-      const payload = {
+      const payloadList = selectedExchanges.map((ex) => ({
         user_id: currentUserId,
-        exchange_type: exchangeType,
+        exchange_type: ex,
         allocated_capital: capital,
         max_position_size: capital * (riskPreset === 'conservative' ? 0.05 : riskPreset === 'neutral' ? 0.1 : 0.2),
         risk_preset: riskPreset,
@@ -128,22 +146,19 @@ export default function AdminAiFundDashboard({ userId }) {
         target_take_profit_pct: riskPreset === 'conservative' ? 3.0 : riskPreset === 'neutral' ? 5.0 : 8.0,
         daily_mdd_limit_pct: riskPreset === 'conservative' ? -1.0 : riskPreset === 'neutral' ? -2.0 : -4.0,
         is_active: nextActive,
-      }
-      if (configId) {
-        payload.id = configId
-      }
+      }))
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('admin_ai_fund_configs')
-        .upsert(payload, { onConflict: 'user_id,exchange_type' })
-        .select()
+        .upsert(payloadList, { onConflict: 'user_id,exchange_type' })
 
       if (error) throw error
-      if (data && data.length > 0 && data[0].id) {
-        setConfigId(data[0].id)
-      }
       setIsActive(nextActive)
-      setMessage(nextActive ? 'AI 위탁 운용이 시작되었습니다.' : 'AI 위탁 운용이 일시정지되었습니다.')
+      setMessage(
+        nextActive
+          ? `선택한 ${selectedExchanges.length}개 거래소(${selectedExchanges.join(', ')}) AI 위탁 운용이 시작되었습니다.`
+          : 'AI 위탁 운용이 일시정지되었습니다.'
+      )
     } catch (err) {
       setMessage(`오류: ${err.message}`)
     } finally {
@@ -199,7 +214,7 @@ export default function AdminAiFundDashboard({ userId }) {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-slate-200">
-                AI 운용 상태: {isActive ? '운용 중 (248개 종목 실시간 감시)' : '운용 대기/일시정지'}
+                AI 운용 상태: {isActive ? `운용 중 (${selectedExchanges.join(', ')} 다중 거래소 감시)` : '운용 대기/일시정지'}
               </span>
               {isActive && (
                 <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800 font-mono animate-pulse">
@@ -210,8 +225,8 @@ export default function AdminAiFundDashboard({ userId }) {
 
             <p className="text-[11px] text-slate-400 mt-1">
               {isActive
-                ? `LightGBM ML v10 엔진 감시 중 | 최소 확신도: ${riskPreset === 'conservative' ? '85%' : riskPreset === 'neutral' ? '75%' : '65%'} 이상 | 목표익절: +${riskPreset === 'conservative' ? '3.0' : riskPreset === 'neutral' ? '5.0' : '8.0'}% | 손실 방지 쉴드 작동 중`
-                : '운용 시작 버튼을 누르면 AI가 할당 자금 범위 내에서 자동으로 매수/매도를 진행합니다.'}
+                ? `LightGBM ML 엔진 감시 중 | 선택 거래소: ${selectedExchanges.join(', ')} | 최소 확신도: ${riskPreset === 'conservative' ? '85%' : riskPreset === 'neutral' ? '75%' : '65%'} 이상 | 목표익절: +${riskPreset === 'conservative' ? '3.0' : riskPreset === 'neutral' ? '5.0' : '8.0'}% | 손실 방지 쉴드 작동 중`
+                : '운용 시작 버튼을 누르면 AI가 할당 자금 범위 내에서 지정 거래소 자동 매수/매도를 진행합니다.'}
             </p>
           </div>
         </div>
@@ -230,16 +245,33 @@ export default function AdminAiFundDashboard({ userId }) {
       {/* Control Form */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3">
-          <label className="text-xs font-semibold text-slate-300 block">운용 거래소</label>
-          <select
-            value={exchangeType}
-            onChange={(e) => setExchangeType(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded p-2"
-          >
-            <option value="coinone">코인원 (Coinone)</option>
-            <option value="toss">토스증권 (Toss)</option>
-            <option value="binance">바이낸스 (Binance)</option>
-          </select>
+          <label className="text-xs font-semibold text-slate-300 block">
+            운용 거래소 (다중 선택 가능)
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { key: 'coinone', label: '코인원' },
+              { key: 'toss', label: '토스증권' },
+              { key: 'binance', label: '바이낸스' },
+            ].map((item) => {
+              const isSelected = selectedExchanges.includes(item.key)
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => toggleExchange(item.key)}
+                  className={`p-2.5 text-center text-xs font-medium rounded border transition cursor-pointer ${
+                    isSelected
+                      ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300 font-bold'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                  }`}
+                >
+                  {isSelected && '✓ '}
+                  {item.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3">
@@ -252,6 +284,7 @@ export default function AdminAiFundDashboard({ userId }) {
           />
         </div>
       </div>
+
 
       {/* Risk Presets */}
       <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3">
