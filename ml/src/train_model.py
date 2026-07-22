@@ -87,8 +87,11 @@ def main() -> None:
 
     model = LGBMClassifier(
         random_state=int(config["model"]["random_state"]),
+        verbose=-1,
+        verbosity=-1,
         **lightgbm_params,
     )
+
     model.fit(
         fit_df[feature_columns],
         fit_df[target_column],
@@ -181,8 +184,11 @@ def main() -> None:
 
         fold_model = LGBMClassifier(
             random_state=int(config["model"]["random_state"]),
+            verbose=-1,
+            verbosity=-1,
             **lightgbm_params,
         )
+
         fold_weights = build_sample_weights(
             fold_train_df,
             target_column=target_column,

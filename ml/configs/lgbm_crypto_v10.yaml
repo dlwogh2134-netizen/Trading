@@ -120,6 +120,8 @@ backtest:
   fee_bps: 6
   slippage_bps: 10
 lightgbm:
+  verbose: -1
+  verbosity: -1
   n_estimators: 222
   learning_rate: 0.028911196064224185
   num_leaves: 83
@@ -129,3 +131,4 @@ lightgbm:
   colsample_bytree: 0.6024156788945187
   reg_alpha: 1.504186616846756e-08
   reg_lambda: 0.020753682767037214
+
