@@ -505,25 +505,36 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                     if last_stock_date != today_str:
                         with distributed_lock("stock_automation", 7200) as locked:
                             if locked:
-                                stock_run_started = False
                                 if supabase_service_role_key:
                                     try:
                                         auth_header = f"Bearer {supabase_service_role_key}"
+                                        client_id = None
+                                        client_secret = None
+
+                                        # 1. DB user_api_keys 대소문자 미구분 ilike 조회
                                         toss_keys = safe_query_supabase(
                                             auth_header,
                                             "user_api_keys",
                                             "GET",
                                             params={
-                                                "exchange": "eq.TOSS",
-                                                "broker_env": "eq.REAL",
+                                                "exchange": "ilike.TOSS",
                                                 "limit": "1",
                                             },
                                         )
-                                        if toss_keys:
+                                        if toss_keys and isinstance(toss_keys, list) and len(toss_keys) > 0:
                                             record = toss_keys[0]
-                                            client_id = crypto.decrypt(record.get("encrypted_access_key"))
-                                            client_secret = crypto.decrypt(record.get("encrypted_secret_key"))
+                                            try:
+                                                client_id = crypto.decrypt(record.get("encrypted_access_key"))
+                                                client_secret = crypto.decrypt(record.get("encrypted_secret_key"))
+                                            except Exception as dec_err:
+                                                logger.warning(f"[StockAutomation] Failed to decrypt DB Toss key: {dec_err}")
 
+                                        # 2. DB 미등록 또는 복호화 실패 시 환경변수 Fallback
+                                        if not client_id or not client_secret:
+                                            client_id = os.getenv("TOSS_CLIENT_ID") or os.getenv("TOSS_API_KEY")
+                                            client_secret = os.getenv("TOSS_CLIENT_SECRET") or os.getenv("TOSS_SECRET_KEY") or os.getenv("TOSS_API_SECRET")
+
+                                        if client_id and client_secret:
                                             token_res = requests.post(
                                                 "https://open-api.tossinvest.com/oauth2/token",
                                                 headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -538,6 +549,7 @@ def start_ml_automation_scheduler(ml_automation_enabled: bool, supabase_service_
                                             access_token = token_json.get("access_token")
 
                                             if access_token:
+
                                                 for preset_key in get_stock_shadow_preset_keys():
                                                     dataset_job = None
                                                     train_job = None
