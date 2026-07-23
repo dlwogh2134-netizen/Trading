@@ -9,7 +9,9 @@ import Settings from './pages/Settings'
 import Home from './pages/Home'
 import MarketRankings from './pages/MarketRankings'
 import AdminMlData from './pages/AdminMlData'
+import AdminAiFundDashboard from './pages/AdminAiFundDashboard'
 import AssetDetail from './pages/AssetDetail'
+
 import SearchNotFound from './pages/SearchNotFound'
 import InvestmentSurveyModal from './components/InvestmentSurveyModal'
 import MemberOnlyNotice from './components/MemberOnlyNotice.jsx'
@@ -291,7 +293,16 @@ function AppShell({
               </AdminProtectedRoute>
             )}
           />
+          <Route
+            path="/admin/ai-fund"
+            element={(
+              <AdminProtectedRoute isLoggedIn={isLoggedIn} userProfile={userProfile}>
+                <AdminAiFundDashboard userId={userId} />
+              </AdminProtectedRoute>
+            )}
+          />
           <Route path="/login" element={<Login />} />
+
           <Route path="/signup" element={<Navigate to="/login" replace />} />
           <Route
             path="/asset/:assetType"

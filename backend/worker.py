@@ -21,6 +21,7 @@ from backend.services.market_snapshot_scheduler import start_market_snapshot_sch
 from backend.services.ml_scheduler import start_dart_ingest_scheduler, start_news_ingest_scheduler, start_ml_automation_scheduler
 from backend.services.auto_trading_rule_engine import start_auto_trading_rule_scheduler
 from backend.services.open_order_status_sync_service import start_open_order_status_sync_scheduler
+from backend.services.admin_ai_fund_trading_scheduler import start_ai_fund_trading_scheduler
 
 def main():
     print("[Worker] 백그라운드 스케줄러 배치 프로세스를 시작합니다...")
@@ -51,6 +52,8 @@ def main():
     MARKET_CALENDAR_SYNC_ENABLED = os.getenv("MARKET_CALENDAR_SYNC_ENABLED", "false").lower() == "true"
     MARKET_CALENDAR_SYNC_INTERVAL_SECONDS = int(os.getenv("MARKET_CALENDAR_SYNC_INTERVAL_SECONDS", "86400"))
     MARKET_CALENDAR_SYNC_ENV = os.getenv("MARKET_CALENDAR_SYNC_ENV", "REAL")
+    AI_FUND_TRADING_ENABLED = os.getenv("AI_FUND_TRADING_ENABLED", "true").lower() == "true"
+    AI_FUND_TRADING_INTERVAL_SECONDS = int(os.getenv("AI_FUND_TRADING_INTERVAL_SECONDS", "30"))
     
     news_ingest_service = NewsIngestService()
     dart_ingest_service = DartIngestService()
@@ -116,6 +119,13 @@ def main():
         enabled=MARKET_CALENDAR_SYNC_ENABLED,
         interval_seconds=MARKET_CALENDAR_SYNC_INTERVAL_SECONDS,
         env=MARKET_CALENDAR_SYNC_ENV,
+    )
+
+    # 6. AI 위탁 자동매매 스케줄러 기동
+    print(f"[Worker] AI Fund Trading Scheduler (Enabled: {AI_FUND_TRADING_ENABLED}) 기동 시도")
+    start_ai_fund_trading_scheduler(
+        enabled=AI_FUND_TRADING_ENABLED,
+        interval_seconds=AI_FUND_TRADING_INTERVAL_SECONDS,
     )
     
     print("[Worker] 모든 스케줄러가 성공적으로 등록되었습니다. 무한 대기 상태로 진입합니다.")

@@ -15,7 +15,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from backend.services.symbol_metadata import SYMBOL_METADATA
 from ml.src.model_utils import apply_probability_calibration, calculate_max_drawdown, split_by_time
 from ml.src.policy_utils import apply_selection_caps, apply_stock_policy_frame, predict_with_payload
 
@@ -40,11 +39,25 @@ def load_model_payload(path: Path) -> dict:
     return joblib.load(path)
 
 
+def resolve_symbol_groups(symbol: object, asset_type: object) -> tuple[str, str]:
+    if str(asset_type).upper() == "CRYPTO":
+        return "CRYPTO", "CRYPTO"
+    from backend.services.symbol_metadata import SYMBOL_METADATA
+
+    metadata = SYMBOL_METADATA.get(str(symbol).upper(), {})
+    return metadata.get("market", "UNKNOWN"), metadata.get("sector", "UNKNOWN")
+
+
 def resolve_output_paths(config: dict, strategy: str) -> tuple[Path, Path]:
     if strategy == "composite":
         return (
             Path(config["data"]["backtest_composite_summary_path"]),
             Path(config["data"]["backtest_composite_daily_path"]),
+        )
+    if strategy == "short_only":
+        return (
+            Path(config["data"]["backtest_short_summary_path"]),
+            Path(config["data"]["backtest_short_daily_path"]),
         )
     return (
         Path(config["data"]["backtest_up_only_summary_path"]),
@@ -56,35 +69,20 @@ def load_median_dollar_volumes(config_path: str) -> dict[str, float]:
     """
     각 종목별 최근 20일 기준 중간값 거래대금을 원천 캔들 데이터 파일로부터 계산하여 반환합니다.
     """
-    volumes = {}
-    
-    # 1. 주식 거래대금 계산
-    stock_raw = resolve_ml_path(config_path, "data/raw/stock_candles.csv")
-    if stock_raw.exists():
-        try:
-            df = pd.read_csv(stock_raw)
-            if not df.empty and "close" in df.columns and "volume" in df.columns:
-                df["dollar_volume"] = df["close"].astype(float) * df["volume"].astype(float)
-                for symbol, group in df.groupby("symbol"):
-                    recent = group.sort_values("date").tail(20)
-                    volumes[str(symbol).upper()] = float(recent["dollar_volume"].median())
-        except Exception:
-            pass
-            
-    # 2. 코인 거래대금 계산
-    crypto_raw = resolve_ml_path(config_path, "data/raw/crypto_candles.csv")
-    if crypto_raw.exists():
-        try:
-            df = pd.read_csv(crypto_raw)
-            if not df.empty and "close" in df.columns and "volume" in df.columns:
-                df["dollar_volume"] = df["close"].astype(float) * df["volume"].astype(float)
-                for symbol, group in df.groupby("symbol"):
-                    recent = group.sort_values("date").tail(20)
-                    volumes[str(symbol).upper()] = float(recent["dollar_volume"].median())
-        except Exception:
-            pass
-            
-    return volumes
+    raw_path = resolve_ml_path(config_path, load_config(config_path)["data"]["raw_candles_path"])
+    if not raw_path.exists():
+        return {}
+    try:
+        df = pd.read_csv(raw_path)
+        if df.empty or "close" not in df.columns or "volume" not in df.columns:
+            return {}
+        df["dollar_volume"] = df["close"].astype(float) * df["volume"].astype(float)
+        return {
+            str(symbol).upper(): float(group.sort_values("date").tail(20)["dollar_volume"].median())
+            for symbol, group in df.groupby("symbol")
+        }
+    except Exception:
+        return {}
 
 
 def build_daily_backtest(
@@ -92,6 +90,7 @@ def build_daily_backtest(
     top_n: int,
     fee_bps: float,
     slippage_bps: float,
+    funding_bps_per_horizon: float = 0.0,
     selection_policy: dict | None = None,
     volumes_cache: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
@@ -107,12 +106,11 @@ def build_daily_backtest(
         ranked = group.copy()
         if "position" in ranked.columns:
             ranked = ranked[ranked["position"] != "HOLD"].copy()
-        ranked["market_group"] = ranked["symbol"].map(
-            lambda symbol: SYMBOL_METADATA.get(str(symbol).upper(), {}).get("market", "UNKNOWN")
+        group_values = ranked.apply(
+            lambda row: resolve_symbol_groups(row["symbol"], row.get("asset_type", "STOCK")), axis=1
         )
-        ranked["sector_group"] = ranked["symbol"].map(
-            lambda symbol: SYMBOL_METADATA.get(str(symbol).upper(), {}).get("sector", "UNKNOWN")
-        )
+        ranked["market_group"] = group_values.map(lambda value: value[0])
+        ranked["sector_group"] = group_values.map(lambda value: value[1])
         if "market_country_group" in ranked.columns:
             ranked["market_group"] = ranked["market_country_group"].fillna(ranked["market_group"])
         elif "market_country" in ranked.columns:
@@ -149,7 +147,9 @@ def build_daily_backtest(
                 
             # 슬리피지 1.0% 상한선 제어
             slippage_penalty = min(slippage_penalty, 0.0100)
-            cost_rate = (fee_bps / 10000.0) + slippage_penalty
+            funding_cost_rate = (funding_bps_per_horizon / 10000.0) if pos == "SHORT" else 0.0
+            configured_slippage_rate = slippage_bps / 10000.0
+            cost_rate = (fee_bps / 10000.0) + max(configured_slippage_rate, slippage_penalty) + funding_cost_rate
             
             actual_ret = -ret if pos == "SHORT" else ret
             net_ret = actual_ret - cost_rate
@@ -189,6 +189,7 @@ def build_daily_backtest(
 
         selection_cols = [
             "symbol",
+            "asset_type",
             "future_return",
             "up_probability",
             "risk_probability",
@@ -211,12 +212,11 @@ def build_daily_backtest(
     daily_df = pd.DataFrame(daily_rows)
     selections_df = pd.concat(selection_rows, ignore_index=True) if selection_rows else pd.DataFrame()
     if not selections_df.empty:
-        selections_df["market_group"] = selections_df["symbol"].map(
-            lambda symbol: SYMBOL_METADATA.get(str(symbol).upper(), {}).get("market", "UNKNOWN")
+        group_values = selections_df.apply(
+            lambda row: resolve_symbol_groups(row["symbol"], row.get("asset_type", "STOCK")), axis=1
         )
-        selections_df["sector_group"] = selections_df["symbol"].map(
-            lambda symbol: SYMBOL_METADATA.get(str(symbol).upper(), {}).get("sector", "UNKNOWN")
-        )
+        selections_df["market_group"] = group_values.map(lambda value: value[0])
+        selections_df["sector_group"] = group_values.map(lambda value: value[1])
         if "market_country_group" in selections_df.columns:
             selections_df["market_group"] = selections_df["market_country_group"].fillna(selections_df["market_group"])
         elif "market_country" in selections_df.columns:
@@ -278,7 +278,7 @@ def build_daily_backtest(
         "excess_return_net": float(daily_df["excess_return_net"].mean()) if not daily_df.empty else 0.0,
         "date_win_rate": float((daily_df["top_avg_future_return"] > 0).mean()) if not daily_df.empty else 0.0,
         "date_win_rate_net": float((daily_df["top_avg_future_return_net"] > 0).mean()) if not daily_df.empty else 0.0,
-        "selection_win_rate": float((selections_df["future_return"] > 0).mean()) if not selections_df.empty else 0.0,
+        "selection_win_rate": float(selections_df["is_positive"].mean()) if not selections_df.empty else 0.0,
         "selection_win_rate_net": float((selections_df["future_return_net"] > 0).mean()) if not selections_df.empty else 0.0,
         "avg_signal_score": float(selections_df["signal_score"].mean()) if not selections_df.empty else 0.0,
         "avg_up_probability": float(selections_df["up_probability"].mean()) if not selections_df.empty else 0.0,
@@ -289,6 +289,7 @@ def build_daily_backtest(
         "selected_rows": int(len(selections_df)),
         "fee_bps": float(fee_bps),
         "slippage_bps": float(slippage_bps),
+        "funding_bps_per_horizon": float(funding_bps_per_horizon),
         "symbol_breakdown": symbol_summary.to_dict(orient="records"),
         "market_breakdown": market_summary.to_dict(orient="records"),
         "sector_breakdown": sector_summary.head(15).to_dict(orient="records"),
@@ -301,7 +302,7 @@ def main() -> None:
     parser.add_argument("--config", default="configs/lgbm_stock_v1.yaml", help="상승 모델 설정 파일 경로")
     parser.add_argument("--model", default=None, help="상승 모델 파일 경로")
     parser.add_argument("--risk-model", default=None, help="하락 위험 모델 파일 경로")
-    parser.add_argument("--strategy", choices=["up_only", "composite"], default="up_only")
+    parser.add_argument("--strategy", choices=["up_only", "composite", "short_only"], default="up_only")
     parser.add_argument("--top-n", type=int, default=None, help="날짜별 상위 후보 개수")
     parser.add_argument("--top-percent", type=float, default=None, help="날짜별 상위 퍼센트(예: 0.1 = 상위 10%)")
     parser.add_argument("--fee-bps", type=float, default=None, help="거래 수수료 basis points")
@@ -328,6 +329,11 @@ def main() -> None:
     valid_df["signal_score"] = valid_df["up_probability"] * 100
 
     asset_type = config["model"].get("asset_type", "STOCK").upper()
+    if "asset_type" not in valid_df.columns:
+        valid_df["asset_type"] = asset_type
+    else:
+        valid_df["asset_type"] = valid_df["asset_type"].fillna(asset_type).astype(str).str.upper()
+        valid_df.loc[valid_df["asset_type"].isin({"", "NAN", "NONE"}), "asset_type"] = asset_type
     long_threshold = float(config.get("prediction", {}).get("long_threshold", 0.30))
     short_threshold = float(config.get("prediction", {}).get("short_threshold", 0.70))
     prediction_config = config.get("prediction", {})
@@ -362,6 +368,16 @@ def main() -> None:
         else:
             valid_df = apply_stock_policy_frame(valid_df, prediction_config)
             valid_df["scoring_strategy"] = "composite"
+    elif args.strategy == "short_only":
+        valid_df["short_probability"] = valid_df["up_probability"]
+        valid_df["risk_probability"] = valid_df["short_probability"]
+        valid_df["up_probability"] = 1 - valid_df["short_probability"]
+        valid_df["position"] = valid_df["short_probability"].map(
+            lambda probability: "SHORT" if probability >= float(prediction_config.get("short_entry_threshold", short_threshold)) else "HOLD"
+        )
+        valid_df["signal_score"] = valid_df["short_probability"] * 100
+        valid_df.loc[valid_df["position"] == "HOLD", "signal_score"] = 0.0
+        valid_df["scoring_strategy"] = "short_only"
     else:
         valid_df["position"] = "LONG"
         valid_df["signal_score"] = valid_df["up_probability"] * 100
@@ -380,6 +396,7 @@ def main() -> None:
     backtest_config = config.get("backtest", {})
     fee_bps = float(args.fee_bps if args.fee_bps is not None else backtest_config.get("fee_bps", 0.0))
     slippage_bps = float(args.slippage_bps if args.slippage_bps is not None else backtest_config.get("slippage_bps", 0.0))
+    funding_bps_per_horizon = float(backtest_config.get("funding_bps_per_horizon", 0.0))
     top_n = int(args.top_n if args.top_n is not None else backtest_config.get("top_n", 3))
     if args.top_percent is not None:
         top_n = max(1, int(math.ceil(valid_df["symbol"].nunique() * float(args.top_percent))))
@@ -391,6 +408,7 @@ def main() -> None:
         top_n,
         fee_bps,
         slippage_bps,
+        funding_bps_per_horizon,
         selection_policy,
         volumes_cache=volumes_cache
     )
