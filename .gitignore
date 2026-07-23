@@ -23,6 +23,10 @@ ml/.venv/
 ml/data/raw/*
 ml/data/processed/*
 ml/models/*
+ml/local_releases/
+ml/local_logs/
+ml/local_runtime/
+ml/releases/
 !ml/data/raw/.gitkeep
 !ml/data/processed/.gitkeep
 !ml/models/.gitkeep
@@ -52,3 +56,5 @@ qa-artifacts/
 docker-compose.local.yml
 nginx.conf
 Dockerfile
+# Docker Local Overrides
+docker-compose.override.yml
